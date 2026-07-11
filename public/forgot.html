@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Reset your Gweno password</title>
+  <link rel="stylesheet" href="/css/styles.css" />
+</head>
+<body>
+  <nav class="nav">
+    <a class="brand" href="/"><span class="dot"></span> gweno</a>
+    <div class="nav-links"><a class="btn btn-ghost auto" href="/login.html">Sign in</a></div>
+  </nav>
+
+  <main class="auth-page">
+    <aside class="auth-aside">
+      <h2>Forgot your password?</h2>
+      <p>No problem. Enter your email and we'll send you a secure link to set a new one.</p>
+      <ul class="aside-list">
+        <li><span class="tick">✓</span> Reset links can only be used once</li>
+        <li><span class="tick">✓</span> They expire after 30 minutes</li>
+        <li><span class="tick">✓</span> We never reveal whether an email is registered</li>
+      </ul>
+    </aside>
+
+    <section class="auth-main">
+      <div class="auth-form">
+        <h1>Reset password</h1>
+        <p class="auth-sub">We'll email you a reset link.</p>
+
+        <div class="msg" id="msg"></div>
+
+        <form id="form" novalidate>
+          <div class="field">
+            <label for="email">Email</label>
+            <input id="email" name="email" type="email" autocomplete="email" placeholder="you@example.com" />
+          </div>
+          <button class="btn btn-primary" type="submit" id="submit">Send reset link</button>
+        </form>
+
+        <p class="auth-foot">Remembered it? <a href="/login.html">Back to sign in</a></p>
+      </div>
+    </section>
+  </main>
+
+  <script src="/js/auth.js"></script>
+  <script>
+    const form = document.getElementById('form');
+    const msg = document.getElementById('msg');
+    const submit = document.getElementById('submit');
+
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      clearMsg(msg);
+      submit.disabled = true;
+      const { data } = await api('/api/forgot-password', { email: form.email.value });
+      showMsg(msg, data.message || 'If that email is registered, a reset link has been sent.', 'ok');
+      submit.disabled = false;
+    });
+  </script>
+</body>
+</html>

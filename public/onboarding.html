@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Complete your profile — Gweno</title>
+  <link rel="stylesheet" href="/css/styles.css" />
+</head>
+<body>
+  <nav class="nav">
+    <a class="brand" href="/"><span class="dot"></span> gweno</a>
+    <div class="nav-links"><button class="btn btn-ghost auto" id="logout">Sign out</button></div>
+  </nav>
+
+  <main class="auth-page">
+    <aside class="auth-aside">
+      <h2>Welcome to Gweno.</h2>
+      <p>Tell us a little about you so we can tailor the platform to your needs. It only takes a moment.</p>
+      <ul class="aside-list">
+        <li><span class="tick">✓</span> Receive a welcome bonus of 1 KES for each question you complete</li>
+        <li><span class="tick">✓</span> Your responses are kept private and secure</li>
+        <li><span class="tick">✓</span> You must be 18 or older to use Gweno</li>
+      </ul>
+    </aside>
+
+    <section class="auth-main">
+      <div class="auth-form">
+        <h1>Complete your profile</h1>
+        <p class="auth-sub">A few quick questions to finish setting up your account.</p>
+
+        <div class="msg" id="msg"></div>
+
+        <form id="form" novalidate>
+          <div class="field">
+            <label for="ageRange"><span class="q-index">Question 1</span> · Which age group are you in?</label>
+            <select id="ageRange" name="ageRange">
+              <option value="">Select an option…</option>
+              <option>Under 18</option>
+              <option>18 – 25</option>
+              <option>26 – 35</option>
+              <option>36 – 45</option>
+              <option>46 – 60</option>
+              <option>Over 60</option>
+            </select>
+          </div>
+
+          <div class="field">
+            <label for="education"><span class="q-index">Question 2</span> · What's your level of education?</label>
+            <select id="education" name="education">
+              <option value="">Select an option…</option>
+              <option>No formal education</option>
+              <option>Primary school</option>
+              <option>Secondary school</option>
+              <option>Certificate</option>
+              <option>Diploma</option>
+              <option>Bachelor's degree</option>
+              <option>Master's degree</option>
+              <option>PhD / Doctorate</option>
+              <option>Other</option>
+            </select>
+          </div>
+
+          <div class="field">
+            <label for="about"><span class="q-index">Question 3</span> · Tell us a bit about yourself</label>
+            <textarea id="about" name="about" maxlength="400" placeholder="What do you do? What kind of tasks interest you?"></textarea>
+            <p class="hint" id="aboutHint">Maximum 60 words. <span id="aboutCount">0</span>/60 words used.</p>
+          </div>
+
+          <div class="field">
+            <label for="referral"><span class="q-index">Question 4</span> · How did you hear about Gweno?</label>
+            <select id="referral" name="referral">
+              <option value="">Select an option…</option>
+              <option>A friend or family member</option>
+              <option>Online / social media</option>
+              <option>Search engine (Google, etc.)</option>
+              <option>An advertisement</option>
+              <option>A blog or news article</option>
+              <option>Other</option>
+            </select>
+          </div>
+
+          <button class="btn btn-primary" type="submit" id="submit">Complete setup</button>
+          <p class="auth-foot">All questions are required. You must be at least 18 years old to use Gweno.</p>
+        </form>
+      </div>
+    </section>
+  </main>
+
+  <script src="/js/auth.js"></script>
+  <script>
+    // Must be signed in; if already onboarded, skip straight to the dashboard.
+    (async () => {
+      const res = await fetch('/api/me');
+      if (!res.ok) { window.location.href = '/login.html'; return; }
+      const { user } = await res.json();
+      if (user.onboarded) window.location.href = '/app.html#/dashboard';
+    })();
+
+    const form = document.getElementById('form');
+    const msg = document.getElementById('msg');
+    const submit = document.getElementById('submit');
+
+    // Live word counter for Question 3 (max 60 words).
+    const about = document.getElementById('about');
+    const aboutCount = document.getElementById('aboutCount');
+    const countWords = (s) => (s.trim() ? s.trim().split(/\s+/).length : 0);
+    about.addEventListener('input', () => {
+      let words = countWords(about.value);
+      if (words > 60) {
+        about.value = about.value.trim().split(/\s+/).slice(0, 60).join(' ');
+        words = 60;
+      }
+      aboutCount.textContent = words;
+    });
+
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      clearMsg(msg);
+      // All questions are required.
+      if (!form.ageRange.value || !form.education.value || !form.about.value.trim() || !form.referral.value) {
+        return showMsg(msg, 'Please answer all the questions before continuing.', 'error');
+      }
+      // Age gate — under-18s cannot open an account.
+      if (form.ageRange.value === 'Under 18') {
+        return showMsg(msg, 'Sorry — you must be at least 18 years old to have a Gweno account.', 'error');
+      }
+      if (countWords(about.value) > 60) return showMsg(msg, 'Please keep your answer to a maximum of 60 words.', 'error');
+      submit.disabled = true;
+      const { ok, data } = await api('/api/onboarding', {
+        ageRange: form.ageRange.value,
+        education: form.education.value,
+        about: form.about.value,
+        referral: form.referral.value,
+      });
+      if (ok) {
+        showMsg(msg, `Thank you. A welcome bonus of ${data.bonus} KES has been added to your account. Taking you to your dashboard…`, 'ok');
+        setTimeout(() => (window.location.href = '/app.html#/dashboard'), 1500);
+      } else {
+        showMsg(msg, data.error || 'Could not save your answers.', 'error');
+        submit.disabled = false;
+      }
+    });
+
+    document.getElementById('logout').addEventListener('click', async () => {
+      await api('/api/logout', {});
+      window.location.href = '/';
+    });
+  </script>
+</body>
+</html>

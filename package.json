@@ -1,0 +1,19 @@
+{
+  "name": "gweno",
+  "version": "1.0.0",
+  "description": "Gweno — a freelancing marketplace. Welcome screen + secure sign-up / sign-in flow.",
+  "main": "server.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js",
+    "tunnel": "cloudflared.exe tunnel --url http://localhost:3000"
+  },
+  "dependencies": {
+    "bcryptjs": "^2.4.3",
+    "cookie-parser": "^1.4.6",
+    "express": "^4.19.2",
+    "nodemailer": "^9.0.3",
+    "pg": "^8.22.0"
+  }
+}

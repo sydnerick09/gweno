@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Choose a new password — Gweno</title>
+  <link rel="stylesheet" href="/css/styles.css" />
+</head>
+<body>
+  <nav class="nav">
+    <a class="brand" href="/"><span class="dot"></span> gweno</a>
+    <div class="nav-links"><a class="btn btn-ghost auto" href="/login.html">Sign in</a></div>
+  </nav>
+
+  <main class="auth-page">
+    <aside class="auth-aside">
+      <h2>Almost there.</h2>
+      <p>Choose a new password for your Gweno account. This link only works once and expires after 30 minutes.</p>
+    </aside>
+
+    <section class="auth-main">
+      <div class="auth-form">
+        <h1>Choose a new password</h1>
+        <p class="auth-sub">Make it strong and memorable.</p>
+
+        <div class="msg" id="msg"></div>
+
+        <form id="form" novalidate>
+          <div class="field">
+            <label for="password">New password</label>
+            <div class="pw-wrap">
+              <input id="password" name="password" type="password" autocomplete="new-password" placeholder="At least 8 characters" />
+              <button type="button" class="pw-toggle" data-pwtoggle="password" aria-label="Show password"></button>
+            </div>
+            <div class="hint">Use 8+ characters with at least one letter and one number.</div>
+          </div>
+          <div class="field">
+            <label for="confirm">Confirm password</label>
+            <div class="pw-wrap">
+              <input id="confirm" name="confirm" type="password" autocomplete="new-password" placeholder="Re-enter password" />
+              <button type="button" class="pw-toggle" data-pwtoggle="confirm" aria-label="Show password"></button>
+            </div>
+          </div>
+          <button class="btn btn-primary" type="submit" id="submit">Reset password</button>
+        </form>
+
+        <p class="auth-foot"><a href="/login.html">Back to sign in</a></p>
+      </div>
+    </section>
+  </main>
+
+  <script src="/js/auth.js"></script>
+  <script>
+    attachPasswordToggles();
+    const params = new URLSearchParams(location.search);
+    const token = params.get('token') || '';
+    const form = document.getElementById('form');
+    const msg = document.getElementById('msg');
+    const submit = document.getElementById('submit');
+
+    if (!token) {
+      showMsg(msg, 'Missing reset token. Please use the link from your reset email.', 'error');
+      submit.disabled = true;
+    }
+
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      clearMsg(msg);
+      if (form.password.value !== form.confirm.value) {
+        return showMsg(msg, 'Passwords do not match.', 'error');
+      }
+      submit.disabled = true;
+      const { ok, data } = await api('/api/reset-password', { token, password: form.password.value });
+      if (ok) {
+        showMsg(msg, (data.message || 'Password reset.') + ' Redirecting to sign in…', 'ok');
+        setTimeout(() => (window.location.href = '/login.html'), 1600);
+      } else {
+        showMsg(msg, data.error || 'Could not reset password.', 'error');
+        submit.disabled = false;
+      }
+    });
+  </script>
+</body>
+</html>

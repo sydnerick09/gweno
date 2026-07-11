@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 240" width="240" height="240" role="img" aria-label="Gweno — Work. Earn. Grow.">
+  <!-- G ring (navy) with an opening on the right -->
+  <circle cx="120" cy="80" r="46" fill="none" stroke="#17233f" stroke-width="18" stroke-linecap="round"
+          stroke-dasharray="205 84" transform="rotate(28 120 80)"/>
+  <!-- G crossbar -->
+  <rect x="118" y="72" width="46" height="16" rx="4" fill="#17233f"/>
+  <!-- speed lines -->
+  <g fill="#17233f">
+    <rect x="150" y="48" width="34" height="7" rx="3.5"/>
+    <rect x="158" y="61" width="28" height="7" rx="3.5"/>
+  </g>
+  <!-- green check -->
+  <path d="M95 82 l14 15 l27 -33" fill="none" stroke="#1f9d54" stroke-width="14" stroke-linecap="round" stroke-linejoin="round"/>
+  <!-- money note accent -->
+  <g transform="rotate(-8 168 112)">
+    <rect x="150" y="100" width="36" height="22" rx="3" fill="#1f9d54"/>
+    <circle cx="168" cy="111" r="6.5" fill="#fff"/>
+    <text x="168" y="115" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="10" font-weight="800" fill="#1f9d54">$</text>
+  </g>
+  <!-- wordmark -->
+  <text x="120" y="176" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="42" font-weight="800" letter-spacing="2" fill="#17233f">GWENO</text>
+  <!-- tagline -->
+  <text x="120" y="200" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="13" font-weight="700" letter-spacing="2">
+    <tspan fill="#17233f">WORK · </tspan><tspan fill="#1f9d54">EARN · </tspan><tspan fill="#17233f">GROW</tspan>
+  </text>
+</svg>

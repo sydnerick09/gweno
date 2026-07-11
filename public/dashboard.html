@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Your Gweno account</title>
+  <link rel="stylesheet" href="/css/styles.css" />
+</head>
+<body>
+  <nav class="nav">
+    <a class="brand" href="/"><span class="dot"></span> gweno</a>
+    <div class="nav-links"><button class="btn btn-ghost auto" id="logout">Sign out</button></div>
+  </nav>
+
+  <main class="dash">
+    <div class="dash-card">
+      <h2 id="hello">Welcome 👋</h2>
+      <p class="auth-sub">You're signed in. This page is protected — it only loads with a valid, unexpired session.</p>
+
+      <div class="wallet">
+        <div>
+          <div class="label">Your balance (welcome bonus)</div>
+          <div class="amount" id="balance">— KES</div>
+        </div>
+        <div style="font-size:34px">🎁</div>
+      </div>
+
+      <div class="kv">
+        <div>Name</div><div id="name">—</div>
+        <div>Email</div><div id="email">—</div>
+        <div>Sign-in methods</div><div id="providers">—</div>
+        <div>Age</div><div id="age">—</div>
+        <div>Education</div><div id="education">—</div>
+        <div>Heard about us via</div><div id="referral">—</div>
+        <div>Member since</div><div id="since">—</div>
+        <div>Session expires in</div><div class="countdown" id="countdown">—</div>
+      </div>
+
+      <a class="btn btn-primary auto" href="/">Back to home</a>
+    </div>
+  </main>
+
+  <script src="/js/auth.js"></script>
+  <script>
+    async function load() {
+      const res = await fetch('/api/me');
+      if (!res.ok) { window.location.href = '/login.html'; return; }
+      const { user, sessionExpiresAt } = await res.json();
+      if (!user.onboarded) { window.location.href = '/onboarding.html'; return; }
+
+      const p = user.profile || {};
+      document.getElementById('hello').textContent = 'Welcome, ' + user.name + ' 👋';
+      document.getElementById('balance').textContent = (user.balance || 0) + ' KES';
+      document.getElementById('name').textContent = user.name;
+      document.getElementById('email').textContent = user.email;
+      document.getElementById('providers').innerHTML =
+        user.providers.map((x) => '<span class="badge">' + x + '</span>').join('');
+      document.getElementById('age').textContent = p.ageRange || '—';
+      document.getElementById('education').textContent = p.education || '—';
+      document.getElementById('referral').textContent = p.referral || '—';
+      document.getElementById('since').textContent = new Date(user.createdAt).toLocaleString();
+
+      // Live countdown to session expiry — proof that sessions don't last forever.
+      const cd = document.getElementById('countdown');
+      function tick() {
+        const ms = sessionExpiresAt - Date.now();
+        if (ms <= 0) { window.location.href = '/login.html'; return; }
+        const m = Math.floor(ms / 60000);
+        const s = Math.floor((ms % 60000) / 1000);
+        cd.textContent = m + 'm ' + String(s).padStart(2, '0') + 's';
+      }
+      tick();
+      setInterval(tick, 1000);
+    }
+    load();
+
+    document.getElementById('logout').addEventListener('click', async () => {
+      await api('/api/logout', {});
+      window.location.href = '/';
+    });
+  </script>
+</body>
+</html>

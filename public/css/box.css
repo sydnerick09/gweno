@@ -1,0 +1,56 @@
+/* "Box of light" — a floating, rotating 3D cube with the Gweno mark on it. */
+body.box-page { background: #0b0a1a; color: #eef0ff; min-height: 100vh; overflow-x: hidden; }
+
+/* keep the top nav readable on the dark stage */
+.box-page .nav { position: relative; z-index: 5; }
+.box-page .brand { color: #fff; }
+.box-page .btn-ghost { color: #fff; border-color: rgba(255,255,255,.28); }
+.box-page .btn-ghost:hover { background: rgba(255,255,255,.08); }
+
+.stage {
+  position: relative; min-height: calc(100vh - 74px);
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 44px;
+  perspective: 1100px; padding: 30px 16px 60px;
+}
+
+/* glowing "light pool" on the surface below the box (no gradient — a blurred disc) */
+.stage::before {
+  content: ''; position: absolute; z-index: 0; left: 50%; top: 46%;
+  width: 460px; height: 150px; transform: translate(-50%, 0);
+  background: #7c5cff; border-radius: 50%; filter: blur(72px); opacity: .5;
+}
+
+.scene { position: relative; z-index: 2; transform-style: preserve-3d; animation: boxFloat 5s ease-in-out infinite; }
+@keyframes boxFloat { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-18px); } }
+
+.cube { position: relative; width: 200px; height: 200px; transform-style: preserve-3d; animation: boxSpin 15s linear infinite; }
+@keyframes boxSpin { from { transform: rotateX(-22deg) rotateY(0); } to { transform: rotateX(-22deg) rotateY(360deg); } }
+
+.face {
+  position: absolute; inset: 0; display: grid; place-items: center;
+  background: #ffffff; border-radius: 12px;
+  box-shadow: 0 0 34px rgba(124,92,255,.6), 0 0 90px rgba(124,92,255,.3);
+}
+.cube-logo { width: 160px; height: 160px; object-fit: contain; }
+
+.front  { transform: rotateY(0deg)   translateZ(100px); }
+.back   { transform: rotateY(180deg) translateZ(100px); }
+.right  { transform: rotateY(90deg)  translateZ(100px); }
+.left   { transform: rotateY(-90deg) translateZ(100px); }
+.top    { transform: rotateX(90deg)  translateZ(100px); }
+.bottom { transform: rotateX(-90deg) translateZ(100px); }
+
+.stage-copy { position: relative; z-index: 3; text-align: center; }
+.stage-copy h1 { font-size: clamp(28px, 4vw, 40px); margin: 0 0 8px; }
+.stage-copy p { color: #b9bce0; margin: 0 0 18px; font-size: 16px; }
+.stage-copy .btn { width: auto; padding: 13px 28px; }
+
+@media (max-width: 560px) { .cube { width: 150px; height: 150px; }
+  .front,.back,.right,.left,.top,.bottom { transform: none; }
+  .front  { transform: rotateY(0deg)   translateZ(75px); }
+  .back   { transform: rotateY(180deg) translateZ(75px); }
+  .right  { transform: rotateY(90deg)  translateZ(75px); }
+  .left   { transform: rotateY(-90deg) translateZ(75px); }
+  .top    { transform: rotateX(90deg)  translateZ(75px); }
+  .bottom { transform: rotateX(-90deg) translateZ(75px); }
+}

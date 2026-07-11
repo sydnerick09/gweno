@@ -1,0 +1,69 @@
+/* Sliding Sign In / Sign Up panel. Colours: purple (--brand) + white only. */
+/* Align the card to the top so it isn't stranded in the middle of tall screens. */
+.ap-wrap { display: grid; place-items: start center; min-height: calc(100vh - 74px); padding: 28px 16px 40px; }
+
+.ap-container {
+  position: relative; overflow: hidden;
+  width: 840px; max-width: 100%; min-height: 620px;
+  background: var(--card); border-radius: 18px; box-shadow: var(--shadow); border: 1px solid var(--line);
+}
+
+/* Forms */
+.ap-form { position: absolute; top: 0; height: 100%; width: 50%; transition: all .6s ease-in-out; }
+.ap-form.signin { left: 0; z-index: 2; }
+.ap-form.signup { left: 0; opacity: 0; z-index: 1; }
+.ap-container.right-active .ap-form.signin { transform: translateX(100%); }
+.ap-container.right-active .ap-form.signup { transform: translateX(100%); opacity: 1; z-index: 5; animation: apShow .6s; }
+@keyframes apShow { 0%, 49.99% { opacity: 0; z-index: 1; } 50%, 100% { opacity: 1; z-index: 5; } }
+
+.ap-form form { background: var(--card); display: flex; flex-direction: column; justify-content: center; align-items: stretch; height: 100%; padding: 0 clamp(24px, 5%, 48px); text-align: center; overflow-y: auto; }
+.ap-form h1 { margin: 0 0 4px; font-size: 26px; color: var(--text); }
+.ap-muted { color: var(--muted); font-size: 13px; margin: 8px 0 4px; }
+.ap-form input, .ap-form select { background: var(--bg-2); border: 1px solid var(--line); padding: 12px 14px; margin: 6px 0; width: 100%; border-radius: 9px; font-size: 14px; color: var(--text); outline: none; }
+.ap-form input:focus, .ap-form select:focus { border-color: var(--brand); background: var(--card); }
+.ap-form .hint { font-size: 11px; color: var(--muted); margin: 0 0 2px; text-align: left; }
+.ap-forgot { color: var(--muted); font-size: 13px; margin: 10px 0 6px; }
+.ap-forgot:hover { color: var(--brand); }
+.ap .msg { text-align: left; }
+
+/* The password show/hide reuses .pw-wrap / .pw-toggle from styles.css */
+
+.ap-socials { display: flex; gap: 10px; justify-content: center; margin: 12px 0 4px; }
+.ap-socials button { width: 42px; height: 42px; border: 1px solid var(--line); border-radius: 50%; display: grid; place-items: center; background: #fff; cursor: pointer; padding: 0; }
+.ap-socials button:hover { border-color: var(--brand); }
+.ap-socials svg { width: 20px; height: 20px; }
+/* Apple's mark is white — recolor it so it shows on the white button */
+.ap-socials button[data-provider="apple"] svg path { fill: var(--text); }
+
+.ap-btn { align-self: center; border-radius: 999px; border: 1px solid var(--brand); background: var(--brand); color: #fff; font-size: 12px; font-weight: 700; letter-spacing: 1px; text-transform: uppercase; padding: 13px 46px; margin-top: 12px; cursor: pointer; transition: filter .15s; }
+.ap-btn:hover { filter: brightness(1.06); }
+.ap-btn.ghost { background: transparent; border-color: #fff; color: #fff; }
+.ap-btn[disabled] { opacity: .6; cursor: not-allowed; }
+
+/* Sliding overlay */
+.ap-overlay-container { position: absolute; top: 0; left: 50%; width: 50%; height: 100%; overflow: hidden; transition: transform .6s ease-in-out; z-index: 100; }
+.ap-container.right-active .ap-overlay-container { transform: translateX(-100%); }
+.ap-overlay { position: relative; left: -100%; width: 200%; height: 100%; background: var(--brand); color: #fff; transform: translateX(0); transition: transform .6s ease-in-out; }
+.ap-container.right-active .ap-overlay { transform: translateX(50%); }
+.ap-panel { position: absolute; top: 0; height: 100%; width: 50%; display: flex; flex-direction: column; justify-content: center; align-items: center; padding: 0 40px; text-align: center; transform: translateX(0); transition: transform .6s ease-in-out; }
+.ap-panel h1 { margin: 0 0 12px; font-size: 28px; }
+.ap-panel p { font-size: 14px; line-height: 1.6; margin: 0 0 24px; opacity: .95; }
+.ap-panel.left { transform: translateX(-20%); }
+.ap-container.right-active .ap-panel.left { transform: translateX(0); }
+.ap-panel.right { right: 0; transform: translateX(0); }
+.ap-container.right-active .ap-panel.right { transform: translateX(20%); }
+
+/* the in-form switch link is desktop-hidden (overlay handles it), shown on mobile */
+.ap-switch { display: none; color: var(--muted); font-size: 13px; margin-top: 12px; }
+.ap-switch a { color: var(--brand); cursor: pointer; font-weight: 600; }
+
+@media (max-width: 768px) {
+  .ap-container { width: 100%; min-height: 0; }
+  .ap-overlay-container { display: none; }
+  .ap-form { position: relative; width: 100%; opacity: 1 !important; transform: none !important; z-index: auto !important; animation: none !important; }
+  .ap-form.signup { display: none; }
+  .ap-container.right-active .ap-form.signin { display: none; }
+  .ap-container.right-active .ap-form.signup { display: block; }
+  .ap-form form { padding: 30px 22px; }
+  .ap-switch { display: block; }
+}
