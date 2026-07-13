@@ -34,6 +34,7 @@ function loadFile() {
 let state = loadFile();   // synchronous default so get() works before init()
 let pool = null;
 let writeTimer = null;
+let writePromise = Promise.resolve(); // serialised DB writes; flush() awaits the latest
 
 function usingPostgres() {
   const url = process.env.DATABASE_URL || '';
@@ -71,19 +72,39 @@ async function init() {
 }
 
 function persist() {
-  // Debounce so bursts of requests don't hammer disk / DB.
+  if (pool) {
+    // Serverless-safe: issue the write immediately and chain it so writes never
+    // overlap. flush() (called before a response is sent) awaits the latest one,
+    // so nothing is lost when the function is frozen after responding.
+    writePromise = writePromise
+      .catch(() => {})
+      .then(() => pool.query('UPDATE app_state SET data = $1, updated_at = now() WHERE id = 1', [state]))
+      .catch((err) => console.error('DB write failed:', err.message));
+    return;
+  }
+  // Local file backend: debounce so bursts don't hammer disk.
   if (writeTimer) return;
   writeTimer = setTimeout(() => {
     writeTimer = null;
-    if (pool) {
-      pool.query('UPDATE app_state SET data = $1, updated_at = now() WHERE id = 1', [state])
-        .catch((err) => console.error('DB write failed:', err.message));
-    } else {
-      fs.writeFile(DB_FILE, JSON.stringify(state, null, 2), (err) => {
-        if (err) console.error('DB write failed:', err.message);
-      });
-    }
+    fs.writeFile(DB_FILE, JSON.stringify(state, null, 2), (err) => {
+      if (err) console.error('DB write failed:', err.message);
+    });
   }, 100);
 }
 
-module.exports = { init, get: () => state, save: persist };
+// Wait for any pending write to reach the database (used before responding on serverless).
+async function flush() { try { await writePromise; } catch (_) {} }
+
+// Re-read the persisted state from Postgres. On serverless each instance keeps its
+// own in-memory copy, so we reload before handling an API request to stay current.
+async function reload() {
+  if (!pool) return;
+  try {
+    const { rows } = await pool.query('SELECT data FROM app_state WHERE id = 1');
+    if (rows.length) state = { ...structuredClone(EMPTY), ...rows[0].data };
+  } catch (err) {
+    console.error('DB reload failed:', err.message);
+  }
+}
+
+module.exports = { init, get: () => state, save: persist, flush, reload };

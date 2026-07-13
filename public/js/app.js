@@ -55,13 +55,15 @@ const LOGO = {
 // Shared method-picker: renders logo cards and returns a getter for the current selection.
 function renderMethodCards(root, methods, onSelect) {
   root.innerHTML = `<div class="pay-methods">${methods.map((m) => `
-    <button type="button" class="pay-card" data-method="${esc(m.key)}">
+    <button type="button" class="pay-card ${m.soon ? 'soon' : ''}" data-method="${esc(m.key)}"${m.soon ? ' data-soon="1"' : ''}>
+      ${m.soon ? '<span class="soon-badge">Coming soon</span>' : ''}
       <span class="pay-logo">${m.logo}</span>
       <span class="pay-name">${esc(m.key)}</span>
       <span class="pay-desc">${esc(m.desc)}</span>
     </button>`).join('')}</div>`;
   let current = '';
   root.querySelectorAll('.pay-card').forEach((c) => c.addEventListener('click', () => {
+    if (c.dataset.soon) { toast(`${c.dataset.method} is coming soon.`); return; }  // not selectable yet
     current = c.dataset.method;
     root.querySelectorAll('.pay-card').forEach((x) => x.classList.toggle('selected', x.dataset.method === current));
     onSelect(current);
@@ -214,17 +216,6 @@ async function pageDashboard() {
     apiGet('/api/tasks'), apiGet('/api/referral'), apiGet('/api/surveys'), apiGet('/api/public/activity'),
   ]);
   const t = tasks.data, r = ref.data;
-  const surveyDone = (surveys.data.surveys || []).some((s) => s.done);
-  const earnedTask = (t.approvedUSD || 0) + (t.pendingUSD || 0) > 0;
-
-  const checklist = [
-    ['Complete your welcome profile', true],
-    ['Submit your first task', earnedTask],
-    ['Take a survey', surveyDone],
-    ['Refer a friend', (r.count || 0) > 0],
-    ['Set a payment method', !!(ME.payment && ME.payment.method)],
-  ];
-
   const feed = activity.data.items || [];
 
   view().innerHTML = `
@@ -251,23 +242,14 @@ async function pageDashboard() {
       </div>
     </div>
 
-    <div class="grid g2">
-      <div class="panel">
-        <h3>Weekly checklist</h3>
-        <p class="p-sub">Finish these to get the most out of Gweno.</p>
-        ${checklist.map(([label, done]) => `
-          <div class="check ${done ? 'done' : ''}"><div class="box">${done ? '✓' : ''}</div><span>${esc(label)}</span></div>`).join('')}
+    <div class="panel">
+      <h3>Your referral link</h3>
+      <p class="p-sub">Single-use — a new one is issued after each successful referral. Your friend must answer the welcome questions before your 5 KES is paid.</p>
+      <div class="copybox">
+        <input id="refLink" class="" readonly value="${esc(r.link || '')}" />
+        <button class="btn btn-primary auto" id="copyRef">Copy</button>
       </div>
-
-      <div class="panel">
-        <h3>Your referral link</h3>
-        <p class="p-sub">Single-use — a new one is issued after each successful referral.</p>
-        <div class="copybox">
-          <input id="refLink" class="" readonly value="${esc(r.link || '')}" />
-          <button class="btn btn-primary auto" id="copyRef">Copy</button>
-        </div>
-        <p class="p-sub" style="margin-top:12px">Referrals: <b>${r.count || 0}</b> · Earned: <b>${kes(r.earningsKES)}</b></p>
-      </div>
+      <p class="p-sub" style="margin-top:12px">Referrals: <b>${r.count || 0}</b> · Earned: <b>${kes(r.earningsKES)}</b></p>
     </div>
 
     <div class="panel">
@@ -447,7 +429,7 @@ async function pageTasks() {
         </div>
         <div style="text-align:right">
           <div style="font-size:22px;font-weight:800">$${sub.priceUSD} <span class="p-sub" style="font-size:13px">≈ ${kes(sub.priceKES)}/mo</span></div>
-          <button class="btn btn-primary auto" id="subBtn" style="margin-top:6px">Subscribe with M-Pesa</button>
+          <button class="btn btn-primary auto" id="subBtn" style="margin-top:6px">★ Subscribe</button>
         </div>
       </div>
     </div>`;
@@ -493,30 +475,55 @@ async function pageTasks() {
   view().querySelectorAll('.sub-lock').forEach((b) => b.addEventListener('click', () => openSubscribe(sub)));
 }
 
+const SUBSCRIBE_METHODS = [
+  { key: 'M-Pesa', logo: LOGO.mpesa, desc: 'STK push' },
+  { key: 'Card', logo: LOGO.card, desc: 'Debit / credit card' },
+  { key: 'PayPal', logo: LOGO.paypal, desc: 'Pay with PayPal' },
+  { key: 'Bank account', logo: LOGO.bank, desc: 'Bank transfer' },
+  { key: 'Paystack', logo: LOGO.paystack, desc: 'Cards & bank' },
+];
+
 function openSubscribe(sub) {
   const bg = openModal(`
     <button class="close">×</button>
     <h3>★ Go Premium</h3>
-    <p class="p-sub">Unlock all $1–$4 tasks for 30 days. Provider: ${sub.live ? '<span class="st approved">M-Pesa</span>' : '<span class="st pending">coming soon</span>'}.</p>
+    <p class="p-sub">Unlock all $1–$4 tasks for 30 days. Choose how you'd like to pay — anyone can subscribe.</p>
     <div class="stat brand" style="margin:12px 0"><div class="label">Subscription price</div><div class="value">$${sub.priceUSD} <span class="p-sub" style="font-size:14px">≈ ${kes(sub.priceKES)}</span></div></div>
-    <form id="subForm">
-      <div class="field"><label>M-Pesa phone number</label><input id="subPhone" placeholder="e.g. 0712345678"></div>
-      <p class="p-sub">You'll get an STK PIN prompt on your phone to pay ${kes(sub.priceKES)}.</p>
-      <button class="btn btn-primary" type="submit" id="subPay">Pay with M-Pesa</button>
+    <div id="subMethods"></div>
+    <form id="subForm" style="margin-top:12px">
+      <div id="subFields"><p class="p-sub">Select a payment method above.</p></div>
+      <button class="btn btn-primary" type="submit" id="subPay">Pay & activate Premium</button>
     </form>`);
+
+  const subFields = bg.querySelector('#subFields');
+  const getSubMethod = renderMethodCards(bg.querySelector('#subMethods'), SUBSCRIBE_METHODS, (m) => {
+    if (m === 'M-Pesa') subFields.innerHTML = `<div class="field"><label>M-Pesa phone number</label><input id="subPhone" placeholder="e.g. +254 712 345 678"></div><p class="p-sub">You'll get an STK PIN prompt to pay ${kes(sub.priceKES)}.</p>`;
+    else if (m === 'Card') subFields.innerHTML = `<div class="field"><label>Card number</label><input id="subCard" inputmode="numeric" placeholder="1234 5678 9012 3456"></div><div class="grid g2"><div class="field"><label>Expiry</label><input id="subExp" placeholder="MM/YY"></div><div class="field"><label>CVC</label><input id="subCvc" inputmode="numeric" maxlength="4" placeholder="123"></div></div>`;
+    else if (m === 'PayPal' || m === 'Paystack') subFields.innerHTML = `<div class="field"><label>${m} email</label><input id="subEmail" type="email" placeholder="you@example.com"></div>`;
+    else subFields.innerHTML = `<p class="p-sub">Bank transfer instructions will be shown after you confirm. Premium activates once payment is received.</p>`;
+  });
+
   bg.querySelector('#subForm').addEventListener('submit', async (e) => {
     e.preventDefault();
+    const method = getSubMethod();
+    if (!method) return toast('Choose a payment method', 'error');
     const btn = bg.querySelector('#subPay'); btn.disabled = true;
-    const { ok, data } = await api('/api/subscribe', { phone: bg.querySelector('#subPhone').value });
-    if (!ok) { btn.disabled = false; return toast(data.error || 'Could not start subscription', 'error'); }
-    toast(data.message);
-    let tries = 0;
-    const poll = setInterval(async () => {
-      tries += 1;
-      const s = await apiGet('/api/deposit/' + data.reference + '/status');
-      if (s.ok && s.data.status === 'success') { clearInterval(poll); bg.remove(); toast('Premium activated!'); await refreshMe(); pageTasks(); }
-      else if ((s.ok && s.data.status === 'failed') || tries >= 20) { clearInterval(poll); if (s.data && s.data.status === 'failed') toast('Payment not completed.', 'error'); }
-    }, 3000);
+    if (method === 'M-Pesa') {
+      const { ok, data } = await api('/api/subscribe', { phone: (bg.querySelector('#subPhone') || {}).value || '' });
+      if (!ok) { btn.disabled = false; return toast(data.error || 'Could not start subscription', 'error'); }
+      toast(data.message);
+      let tries = 0;
+      const poll = setInterval(async () => {
+        tries += 1;
+        const s = await apiGet('/api/deposit/' + data.reference + '/status');
+        if (s.ok && s.data.status === 'success') { clearInterval(poll); bg.remove(); toast('Premium activated!'); await refreshMe(); pageTasks(); }
+        else if ((s.ok && s.data.status === 'failed') || tries >= 20) { clearInterval(poll); btn.disabled = false; if (s.data && s.data.status === 'failed') toast('Payment not completed.', 'error'); }
+      }, 3000);
+    } else {
+      const { ok, data } = await api('/api/subscribe/manual', { method });
+      if (ok) { bg.remove(); toast(data.message); await refreshMe(); pageTasks(); }
+      else { btn.disabled = false; toast(data.error || 'Could not activate Premium', 'error'); }
+    }
   });
 }
 
@@ -978,16 +985,14 @@ async function pageLearn() {
 const DEPOSIT_METHODS = [
   { key: 'M-Pesa', logo: LOGO.mpesa, desc: 'STK push · KES' },
   { key: 'Card', logo: LOGO.card, desc: 'Debit / credit card' },
+  { key: 'Paystack', logo: LOGO.paystack, desc: 'Cards & bank' },
   { key: 'PayPal', logo: LOGO.paypal, desc: 'Pay with PayPal' },
   { key: 'Bank account', logo: LOGO.bank, desc: 'Bank transfer' },
-  { key: 'Paystack', logo: LOGO.paystack, desc: 'Cards & bank' },
 ];
 const WITHDRAW_METHODS = [
-  { key: 'M-Pesa', logo: LOGO.mpesa, desc: 'To your M-Pesa' },
-  { key: 'PayPal', logo: LOGO.paypal, desc: 'To your PayPal' },
-  { key: 'Stripe', logo: LOGO.stripe, desc: 'To your Stripe' },
-  { key: 'Apple Pay', logo: LOGO.applepay, desc: 'To Apple Pay' },
-  { key: 'Card', logo: LOGO.card, desc: 'To your debit card' },
+  { key: 'M-Pesa', logo: LOGO.mpesa, desc: 'To your M-Pesa · KES' },
+  { key: 'PayPal', logo: LOGO.paypal, desc: 'To your PayPal · USD' },
+  { key: 'Bank account', logo: LOGO.bank, desc: 'To your bank · USD' },
 ];
 const INVEST_METHOD_CARDS = [
   { key: 'Card', logo: LOGO.card, desc: 'Debit / credit card' },
@@ -1001,9 +1006,16 @@ async function pageRedeem() {
   loading();
   const [{ data }, dep] = await Promise.all([apiGet('/api/redeem'), apiGet('/api/deposits')]);
   const deposits = dep.data.deposits || [];
+  const bank = dep.data.bank || null; // receiving bank account for manual bank-transfer deposits
   const statusClass = (s) => (s && /(paid|success)/i.test(s) ? 'approved' : s === 'Failed' ? 'rejected' : 'pending');
   const savedPhone = (ME.profile && ME.profile.phone) || '';
   const minUSD = (data.min && data.min.USD) || 0.5;
+
+  // Coming back from a card / Paystack checkout redirect (?deposited / ?depfail).
+  const rq = new URLSearchParams(location.hash.split('?')[1] || '');
+  if (rq.get('deposited')) { toast('Deposit received — your wallet has been credited!'); await refreshMe(); }
+  else if (rq.get('depfail')) toast('Payment was not completed. You can try again.', 'error');
+  if (rq.get('deposited') || rq.get('depfail')) history.replaceState(null, '', `${location.pathname}${location.search}#/redeem`);
 
   // The wallet is one balance shown in both currencies, kept in sync via the live FX rate.
   const bal = totals();
@@ -1027,7 +1039,7 @@ async function pageRedeem() {
 
     <div class="panel">
       <h3>Withdraw — cash out</h3>
-      <p class="p-sub">All withdrawals are entered in <b>USD</b>. M-Pesa is paid out instantly; other methods are processed by our team within 24 hours.</p>
+      <p class="p-sub"><b>M-Pesa</b> is entered and paid in <b>KES</b>; PayPal and bank in <b>USD</b>. Every withdrawal is reviewed and verified by our team before it's sent (usually within 24 hours).</p>
       <div id="wdMethods"></div>
       <form id="rForm" style="margin-top:14px">
         <div id="wdFields"><p class="p-sub">Select a method above to continue.</p></div>
@@ -1048,9 +1060,25 @@ async function pageRedeem() {
     const amtKES = `<div class="field"><label>Amount in Kenyan Shillings</label><input id="dAmt" type="number" min="${dep.data.min}" step="1" placeholder="e.g. 500"></div>`;
     const amtUSD = `<div class="field"><label>Amount (USD)</label><input id="dAmt" type="number" min="1" step="0.01" placeholder="e.g. 20"></div>`;
     if (m === 'M-Pesa') return `<div class="grid g2">${amtKES}<div class="field"><label>M-Pesa phone</label><input id="dPhone" value="${esc(savedPhone)}" placeholder="e.g. +254 712 345 678"></div></div><p class="p-sub">You'll get an STK PIN prompt on your phone.</p>`;
-    if (m === 'Card') return `${amtUSD}<div class="field"><label>Card number</label><input id="dCard" inputmode="numeric" placeholder="1234 5678 9012 3456"></div><div class="grid g2"><div class="field"><label>Expiry</label><input id="dExp" placeholder="MM/YY"></div><div class="field"><label>CVC</label><input id="dCvc" inputmode="numeric" maxlength="4" placeholder="123"></div></div>`;
-    if (m === 'PayPal' || m === 'Paystack') return `<div class="grid g2">${amtUSD}<div class="field"><label>${m} email</label><input id="dEmail" type="email" placeholder="you@example.com"></div></div>`;
-    if (m === 'Bank account') return `${amtUSD}<p class="p-sub">Bank transfers are confirmed and credited within 24 hours. We'll show you the transfer instructions after you submit.</p>`;
+    if (m === 'Card' || m === 'Paystack') return `${amtUSD}<p class="p-sub">You'll be taken to a secure ${m === 'Card' ? 'card payment' : 'Paystack'} page to enter your card and pay. Your wallet is credited automatically once the payment succeeds.</p>`;
+    if (m === 'PayPal') return `<div class="grid g2">${amtUSD}<div class="field"><label>PayPal email</label><input id="dEmail" type="email" placeholder="you@example.com"></div></div>`;
+    if (m === 'Bank account') {
+      if (!bank) return `${amtUSD}<p class="p-sub">Bank transfer isn't set up yet — please use another method for now.</p>`;
+      const row = (label, val) => (val ? `<div class="row"><span>${esc(label)}</span><b>${esc(val)}</b></div>` : '');
+      return `
+        <p class="p-sub" style="margin:0 0 6px"><b>How it works:</b> send your transfer to the account below, enter the amount and your bank reference, then click Deposit. Your wallet is credited once we confirm the payment (usually within 24 hours).</p>
+        <div class="bank-box">
+          <div class="p-sub" style="margin-bottom:6px">Transfer the money to:</div>
+          ${row('Bank', bank.bankName)}
+          ${row('Account name', bank.accountName)}
+          ${row('Account number', bank.accountNumber)}
+          ${row('Branch', bank.branch)}
+          ${row('SWIFT / BIC', bank.swift)}
+          ${bank.instructions ? `<div class="row"><span>Note</span><b>${esc(bank.instructions)}</b></div>` : ''}
+        </div>
+        ${amtUSD}
+        <div class="field"><label>Your bank reference / transaction code</label><input id="dRef" placeholder="e.g. the reference shown by your bank"></div>`;
+    }
     return amtUSD;
   }
   const getDepMethod = renderMethodCards(document.getElementById('depMethods'), DEPOSIT_METHODS, (m) => { depFields.innerHTML = depForm(m); });
@@ -1075,10 +1103,16 @@ async function pageRedeem() {
         if (s.ok && s.data.status === 'success') { clearInterval(poll); toast('Deposit received. Balance updated.'); await refreshMe(); pageRedeem(); }
         else if ((s.ok && s.data.status === 'failed') || tries >= 20) { clearInterval(poll); if (s.data && s.data.status === 'failed') toast('Deposit was not completed.', 'error'); pageRedeem(); }
       }, 3000);
+    } else if (m === 'Card' || m === 'Paystack') {
+      btn.disabled = true;
+      const { ok, data: d } = await api('/api/deposit/checkout', { method: m, amount });
+      if (!ok) { btn.disabled = false; return toast(d.error || 'Could not start card payment', 'error'); }
+      if (d.mode === 'redirect' && d.url) { toast(d.message || 'Redirecting to pay…'); location.href = d.url; return; }
+      btn.disabled = false;
     } else {
       let details = '';
-      if (m === 'Card') { const c = (document.getElementById('dCard').value || '').replace(/\D/g, '').slice(-4); details = c ? '•••• ' + c : ''; }
-      else if (m === 'PayPal' || m === 'Paystack') details = document.getElementById('dEmail').value;
+      if (m === 'PayPal') details = document.getElementById('dEmail').value;
+      else if (m === 'Bank account') { const r = document.getElementById('dRef'); details = r ? r.value.trim() : ''; }
       const { ok, data: d } = await api('/api/deposit/manual', { method: m, amount, details });
       if (ok) { toast(d.message); pageRedeem(); } else toast(d.error || 'Could not record deposit', 'error');
     }
@@ -1088,18 +1122,29 @@ async function pageRedeem() {
   const wdFields = document.getElementById('wdFields');
   const minHint = document.getElementById('minHint');
   function wdForm(m) {
-    const amt = `<div class="field"><label>Amount (USD)</label><input id="rAmt" type="number" step="0.01" min="0" placeholder="0.00"></div>`;
+    // M-Pesa pays out in KES (Kenyan users don't hold USD in M-Pesa); PayPal/Bank are USD.
+    const cur = m === 'M-Pesa' ? 'KES' : 'USD';
+    const amt = `<div class="field"><label>Amount (${cur})</label><input id="rAmt" type="number" step="${cur === 'KES' ? '1' : '0.01'}" min="0" placeholder="${cur === 'KES' ? 'e.g. 1000' : '0.00'}"></div>`;
+    if (m === 'Bank account') {
+      return `${amt}
+        <div class="grid g2">
+          <div class="field"><label>Account holder name</label><input id="bkName" placeholder="Full name on the account"></div>
+          <div class="field"><label>Bank name</label><input id="bkBank" placeholder="Your bank's name"></div>
+          <div class="field"><label>Account number / IBAN</label><input id="bkAcct" placeholder="Your account number"></div>
+          <div class="field"><label>SWIFT / branch code <span class="p-sub">(optional)</span></label><input id="bkSwift" placeholder="Your SWIFT or branch code"></div>
+        </div>`;
+    }
     let dest = '';
     if (m === 'M-Pesa') dest = `<div class="field"><label>M-Pesa phone number</label><input id="rDest" value="${esc(savedPhone)}" placeholder="e.g. +254 712 345 678"></div>`;
-    else if (m === 'PayPal' || m === 'Apple Pay' || m === 'Stripe') dest = `<div class="field"><label>${m} email</label><input id="rDest" type="email" placeholder="you@example.com"></div>`;
-    else if (m === 'Card') dest = `<div class="field"><label>Card number</label><input id="rDest" inputmode="numeric" placeholder="1234 5678 9012 3456"></div>`;
+    else if (m === 'PayPal') dest = `<div class="field"><label>PayPal email</label><input id="rDest" type="email" placeholder="you@example.com"></div>`;
+    else dest = `<div class="field"><label>Destination</label><input id="rDest" placeholder="Account details"></div>`;
     return `<div class="grid g2">${amt}${dest}</div>`;
   }
   const getWdMethod = renderMethodCards(document.getElementById('wdMethods'), WITHDRAW_METHODS, (m) => {
     wdFields.innerHTML = wdForm(m);
     minHint.textContent = m === 'M-Pesa'
-      ? `Paid to your M-Pesa, converted to KES. Minimum $${minUSD}.`
-      : `Paid to your ${m}, processed within 24 hours. Minimum $${minUSD}.`;
+      ? `Entered in KES and paid to your M-Pesa. We verify every withdrawal before sending it (usually within 24 hours).`
+      : `Entered in USD and paid to your ${m}. We verify every withdrawal before sending it (usually within 24 hours).`;
   });
 
   document.getElementById('rForm').addEventListener('submit', async (e) => {
@@ -1109,8 +1154,14 @@ async function pageRedeem() {
     const amtEl = document.getElementById('rAmt'), destEl = document.getElementById('rDest');
     const amount = Number(amtEl ? amtEl.value : 0);
     let destination = destEl ? destEl.value : '';
-    if (m === 'Card') destination = (destination || '').replace(/\D/g, ''); // send digits; server masks
-    const { ok, data: d } = await api('/api/redeem', { method: m, currency: 'USD', amount, destination });
+    if (m === 'Bank account') {
+      const g = (id) => (document.getElementById(id) || {}).value || '';
+      const name = g('bkName').trim(), bnk = g('bkBank').trim(), acct = g('bkAcct').trim(), swift = g('bkSwift').trim();
+      if (!name || !bnk || !acct) return toast('Fill in your account name, bank and account number', 'error');
+      destination = `${name} · ${bnk} · ${acct}${swift ? ' · ' + swift : ''}`;
+    }
+    const currency = m === 'M-Pesa' ? 'KES' : 'USD';
+    const { ok, data: d } = await api('/api/redeem', { method: m, currency, amount, destination });
     if (ok) { toast(d.message); await refreshMe(); pageRedeem(); }
     else toast(d.error || 'Could not redeem', 'error');
   });
@@ -1268,9 +1319,9 @@ function paymentFields(method) {
     'Bank account': `
       <div class="grid g2">
         <div class="field"><label>Account holder name</label><input id="pf_name" placeholder="Full name"></div>
-        <div class="field"><label>Bank name</label><input id="pf_bank" placeholder="e.g. Equity Bank"></div>
+        <div class="field"><label>Bank name</label><input id="pf_bank" placeholder="Your bank's name"></div>
         <div class="field"><label>Account number / IBAN</label><input id="pf_acct" placeholder="Account number"></div>
-        <div class="field"><label>SWIFT / routing <span class="p-sub">(optional)</span></label><input id="pf_swift" placeholder="e.g. EQBLKENA"></div>
+        <div class="field"><label>SWIFT / routing <span class="p-sub">(optional)</span></label><input id="pf_swift" placeholder="Your SWIFT or routing code"></div>
       </div>`,
     'Apple Pay': `<div class="field"><label>Apple ID email</label><input id="pf_email" type="email" placeholder="you@icloud.com"></div>`,
     'Stripe': `

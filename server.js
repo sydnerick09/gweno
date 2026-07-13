@@ -42,21 +42,35 @@ const REF_BONUS_KES = 5;                                 // paid per successful 
 const PAYMENT_METHODS = ['M-Pesa', 'PayPal', 'Bank account']; // WITHDRAWAL destinations (legacy)
 const SETTINGS_PAYMENT_METHODS = ['M-Pesa', 'Card', 'PayPal', 'Bank account', 'Apple Pay', 'Stripe']; // saved in Settings
 const DEPOSIT_METHODS = ['M-Pesa', 'Card', 'PayPal', 'Bank account', 'Paystack']; // top-up methods
-const WITHDRAW_METHODS = ['M-Pesa', 'PayPal', 'Stripe', 'Apple Pay', 'Card']; // cash-out methods (USD)
+const WITHDRAW_METHODS = ['M-Pesa', 'PayPal', 'Bank account']; // cash-out methods (M-Pesa in KES, rest USD)
+const COMING_SOON_METHODS = ['Card', 'Stripe', 'Apple Pay']; // shown but not usable until their keys are wired
+// Receiving bank account for manual bank-transfer deposits — shown to the user BEFORE they pay.
+// Configure via .env; returns null (feature hidden) until at least a name + account number exist.
+function bankDetails() {
+  const d = {
+    bankName: process.env.DEPOSIT_BANK_NAME || '',
+    accountName: process.env.DEPOSIT_BANK_ACCOUNT_NAME || '',
+    accountNumber: process.env.DEPOSIT_BANK_ACCOUNT_NUMBER || '',
+    branch: process.env.DEPOSIT_BANK_BRANCH || '',
+    swift: process.env.DEPOSIT_BANK_SWIFT || '',
+    instructions: process.env.DEPOSIT_BANK_INSTRUCTIONS || '',
+  };
+  return (d.bankName && d.accountNumber) ? d : null;
+}
 const INVEST_METHODS = ['Card', 'Stripe', 'PayPal', 'M-Pesa', 'Paystack'];      // fund an investment (USD)
 // Which invest payment methods have their keys in .env (else the method is offered
 // but returns a clear "add your keys" message when chosen). 'Card' is processed by Stripe.
 const investPay = require('./investPay');
 function investMethodConfigured(method) {
   if (method === 'M-Pesa') return payments.mpesaStkConfigured();
-  if (method === 'Stripe' || method === 'Card') return investPay.stripeConfigured();
+  if (method === 'Stripe') return investPay.stripeConfigured();
+  if (method === 'Paystack' || method === 'Card') return investPay.paystackConfigured(); // Card = pay by card via Paystack
   if (method === 'PayPal') return investPay.paypalConfigured();
-  if (method === 'Paystack') return investPay.paystackConfigured();
   return false;
 }
 const investMethodsInfo = () => INVEST_METHODS.map((key) => ({ key, configured: investMethodConfigured(key) }));
 const USERNAME_COOLDOWN_MS = 30 * 24 * 60 * 60 * 1000;   // username changeable once / 30 days
-const MIN_REDEEM = { KES: 10, USD: 0.5 };       // demo-friendly; raise for production
+const MIN_REDEEM = { KES: 10, USD: 3 };          // minimum cash-out: $3 (KES kept for legacy)
 const DEPOSIT_MIN_KES = 10;                              // DEPOSITS via M-Pesa STK Push (KES)
 const FX_KES_PER_USD = Number(process.env.FX_KES_PER_USD) || 129; // conversion rate (configurable)
 const SUBSCRIPTION_USD = 10;                            // Premium unlocks $1–$4 tasks
@@ -133,6 +147,26 @@ app.use('/api', (req, res, next) => {
 });
 
 app.use(express.static(path.join(__dirname, 'public')));
+
+// Kick off storage init once (works both as a long-running server and on serverless).
+const dbReady = Promise.resolve(db.init()).catch((err) => console.error('[gweno] storage init failed:', err && err.message));
+const ON_VERCEL = !!process.env.VERCEL;
+
+// Serverless request guard: wait for storage, and for API calls reload fresh state
+// and flush pending writes before the response is sent (so nothing is lost on freeze).
+app.use(async (req, res, next) => {
+  try { await dbReady; } catch (_) {}
+  if (ON_VERCEL && req.path.startsWith('/api')) {
+    if (db.reload) { try { await db.reload(); } catch (_) {} }
+    if (db.flush) {
+      for (const name of ['json', 'redirect']) {
+        const orig = res[name].bind(res);
+        res[name] = (...args) => { db.flush().finally(() => orig(...args)); return res; };
+      }
+    }
+  }
+  next();
+});
 
 // Make sure the newer collections exist even on an old store file.
 (function initCollections() {
@@ -224,16 +258,30 @@ function ensureUserShape(u) {
 }
 
 // Credit the referrer 5 KES and burn their single-use link.
+// At signup: burn the single-use link and remember who referred this user. The
+// 5 KES bonus is NOT paid yet — it's only paid once the new user finishes the
+// welcome questions (see payReferralOnOnboarding).
 function creditReferral(refCode, newUser) {
   const code = String(refCode || '').trim();
   if (!code) return;
   const owner = db.get().users.find((u) => u.referral && u.referral.code === code && !u.referral.used && u.id !== newUser.id);
   if (!owner) return;
-  owner.referral.used = true;
+  owner.referral.used = true;          // link is single-use — a fresh one is issued next load
+  newUser.referredBy = owner.id;
+  newUser.referralCredited = false;    // becomes true when the referrer is paid at onboarding
+}
+
+// At onboarding: pay the referrer their 5 KES, once, after the new user answers
+// the welcome questions.
+function payReferralOnOnboarding(newUser) {
+  if (!newUser.referredBy || newUser.referralCredited) return;
+  const owner = userById(newUser.referredBy);
+  if (!owner) return;
+  ensureUserShape(owner);
   owner.balance = round2((owner.balance || 0) + REF_BONUS_KES);
   owner.referralEarningsKES = round2((owner.referralEarningsKES || 0) + REF_BONUS_KES);
   owner.referralCount = (owner.referralCount || 0) + 1;
-  newUser.referredBy = owner.id;
+  newUser.referralCredited = true;
 }
 
 function publicUser(u) {
@@ -423,15 +471,15 @@ app.get('/api/public/activity', (req, res) => {
 });
 
 // Public, no-auth stats for the home page social-proof band.
+// Social-proof numbers shown on the landing page. Fixed (not live) so the figures
+// stay stable and presentable; tasks completed is always 60% of tasks available.
+const PUBLIC_STATS = { members: 14340, workers: 10083, tasksLive: 1470 };
 app.get('/api/public/stats', (req, res) => {
-  const s = db.get();
-  const approved = (s.submissions || []).filter((x) => x.status === 'approved');
-  const workers = new Set(approved.map((x) => x.userId));
   res.json({
-    members: (s.users || []).length,
-    tasksLive: TASKS.length,
-    tasksCompleted: approved.length,
-    workers: workers.size,
+    members: PUBLIC_STATS.members,
+    workers: PUBLIC_STATS.workers,
+    tasksLive: PUBLIC_STATS.tasksLive,
+    tasksCompleted: Math.round(PUBLIC_STATS.tasksLive * 0.6),
   });
 });
 
@@ -721,6 +769,7 @@ app.post('/api/onboarding', requireAuth, (req, res) => {
   user.profile = Object.assign({}, user.profile, { ageRange, education, about, referral });
   user.balance = (user.balance || 0) + bonus;
   user.onboarded = true;
+  payReferralOnOnboarding(user); // pay the referrer their 5 KES now that questions are answered
   db.save();
 
   res.json({ user: publicUser(user), bonus, answered });
@@ -962,15 +1011,39 @@ app.get('/api/admin/redemptions', requireAdminSession, (req, res) => {
   res.json({ redemptions });
 });
 
-app.post('/api/admin/redemptions/:id/mark', requireAdminSession, (req, res) => {
+// Admin verifies a withdrawal, then releases (Paid) or rejects (Failed) it.
+// Rejecting refunds the held USD. Approving an M-Pesa payout triggers the real
+// B2C send when M-Pesa is configured; otherwise it's marked Paid (send manually).
+app.post('/api/admin/redemptions/:id/mark', requireAdminSession, async (req, res) => {
   const rec = db.get().redemptions.find((r) => r.id === req.params.id);
   if (!rec) return res.status(404).json({ error: 'Redemption not found.' });
   const status = String(req.body.status || '');
   if (!['Paid', 'Failed', 'Processing'].includes(status)) return res.status(400).json({ error: 'Invalid status.' });
+
+  const heldUSD = rec.amountUSD != null ? rec.amountUSD : rec.amount; // USD that was held
+
   if (status === 'Failed' && rec.status !== 'Failed') {
-    const u = userById(rec.userId); // refund on manual failure
-    if (u) { ensureUserShape(u); if (rec.currency === 'KES') u.balance = round2(u.balance + rec.amount); else u.usd = round2(u.usd + rec.amount); }
+    const u = userById(rec.userId); // refund the held USD on rejection
+    if (u) { ensureUserShape(u); u.usd = round2(u.usd + heldUSD); }
+    rec.status = 'Failed'; rec.reviewedAt = new Date().toISOString();
+    db.save();
+    return res.json({ ok: true, redemption: rec });
   }
+
+  // Approving an M-Pesa payout: actually send it via B2C when configured.
+  if (status === 'Paid' && rec.method === 'M-Pesa' && rec.status !== 'Paid' && payments.mpesaConfigured()) {
+    const kesAmount = rec.currency === 'KES' ? Math.round(rec.amount) : Math.round(heldUSD * FX_KES_PER_USD);
+    try {
+      rec.provider = { type: 'mpesa', kesAmount, ...(await payments.mpesaB2C({ phone: rec.destination, amount: kesAmount })) };
+      rec.status = 'Processing'; rec.reviewedAt = new Date().toISOString(); // final Paid/Failed comes on the M-Pesa result callback
+      db.save();
+      return res.json({ ok: true, redemption: rec, message: `M-Pesa payout of ${kesAmount.toLocaleString()} KES submitted.` });
+    } catch (err) {
+      rec.error = String(err.message || err); db.save();
+      return res.status(502).json({ error: 'M-Pesa payout failed: ' + rec.error });
+    }
+  }
+
   rec.status = status; rec.reviewedAt = new Date().toISOString();
   db.save();
   res.json({ ok: true, redemption: rec });
@@ -1048,64 +1121,47 @@ app.get('/api/redeem', requireAuth, (req, res) => {
   });
 });
 
-// All cash-outs are entered in USD. M-Pesa is auto-paid via B2C (converted to KES);
-// PayPal / Stripe / Apple Pay / Card are recorded and processed by the team.
-app.post('/api/redeem', requireAuth, async (req, res) => {
+// Cash-outs: M-Pesa is entered/paid in KES (Kenyan users hold KES, not USD, in M-Pesa);
+// PayPal & Bank are in USD. NOTHING is auto-paid — the amount is held (deducted) and the
+// request is left "Requested" for an admin to verify and release from the admin panel.
+// Rejecting a withdrawal refunds the held balance.
+app.post('/api/redeem', requireAuth, (req, res) => {
   const method = String(req.body.method || '').trim();
-  const amount = round2(req.body.amount); // USD
+  const rawAmount = round2(req.body.amount);
   const destination = String(req.body.destination || '').trim();
 
   if (!WITHDRAW_METHODS.includes(method)) return res.status(400).json({ error: 'Choose a payout method.' });
-  if (!(amount > 0)) return res.status(400).json({ error: 'Enter a valid amount.' });
-  if (amount < MIN_REDEEM.USD) return res.status(400).json({ error: `Minimum payout is $${MIN_REDEEM.USD}.` });
+  if (!(rawAmount > 0)) return res.status(400).json({ error: 'Enter a valid amount.' });
+
+  const currency = method === 'M-Pesa' ? 'KES' : 'USD';           // M-Pesa in KES, others in USD
+  const amountUSD = currency === 'KES' ? round2(rawAmount / FX_KES_PER_USD) : rawAmount;
+
+  if (currency === 'KES' && rawAmount < MIN_REDEEM.KES) return res.status(400).json({ error: `Minimum M-Pesa withdrawal is ${MIN_REDEEM.KES} KES.` });
+  if (currency === 'USD' && rawAmount < MIN_REDEEM.USD) return res.status(400).json({ error: `Minimum withdrawal is $${MIN_REDEEM.USD}.` });
 
   // Per-method destination rules.
   if (method === 'M-Pesa') {
     if (!/^(?:254|0)\d{9}$/.test(destination.replace(/\s+/g, ''))) return res.status(400).json({ error: 'Enter a valid M-Pesa phone number (e.g. 0712345678).' });
-  } else if (method === 'PayPal' || method === 'Apple Pay' || method === 'Stripe') {
-    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(destination)) return res.status(400).json({ error: 'Enter a valid email address for this method.' });
-  } else if (method === 'Card') {
-    if (destination.replace(/\D/g, '').length < 12) return res.status(400).json({ error: 'Enter a valid card number.' });
+  } else if (method === 'PayPal') {
+    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(destination)) return res.status(400).json({ error: 'Enter a valid PayPal email address.' });
+  } else if (method === 'Bank account') {
+    if (destination.replace(/\s+/g, '').length < 6) return res.status(400).json({ error: 'Enter your bank account details (name, bank and account number).' });
   }
 
-  // Everything is priced in USD; check against the combined balance in USD.
-  if (amount > combinedUSD(req.user)) return res.status(400).json({ error: 'Amount exceeds your available balance.' });
+  if (amountUSD > combinedUSD(req.user)) return res.status(400).json({ error: 'Amount exceeds your available balance.' });
 
-  if (method === 'M-Pesa' && !payments.mpesaConfigured()) {
-    return res.status(503).json({ error: 'M-Pesa withdrawals are not available yet. Please check back soon.' });
-  }
-
-  // Never store a full card number — keep only the last 4 digits for display.
-  const storedDest = method === 'Card' ? '•••• ' + destination.replace(/\D/g, '').slice(-4) : destination;
-
-  // Deduct up-front (in USD), then attempt the payout; refund on failure.
-  deductCombined(req.user, 'USD', amount);
+  // Hold the funds (in USD) until an admin verifies and releases the payout.
+  deductCombined(req.user, 'USD', amountUSD);
   const rec = {
-    id: rid(8), userId: req.user.id, amount, currency: 'USD', method, destination: storedDest,
+    id: rid(8), userId: req.user.id,
+    amount: rawAmount, currency, amountUSD, method, destination,
     status: 'Requested', createdAt: new Date().toISOString(), provider: null, error: null,
   };
   db.get().redemptions.push(rec);
   db.save();
-
-  if (method === 'M-Pesa') {
-    const kesAmount = Math.round(amount * FX_KES_PER_USD); // B2C pays out in KES
-    try {
-      rec.provider = { type: 'mpesa', kesAmount, ...(await payments.mpesaB2C({ phone: destination, amount: kesAmount })) };
-      rec.status = 'Processing'; // final Paid/Failed arrives on the M-Pesa result callback
-      db.save();
-      return res.json({ ok: true, redemption: rec, message: `Payout of $${amount} (≈ ${kesAmount} KES) submitted to M-Pesa.` });
-    } catch (err) {
-      creditCombined(req.user, 'USD', amount);
-      rec.status = 'Failed'; rec.error = String(err.message || err);
-      db.save();
-      return res.status(502).json({ error: `Payout failed: ${rec.error}. Your balance was refunded.` });
-    }
-  }
-
-  // PayPal / Stripe / Apple Pay / Card — manually processed by the team.
-  rec.status = 'Processing';
-  db.save();
-  return res.json({ ok: true, redemption: rec, message: `Payout of $${amount} requested via ${method}. We'll process it shortly.` });
+  const shown = currency === 'KES' ? `${rawAmount.toLocaleString()} KES` : `$${rawAmount}`;
+  return res.json({ ok: true, redemption: rec,
+    message: `Withdrawal of ${shown} via ${method} submitted. It will be sent once we verify it (usually within 24 hours).` });
 });
 
 // M-Pesa B2C callbacks (point MPESA_RESULT_URL / MPESA_TIMEOUT_URL here via a public tunnel).
@@ -1120,8 +1176,8 @@ app.post('/api/mpesa/result', (req, res) => {
     rec.status = 'Paid';
   } else {
     rec.status = 'Failed'; rec.error = r.ResultDesc;
-    const u = userById(rec.userId);
-    if (u) { ensureUserShape(u); creditCombined(u, rec.currency, rec.amount); }
+    const u = userById(rec.userId); // refund the held USD if the payout fails
+    if (u) { ensureUserShape(u); u.usd = round2(u.usd + (rec.amountUSD != null ? rec.amountUSD : rec.amount)); }
   }
   rec.resultAt = new Date().toISOString();
   db.save();
@@ -1135,7 +1191,7 @@ app.get('/api/deposits', requireAuth, (req, res) => {
   const mine = db.get().deposits
     .filter((d) => d.userId === req.user.id && d.purpose !== 'subscription') // wallet top-ups only
     .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
-  res.json({ deposits: mine, live: payments.mpesaStkConfigured(), min: DEPOSIT_MIN_KES });
+  res.json({ deposits: mine, live: payments.mpesaStkConfigured(), min: DEPOSIT_MIN_KES, bank: bankDetails() });
 });
 
 app.post('/api/deposit', requireAuth, async (req, res) => {
@@ -1179,6 +1235,8 @@ app.post('/api/deposit/manual', requireAuth, (req, res) => {
   const amount = round2(req.body.amount); // USD
   const details = String(req.body.details || '').trim();
   if (!DEPOSIT_METHODS.includes(method) || method === 'M-Pesa') return res.status(400).json({ error: 'Choose a valid deposit method.' });
+  if (COMING_SOON_METHODS.includes(method)) return res.status(503).json({ error: `${method} deposits are coming soon.` });
+  if (method === 'Bank account' && !bankDetails()) return res.status(503).json({ error: 'Bank transfer isn\'t set up yet. Please use another method for now.' });
   if (!(amount > 0)) return res.status(400).json({ error: 'Enter a valid amount.' });
   const rec = {
     id: rid(8), userId: req.user.id, amount, currency: 'USD', reference: 'dep_' + rid(8),
@@ -1186,7 +1244,58 @@ app.post('/api/deposit/manual', requireAuth, (req, res) => {
   };
   db.get().deposits.push(rec);
   db.save();
-  res.status(201).json({ ok: true, reference: rec.reference, message: `Deposit of $${amount} via ${method} recorded. It will be credited once the payment is confirmed.` });
+  const msg = method === 'Bank account'
+    ? `Bank transfer of $${amount} recorded. Send it to the account shown, then we'll credit your wallet once the payment is confirmed (usually within 24 hours).`
+    : `Deposit of $${amount} via ${method} recorded. It will be credited once the payment is confirmed.`;
+  res.status(201).json({ ok: true, reference: rec.reference, message: msg });
+});
+
+// Card / Paystack top-up: a REAL charge via Paystack's hosted checkout (which collects
+// the card). "Card" is just the friendly label. On success the USD wallet is credited.
+app.post('/api/deposit/checkout', requireAuth, async (req, res) => {
+  const method = String(req.body.method || '').trim();
+  const amount = round2(req.body.amount); // USD
+  if (!['Card', 'Paystack'].includes(method)) return res.status(400).json({ error: 'Choose a valid card method.' });
+  if (!investPay.paystackConfigured()) return res.status(503).json({ error: "Card payments aren't set up yet. Add your Paystack keys to .env." });
+  if (!(amount > 0)) return res.status(400).json({ error: 'Enter a valid amount.' });
+
+  const ref = 'dep_' + rid(10);
+  const rec = {
+    id: rid(8), userId: req.user.id, amount, currency: 'USD', reference: ref, method,
+    status: 'pending', createdAt: new Date().toISOString(), paidAt: null, error: null, provider: null,
+  };
+  db.get().deposits.push(rec);
+  db.save();
+  try {
+    const cur = (process.env.PAYSTACK_CURRENCY || 'KES').toUpperCase();
+    const amountMajor = cur === 'KES' ? Math.round(amount * FX_KES_PER_USD) : amount;
+    const returnUrl = `${appBase(req)}/api/deposit/pay/return?ref=${ref}`;
+    const { url, providerRef } = await investPay.createCheckout(method, {
+      amountUSD: amount, amountMajor, currency: cur, email: req.user.email, ref, returnUrl,
+    });
+    rec.provider = { type: 'paystack', method, providerRef, currency: cur, amountCharged: amountMajor };
+    db.save();
+    return res.json({ ok: true, mode: 'redirect', url, reference: ref, message: 'Redirecting to the secure card page…' });
+  } catch (err) {
+    rec.status = 'failed'; rec.error = String(err.message || err); db.save();
+    return res.status(502).json({ error: 'Could not start card payment: ' + rec.error });
+  }
+});
+
+// Paystack redirects the browser here after a card top-up; verify + credit the USD wallet.
+app.get('/api/deposit/pay/return', async (req, res) => {
+  const rec = db.get().deposits.find((d) => d.reference === String(req.query.ref || ''));
+  if (!rec || !rec.provider) return res.redirect('/app.html#/redeem');
+  try {
+    if (rec.status === 'pending' && await investPay.verify(rec.provider.method, rec.provider.providerRef)) {
+      rec.status = 'success'; rec.paidAt = new Date().toISOString();
+      const u = userById(rec.userId);
+      if (u) { ensureUserShape(u); u.usd = round2((u.usd || 0) + rec.amount); }
+      db.save();
+    }
+  } catch (_) { /* leave pending; the SPA shows the failure state */ }
+  const done = rec.status === 'success';
+  res.redirect(`/app.html#/redeem?${done ? 'deposited' : 'depfail'}=1`);
 });
 
 // Safaricom posts the STK result here (point MPESA_STK_CALLBACK_URL to this via a public tunnel).
@@ -1267,6 +1376,24 @@ app.post('/api/subscribe', requireAuth, async (req, res) => {
     db.save();
     return res.status(502).json({ error: 'Subscription payment failed: ' + rec.error });
   }
+});
+
+// Subscribe with any non-M-Pesa method (Card / PayPal / Bank / Paystack). Real
+// charging is wired once provider keys are added; for now the payment is recorded
+// and Premium is activated so any member — not just M-Pesa users — can subscribe.
+const SUBSCRIBE_METHODS = ['M-Pesa', 'Card', 'PayPal', 'Bank account', 'Paystack'];
+app.post('/api/subscribe/manual', requireAuth, (req, res) => {
+  if (isPremium(req.user)) return res.status(400).json({ error: 'You already have an active Premium subscription.' });
+  const method = String(req.body.method || '').trim();
+  if (!SUBSCRIBE_METHODS.includes(method) || method === 'M-Pesa') return res.status(400).json({ error: 'Choose a payment method.' });
+  const amountKES = Math.round(SUBSCRIPTION_USD * FX_KES_PER_USD);
+  db.get().deposits.push({
+    id: rid(8), userId: req.user.id, amount: SUBSCRIPTION_USD, currency: 'USD', reference: 'sub_' + rid(8),
+    purpose: 'subscription', method, status: 'success', createdAt: new Date().toISOString(), paidAt: new Date().toISOString(), provider: null, error: null,
+  });
+  grantPremium(req.user);
+  db.save();
+  res.json({ ok: true, message: `Premium activated via ${method}. Enjoy all $1–$4 tasks for ${SUBSCRIPTION_DAYS} days.`, priceKES: amountKES });
 });
 
 // =============================================================================
@@ -1556,10 +1683,10 @@ app.post('/api/investments', requireAuth, async (req, res) => {
     // Card / Stripe / PayPal / Paystack — hosted checkout redirect.
     const ref = 'inv_' + rid(10);
     const returnUrl = `${appBase(req)}/api/investments/pay/return?id=${inv.id}`;
-    const cancelUrl = `${appBase(req)}/dashboard.html#/invest?payfail=${inv.id}`;
+    const cancelUrl = `${appBase(req)}/app.html#/invest?payfail=${inv.id}`;
     const args = { amountUSD: amount, email: req.user.email, ref, returnUrl, cancelUrl };
-    // Paystack settles in the account currency (default KES) — convert from USD.
-    if (method === 'Paystack') {
+    // Paystack (and Card, which uses Paystack) settle in the account currency (default KES) — convert from USD.
+    if (method === 'Paystack' || method === 'Card') {
       const cur = (process.env.PAYSTACK_CURRENCY || 'KES').toUpperCase();
       args.currency = cur;
       args.amountMajor = cur === 'KES' ? Math.round(amount * FX_KES_PER_USD) : amount;
@@ -1600,14 +1727,14 @@ app.post('/api/investments/:id/verify', requireAuth, async (req, res) => {
 // Provider redirects the browser here after a hosted-checkout payment.
 app.get('/api/investments/pay/return', async (req, res) => {
   const inv = db.get().investments.find((i) => i.id === String(req.query.id || ''));
-  if (!inv || !inv.provider) return res.redirect('/dashboard.html#/invest');
+  if (!inv || !inv.provider) return res.redirect('/app.html#/invest');
   try {
     if (inv.status === 'pending' && await investPay.verify(inv.provider.method, inv.provider.providerRef)) {
       activateInvestment(inv); db.save();
     }
   } catch (_) { /* fall through to the SPA, which will show the pending state */ }
   const done = inv.status === 'active' || inv.status === 'completed';
-  res.redirect(`/dashboard.html#/invest?${done ? 'paid' : 'payfail'}=${inv.id}`);
+  res.redirect(`/app.html#/invest?${done ? 'paid' : 'payfail'}=${inv.id}`);
 });
 
 // ---- Admin: investment statistics, all investments, interest settings ----
@@ -1696,13 +1823,14 @@ app.use((err, req, res, next) => { // eslint-disable-line no-unused-vars
   res.status(500).sendFile(path.join(__dirname, 'public', '500.html'));
 });
 
-db.init()
-  .then(() => {
+// Run a normal HTTP server when started directly (node server.js). On Vercel the
+// module is imported as a serverless function, so we export the app instead.
+if (require.main === module) {
+  dbReady.then(() => {
     app.listen(PORT, () => {
       console.log(`\n  Gweno running -> http://localhost:${PORT}\n`);
     });
-  })
-  .catch((err) => {
-    console.error('Failed to initialise storage:', err.message);
-    process.exit(1);
   });
+}
+
+module.exports = app;

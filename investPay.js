@@ -139,16 +139,18 @@ async function paypalVerify(orderId) {
   return g.ok && gj.status === 'COMPLETED';
 }
 
-// method -> unified create/verify (Card is processed by Stripe)
+// method -> unified create/verify. "Card" is a friendly label for paying by card
+// via Paystack (Paystack's checkout collects the card details), so users who know
+// "card" but not Paystack can still pay. Stripe is kept for future/other regions.
 async function createCheckout(method, args) {
-  if (method === 'Stripe' || method === 'Card') return stripeCreate(args);
-  if (method === 'Paystack') return paystackCreate(args);
+  if (method === 'Stripe') return stripeCreate(args);
+  if (method === 'Paystack' || method === 'Card') return paystackCreate(args);
   if (method === 'PayPal') return paypalCreate(args);
   throw new Error('Unsupported payment method.');
 }
 async function verify(method, providerRef) {
-  if (method === 'Stripe' || method === 'Card') return stripeVerify(providerRef);
-  if (method === 'Paystack') return paystackVerify(providerRef);
+  if (method === 'Stripe') return stripeVerify(providerRef);
+  if (method === 'Paystack' || method === 'Card') return paystackVerify(providerRef);
   if (method === 'PayPal') return paypalVerify(providerRef);
   return false;
 }

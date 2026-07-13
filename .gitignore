@@ -3,3 +3,5 @@ data/
 *.log
 .env
 cloudflared.exe
+
+.vercel

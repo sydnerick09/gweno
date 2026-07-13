@@ -7,7 +7,7 @@
   <footer class="footer">
     <div class="footer-inner">
       <div class="footer-brand">
-        <a class="brand" href="/"><span class="dot"></span> gweno</a>
+        <a class="brand" href="/"><img src="/img/logo.png" alt="Gweno" onerror="this.onerror=null;this.src='/img/logo.svg'" style="height:32px;width:auto;vertical-align:middle;margin-right:8px"> gweno</a>
         <p>Complete quick tasks and surveys, earn real rewards, and cash out to M‑Pesa. Simple, secure, and built for people who get things done.</p>
         <div class="socials-row" aria-label="Find us on social media">
           <a href="/contact.html" title="X" aria-label="X"><svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M18.9 2H22l-7 8 8.2 12h-6.4l-5-6.6L5.9 22H2.7l7.5-8.6L2.3 2h6.6l4.5 6.1L18.9 2z"/></svg></a>
@@ -30,15 +30,15 @@
         <a href="/terms.html">Terms &amp; Conditions</a>
         <a href="/privacy.html">Privacy Policy</a>
         <a href="/cookies.html">Cookie Policy</a>
-        <a href="/terms.html">Community Rules</a>
+        <a href="/community.html">Community Rules</a>
       </div>
 
       <div class="footer-col">
         <h4>Get started</h4>
         <a href="/signup.html">Create account</a>
         <a href="/login.html">Sign in</a>
-        <a href="/contact.html">Help &amp; support</a>
-        <a href="/about.html">Why Gweno</a>
+        <a href="/help.html">Help Center</a>
+        <a href="/support.html">Help &amp; support</a>
       </div>
     </div>
     <div class="footer-bottom">

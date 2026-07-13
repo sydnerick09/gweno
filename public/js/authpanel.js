@@ -3,7 +3,7 @@
   const root = document.getElementById('auth-root');
   if (!root) return;
 
-  const socialRow = () => `<div class="ap-socials">${['google', 'facebook', 'apple']
+  const socialRow = () => `<div class="ap-socials">${['google', 'facebook']
     .map((p) => `<button type="button" data-provider="${p}" aria-label="Continue with ${p}">${SOCIAL_SVGS[p]}</button>`).join('')}</div>`;
 
   root.className = 'ap ap-wrap';
@@ -17,9 +17,9 @@
           <div class="msg" id="msgUp"></div>
           <input name="name" type="text" placeholder="Your name" autocomplete="name" />
           <input name="email" type="email" placeholder="Email" autocomplete="email" />
-          <input name="phone" type="tel" placeholder="Phone number (e.g. +254 712 345 678)" autocomplete="tel" />
-          <input name="username" type="text" placeholder="Username (6–10 letters/numbers)" autocomplete="username" minlength="6" maxlength="10" />
           <select name="country" id="suCountry"></select>
+          <input name="phone" type="tel" placeholder="Phone number" autocomplete="tel" id="suPhone" />
+          <input name="username" type="text" placeholder="Username (6–10 letters/numbers)" autocomplete="username" minlength="6" maxlength="10" />
           <div class="pw-wrap"><input name="password" type="password" placeholder="Password" autocomplete="new-password" id="suPassword" /><button type="button" class="pw-toggle" data-pwtoggle="suPassword" aria-label="Show password"></button></div>
           <div class="pw-wrap"><input name="confirm" type="password" placeholder="Confirm password" autocomplete="new-password" id="suConfirm" /><button type="button" class="pw-toggle" data-pwtoggle="suConfirm" aria-label="Show password"></button></div>
           <button class="ap-btn" type="submit" id="suBtn">Sign Up</button>
@@ -66,7 +66,21 @@
   root.querySelectorAll('[data-goto]').forEach((a) => a.addEventListener('click', () => setSignup(a.dataset.goto === 'signup')));
 
   redirectIfAuthed();
-  populateCountries(document.getElementById('suCountry'));
+  const suCountry = document.getElementById('suCountry');
+  const suPhone = document.getElementById('suPhone');
+  populateCountries(suCountry);
+  // Prefill / update the phone number with the selected country's dialling code,
+  // so numbers match the chosen country (helps prevent mismatched/fraud entries).
+  suCountry.addEventListener('change', () => {
+    const dial = suCountry.selectedOptions[0] ? suCountry.selectedOptions[0].dataset.dial || '' : '';
+    const current = suPhone.value.trim();
+    // Replace an existing leading dial code (or empty field) with the new one.
+    if (!current || /^\+\d{1,4}\s*$/.test(current) || current.startsWith('+')) {
+      suPhone.value = dial ? dial + ' ' : '';
+    }
+    suPhone.placeholder = dial ? `${dial} 712 345 678` : 'Phone number';
+    suPhone.focus();
+  });
   attachPasswordToggles(root);
   root.querySelectorAll('.ap-socials [data-provider]').forEach((b) => b.addEventListener('click', () => socialLogin(b.dataset.provider)));
 

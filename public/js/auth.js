@@ -104,10 +104,9 @@ const SOCIAL_SVGS = {
 };
 
 function socialButtons(mount, verb) {
-  mount.innerHTML = ['google', 'facebook', 'apple'].map((p) => {
+  mount.innerHTML = ['google', 'facebook'].map((p) => {
     const label = p[0].toUpperCase() + p.slice(1);
-    const style = p === 'apple' ? ' style="background:#000;color:#fff;border-color:#000"' : '';
-    return `<button class="btn btn-social"${style} data-provider="${p}">${SOCIAL_SVGS[p]} ${verb} with ${label}</button>`;
+    return `<button class="btn btn-social" data-provider="${p}">${SOCIAL_SVGS[p]} ${verb} with ${label}</button>`;
   }).join('');
   mount.querySelectorAll('button').forEach((b) => {
     b.addEventListener('click', () => socialLogin(b.dataset.provider));
