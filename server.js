@@ -94,9 +94,16 @@ app.use((req, res, next) => {
   res.setHeader('X-Content-Type-Options', 'nosniff');
   res.setHeader('X-Frame-Options', 'DENY');
   res.setHeader('Referrer-Policy', 'same-origin');
+  // CSP allows Google AdSense (script + ad frames + ad images) so ads load and the
+  // site can be verified by the AdSense crawler.
   res.setHeader('Content-Security-Policy',
-    "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; " +
-    "img-src 'self' data: https://api.qrserver.com; connect-src 'self'; font-src 'self' https://fonts.gstatic.com; " +
+    "default-src 'self'; " +
+    "script-src 'self' 'unsafe-inline' https://pagead2.googlesyndication.com https://*.googlesyndication.com https://*.googleadservices.com https://adservice.google.com https://*.google.com https://*.doubleclick.net; " +
+    "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; " +
+    "img-src 'self' data: https:; " +
+    "connect-src 'self' https://pagead2.googlesyndication.com https://*.googlesyndication.com https://*.google.com https://*.doubleclick.net; " +
+    "font-src 'self' https://fonts.gstatic.com; " +
+    "frame-src https://googleads.g.doubleclick.net https://tpc.googlesyndication.com https://*.googlesyndication.com https://*.doubleclick.net https://www.google.com; " +
     "form-action 'self'; frame-ancestors 'none'; base-uri 'self'; object-src 'none'");
   if (process.env.NODE_ENV === 'production') {
     res.setHeader('Strict-Transport-Security', 'max-age=15552000; includeSubDomains');
@@ -152,17 +159,19 @@ app.use(express.static(path.join(__dirname, 'public')));
 const dbReady = Promise.resolve(db.init()).catch((err) => console.error('[gweno] storage init failed:', err && err.message));
 const ON_VERCEL = !!process.env.VERCEL;
 
-// Serverless request guard: wait for storage, and for API calls reload fresh state
-// and flush pending writes before the response is sent (so nothing is lost on freeze).
+// Serverless request guard: wait for storage to be ready, and for API calls flush
+// any pending write before the response is sent (so nothing is lost when the
+// function freezes after responding). We deliberately do NOT re-read the whole DB
+// per request — that added a round-trip to every call (slow) and could clobber a
+// just-created session before its write landed (the sign-in bounce). State is
+// loaded once at cold start and mutated in place, which is fast and consistent for
+// a warm instance.
 app.use(async (req, res, next) => {
   try { await dbReady; } catch (_) {}
-  if (ON_VERCEL && req.path.startsWith('/api')) {
-    if (db.reload) { try { await db.reload(); } catch (_) {} }
-    if (db.flush) {
-      for (const name of ['json', 'redirect']) {
-        const orig = res[name].bind(res);
-        res[name] = (...args) => { db.flush().finally(() => orig(...args)); return res; };
-      }
+  if (ON_VERCEL && req.path.startsWith('/api') && db.flush) {
+    for (const name of ['json', 'redirect']) {
+      const orig = res[name].bind(res);
+      res[name] = (...args) => { db.flush().finally(() => orig(...args)); return res; };
     }
   }
   next();
