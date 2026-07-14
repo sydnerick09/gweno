@@ -265,6 +265,9 @@ function ensureUserShape(u) {
   if (u.usernameChangedAt === undefined) u.usernameChangedAt = null;
   if (!u[SURVEY_DONE]) u[SURVEY_DONE] = [];
   if (!u.premium) u.premium = { active: false, since: null, expires: null };
+  if (!u.tour) u.tour = { done: false, skips: 0, lastSkipAt: null }; // first-login guided tour
+  if (u.suspended === undefined) u.suspended = false; // admin: blocks sign-in
+  if (u.held === undefined) u.held = false;           // admin: pauses withdrawals
   return u;
 }
 
@@ -305,6 +308,7 @@ function publicUser(u) {
     notifications: u.notifications, payment: { method: u.payment.method || '', details: u.payment.details || '' },
     avatar: u.avatar || null, isAdmin: !!u.isAdmin, usernameChangedAt: u.usernameChangedAt || null,
     premium: { active: isPremium(u), expires: u.premium.expires || null },
+    tour: u.tour || { done: false, skips: 0, lastSkipAt: null },
   };
 }
 
@@ -417,6 +421,7 @@ function requireAuth(req, res, next) {
   if (!sess) return res.status(401).json({ error: 'Your session has expired. Please sign in again.' });
   req.user = db.get().users.find((u) => u.id === sess.userId) || null;
   if (!req.user) return res.status(401).json({ error: 'Account not found.' });
+  if (req.user.suspended) return res.status(403).json({ error: 'Your account has been suspended. Please contact support.' });
   ensureUserShape(req.user);
   req.session = sess;
   next();
@@ -588,6 +593,9 @@ app.post('/api/login', async (req, res) => {
       return res.status(401).json({ error: 'Invalid email or password.' });
     }
 
+    // Suspended accounts can't sign in (admin can suspend/unsuspend from the admin panel).
+    if (user.suspended) return res.status(403).json({ error: 'Your account has been suspended. Please contact support.' });
+
     // Success: clear the failed-attempt record and start a fresh, expiring session.
     delete s.attempts[email];
     db.save();
@@ -659,6 +667,7 @@ async function handleOAuthCallback(req, res) {
     } else if (!user.providers.includes(provider)) {
       user.providers.push(provider); // #2 link, don't duplicate
     }
+    if (user.suspended) return res.redirect('/login.html?error=suspended');
     db.save();
     createSession(res, user.id);
     res.redirect(user.onboarded ? '/app.html#/dashboard' : '/onboarding.html');
@@ -1005,11 +1014,113 @@ app.get('/api/admin/users', requireAdminSession, (req, res) => {
     balance: round2(u.balance || 0), usd: round2(u.usd || 0), onboarded: !!u.onboarded,
     referralCount: u.referralCount || 0, createdAt: u.createdAt,
     providers: u.providers || [],                       // how they joined (email / google / facebook / apple)
+    suspended: !!u.suspended,
+    held: !!u.held,
+    hasPassword: !!u.passwordHash,                       // whether a password is set (never the value)
     gender: (u.profile && u.profile.gender) || '',
     country: (u.profile && u.profile.country) || '',
     phone: (u.profile && u.profile.phone) || '',
   })).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   res.json({ users });
+});
+
+// Suspend / unsuspend a member (blocks sign-in and drops their active sessions).
+app.post('/api/admin/users/:id/suspend', requireAdminSession, (req, res) => {
+  const u = userById(req.params.id);
+  if (!u) return res.status(404).json({ error: 'User not found.' });
+  u.suspended = !u.suspended;
+  if (u.suspended) { const s = db.get(); s.sessions = (s.sessions || []).filter((x) => x.userId !== u.id); }
+  db.save();
+  res.json({ ok: true, suspended: !!u.suspended });
+});
+
+// Put an account on hold / release it. On hold: sign-in still works but withdrawals
+// are paused (see the redeem endpoint).
+app.post('/api/admin/users/:id/hold', requireAdminSession, (req, res) => {
+  const u = userById(req.params.id);
+  if (!u) return res.status(404).json({ error: 'User not found.' });
+  ensureUserShape(u);
+  u.held = !u.held;
+  db.save();
+  res.json({ ok: true, held: !!u.held });
+});
+
+// Set a member's balance directly (KES wallet and/or USD wallet).
+app.post('/api/admin/users/:id/balance', requireAdminSession, (req, res) => {
+  const u = userById(req.params.id);
+  if (!u) return res.status(404).json({ error: 'User not found.' });
+  ensureUserShape(u);
+  if (req.body.balance !== undefined) {
+    const kesV = Number(req.body.balance);
+    if (!Number.isFinite(kesV) || kesV < 0) return res.status(400).json({ error: 'Enter a valid KES amount.' });
+    u.balance = round2(kesV);
+  }
+  if (req.body.usd !== undefined) {
+    const usdV = Number(req.body.usd);
+    if (!Number.isFinite(usdV) || usdV < 0) return res.status(400).json({ error: 'Enter a valid USD amount.' });
+    u.usd = round2(usdV);
+  }
+  db.save();
+  res.json({ ok: true, balance: round2(u.balance), usd: round2(u.usd) });
+});
+
+// Change a member's email address.
+app.post('/api/admin/users/:id/email', requireAdminSession, (req, res) => {
+  const u = userById(req.params.id);
+  if (!u) return res.status(404).json({ error: 'User not found.' });
+  const newEmail = normEmail(req.body.email);
+  if (!isEmail(newEmail)) return res.status(400).json({ error: 'Enter a valid email address.' });
+  if (newEmail !== u.email && findUserByEmail(newEmail)) return res.status(409).json({ error: 'That email is already in use.' });
+  u.email = newEmail;
+  db.save();
+  res.json({ ok: true, email: u.email });
+});
+
+// Set a NEW password for a member. Passwords are stored only as a one-way bcrypt
+// hash and can never be read back — the admin can reset it, not view it.
+app.post('/api/admin/users/:id/password', requireAdminSession, async (req, res) => {
+  const u = userById(req.params.id);
+  if (!u) return res.status(404).json({ error: 'User not found.' });
+  const pw = req.body.password;
+  const pe = passwordProblem(pw);
+  if (pe) return res.status(400).json({ error: pe });
+  u.passwordHash = await bcrypt.hash(pw, BCRYPT_ROUNDS);
+  if (!u.providers) u.providers = [];
+  if (!u.providers.includes('email')) u.providers.push('email');
+  // Sign the user out everywhere so the new password takes effect.
+  const s = db.get();
+  s.sessions = (s.sessions || []).filter((x) => x.userId !== u.id);
+  db.save();
+  res.json({ ok: true, message: 'Password updated.' });
+});
+
+// Permanently delete a member and all their data.
+app.delete('/api/admin/users/:id', requireAdminSession, (req, res) => {
+  const s = db.get();
+  const u = userById(req.params.id);
+  if (!u) return res.status(404).json({ error: 'User not found.' });
+  s.users = (s.users || []).filter((x) => x.id !== u.id);
+  s.sessions = (s.sessions || []).filter((x) => x.userId !== u.id);
+  s.submissions = (s.submissions || []).filter((x) => x.userId !== u.id);
+  s.investments = (s.investments || []).filter((x) => x.userId !== u.id);
+  s.redemptions = (s.redemptions || []).filter((x) => x.userId !== u.id);
+  s.deposits = (s.deposits || []).filter((x) => x.userId !== u.id);
+  db.save();
+  res.json({ ok: true });
+});
+
+// Download a sanitised snapshot of the data (no password hashes or session tokens).
+app.get('/api/admin/export', requireAdminSession, (req, res) => {
+  const s = db.get();
+  const out = {
+    exportedAt: new Date().toISOString(),
+    users: (s.users || []).map(({ passwordHash, ...rest }) => rest),
+    submissions: s.submissions || [], redemptions: s.redemptions || [], deposits: s.deposits || [],
+    investments: s.investments || [], investmentRates: s.investmentRates || {}, support: s.support || [],
+  };
+  res.setHeader('Content-Disposition', `attachment; filename="gweno-export-${Date.now()}.json"`);
+  res.setHeader('Content-Type', 'application/json');
+  res.send(JSON.stringify(out, null, 2));
 });
 
 app.get('/api/admin/deposits', requireAdminSession, (req, res) => {
@@ -1099,6 +1210,28 @@ app.post('/api/referral/regenerate', requireAuth, (req, res) => {
 });
 
 // =============================================================================
+//  ONBOARDING TOUR  —  remember whether to show the first-login walkthrough.
+//  'done'  = completed or dismissed for good.
+//  'skip'  = skipped; re-prompt schedule is 5 min -> 24 h -> never (3rd skip = done).
+// =============================================================================
+app.post('/api/tour', requireAuth, (req, res) => {
+  ensureUserShape(req.user);
+  const action = String(req.body.action || '').trim();
+  const t = req.user.tour;
+  if (action === 'done') {
+    t.done = true;
+  } else if (action === 'skip') {
+    t.skips = (t.skips || 0) + 1;
+    t.lastSkipAt = new Date().toISOString();
+    if (t.skips >= 3) t.done = true; // skipped 3 times -> stop showing
+  } else {
+    return res.status(400).json({ error: 'Unknown tour action.' });
+  }
+  db.save();
+  res.json({ ok: true, tour: t });
+});
+
+// =============================================================================
 //  REDEEM  —  withdraw to M-Pesa, PayPal or a bank account
 // =============================================================================
 // The wallet is one balance held in two currencies (KES + USD). These helpers
@@ -1143,6 +1276,7 @@ app.get('/api/redeem', requireAuth, (req, res) => {
 // request is left "Requested" for an admin to verify and release from the admin panel.
 // Rejecting a withdrawal refunds the held balance.
 app.post('/api/redeem', requireAuth, (req, res) => {
+  if (req.user.held) return res.status(403).json({ error: 'Your account is on hold, so withdrawals are paused. Please contact support.' });
   const method = String(req.body.method || '').trim();
   const rawAmount = round2(req.body.amount);
   const destination = String(req.body.destination || '').trim();

@@ -70,7 +70,14 @@ function renderShell() {
   }));
 }
 const content = () => document.getElementById('content');
-const loading = () => { content().innerHTML = `<p class="page-sub">Loading…</p>`; };
+// Skeleton loader (shimmer) instead of a "Loading…" line — matches the members area.
+const loading = () => { content().innerHTML = `
+  <div class="sk sk-line" style="width:32%;height:15px;margin-bottom:18px"></div>
+  <div class="grid g4"><div class="sk sk-stat"></div><div class="sk sk-stat"></div><div class="sk sk-stat"></div><div class="sk sk-stat"></div></div>
+  <div class="panel">
+    <div class="sk sk-line" style="width:26%;margin-bottom:14px"></div>
+    <div class="sk sk-row"></div><div class="sk sk-row"></div><div class="sk sk-row"></div><div class="sk sk-row"></div><div class="sk sk-row"></div>
+  </div>`; };
 
 function route() {
   ({ overview: tOverview, submissions: tSubmissions, users: tUsers, investments: tInvestments, deposits: tDeposits, withdrawals: tWithdrawals, support: tSupport }[TAB] || tOverview)();
@@ -126,21 +133,62 @@ async function tUsers() {
   const { data } = await apiGet('/api/admin/users');
   const users = data.users || [];
   const via = (ps) => (ps && ps.length ? ps.map((p) => (p === 'email' ? 'Email' : p.charAt(0).toUpperCase() + p.slice(1))).join(', ') : 'Email');
+  const badges = (u) => `${u.isAdmin ? '<span class="st approved">admin</span> ' : ''}${u.suspended ? '<span class="st rejected">suspended</span> ' : ''}${u.held ? '<span class="st pending">on hold</span> ' : ''}${!u.suspended && !u.held ? '<span class="st approved">active</span>' : ''}`;
+  const act = (a, u, label, extra) => `<button class="btn btn-ghost auto uact" data-a="${a}" data-id="${u.id}" data-email="${esc(u.email)}" data-kes="${u.balance}" data-usd="${u.usd}"${extra || ''}>${label}</button>`;
   content().innerHTML = `
-    <p class="page-sub">${users.length} registered user(s).</p>
+    <p class="page-sub">${users.length} registered user(s). <b>Suspend</b> blocks sign-in · <b>Hold</b> pauses withdrawals · <b>Delete</b> removes the account. <a href="/api/admin/export" download>Download data export</a>.</p>
+    <p class="pill-note">🔒 Passwords are encrypted one-way and can't be shown — for a member who asks, use <b>Password</b> to set them a new one.</p>
     <div class="panel"><table class="table">
-      <thead><tr><th>Name</th><th>Email</th><th>Signed up via</th><th>Country</th><th class="num">KES</th><th class="num">USD</th><th class="num">Refs</th><th>Joined</th><th>Role</th></tr></thead>
+      <thead><tr><th>Name</th><th>Email</th><th>Via</th><th class="num">KES</th><th class="num">USD</th><th>Status</th><th>Actions</th></tr></thead>
       <tbody>${users.map((u) => `<tr>
         <td>${esc(u.name || u.username || '—')}<br><span class="p-sub">@${esc(u.username || '')}</span></td>
         <td class="p-sub">${esc(u.email)}</td>
-        <td><span class="st ${u.providers && u.providers.some((p) => p !== 'email') ? 'approved' : 'pending'}">${esc(via(u.providers))}</span></td>
-        <td class="p-sub">${esc(u.country || '—')}</td>
+        <td class="p-sub">${esc(via(u.providers))}</td>
         <td class="num">${kes(u.balance)}</td><td class="num">${usd(u.usd)}</td>
-        <td class="num">${u.referralCount}</td>
-        <td class="p-sub">${new Date(u.createdAt).toLocaleDateString()}</td>
-        <td>${u.isAdmin ? '<span class="st approved">admin</span>' : '<span class="st pending">member</span>'}</td>
-      </tr>`).join('')}</tbody>
+        <td>${badges(u)}</td>
+        <td><div style="display:flex;gap:6px;flex-wrap:wrap">
+          ${act('suspend', u, u.suspended ? 'Unsuspend' : 'Suspend')}
+          ${act('hold', u, u.held ? 'Release hold' : 'Hold')}
+          ${act('balance', u, 'Balance')}
+          ${act('email', u, 'Email')}
+          ${act('password', u, 'Password')}
+          ${act('delete', u, 'Delete', ' style="border-color:var(--danger);color:#c0143c"')}
+        </div></td>
+      </tr>`).join('') || `<tr><td colspan="7" class="p-sub">No users yet.</td></tr>`}</tbody>
     </table></div>`;
+  content().querySelectorAll('.uact').forEach((b) => b.addEventListener('click', () => userAction(b.dataset)));
+}
+
+async function userAction(ds) {
+  const id = ds.id, base = '/api/admin/users/' + id;
+  if (ds.a === 'suspend') {
+    const { ok, data } = await api(base + '/suspend', {});
+    if (ok) { toast(data.suspended ? 'Account suspended' : 'Account unsuspended'); tUsers(); } else toast(data.error || 'Failed', 'error');
+  } else if (ds.a === 'hold') {
+    const { ok, data } = await api(base + '/hold', {});
+    if (ok) { toast(data.held ? 'Account on hold' : 'Hold released'); tUsers(); } else toast(data.error || 'Failed', 'error');
+  } else if (ds.a === 'balance') {
+    const kesV = prompt('New KES balance for ' + ds.email + ':', ds.kes);
+    if (kesV === null) return;
+    const usdV = prompt('New USD balance for ' + ds.email + ':', ds.usd);
+    if (usdV === null) return;
+    const { ok, data } = await api(base + '/balance', { balance: Number(kesV), usd: Number(usdV) });
+    if (ok) { toast('Balance updated'); tUsers(); } else toast(data.error || 'Failed', 'error');
+  } else if (ds.a === 'email') {
+    const email = prompt('New email address for this account:', ds.email);
+    if (!email) return;
+    const { ok, data } = await api(base + '/email', { email });
+    if (ok) { toast('Email updated'); tUsers(); } else toast(data.error || 'Failed', 'error');
+  } else if (ds.a === 'password') {
+    const pw = prompt('Set a NEW password (8+ chars incl. a letter & a number). The member will be signed out everywhere:');
+    if (!pw) return;
+    const { ok, data } = await api(base + '/password', { password: pw });
+    if (ok) toast('Password updated'); else toast(data.error || 'Failed', 'error');
+  } else if (ds.a === 'delete') {
+    if (!confirm('Permanently delete ' + ds.email + ' and all their data? This cannot be undone.')) return;
+    const r = await fetch(base, { method: 'DELETE' });
+    if (r.ok) { toast('Account deleted'); tUsers(); } else { let e = {}; try { e = await r.json(); } catch (_) {} toast(e.error || 'Failed', 'error'); }
+  }
 }
 
 async function tDeposits() {
