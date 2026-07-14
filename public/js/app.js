@@ -205,7 +205,28 @@ function router() {
   window.scrollTo(0, 0);
 }
 
-const loading = () => { view().innerHTML = `<p class="page-sub">Loading…</p>`; };
+// YouTube-style skeleton: structural shimmer placeholders shown instantly so page
+// switches feel immediate while the real data loads in.
+function skeletonView() {
+  const line = (w) => `<div class="sk sk-line" style="width:${w}"></div>`;
+  return `
+    <div class="sk sk-line" style="width:38%;height:16px;margin-bottom:18px"></div>
+    <div class="grid g4">
+      <div class="sk sk-stat"></div><div class="sk sk-stat"></div>
+      <div class="sk sk-stat"></div><div class="sk sk-stat"></div>
+    </div>
+    <div class="panel">
+      ${line('30%')}${line('55%')}
+      <div class="tiles" style="margin-top:14px">
+        <div class="sk sk-tile"></div><div class="sk sk-tile"></div><div class="sk sk-tile"></div>
+      </div>
+    </div>
+    <div class="panel">
+      ${line('26%')}
+      <div class="sk sk-row"></div><div class="sk sk-row"></div><div class="sk sk-row"></div>
+    </div>`;
+}
+const loading = () => { view().innerHTML = skeletonView(); };
 
 // =====================================================================
 //  DASHBOARD

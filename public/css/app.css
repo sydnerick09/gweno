@@ -35,6 +35,18 @@
 .view { padding: 24px; max-width: 1080px; width: 100%; }
 .page-sub { color: var(--muted); margin: -4px 0 22px; }
 
+/* Skeleton loaders (YouTube-style shimmer) shown instantly while data loads. */
+@keyframes sk-shimmer { 0% { background-position: 200% 0; } 100% { background-position: -200% 0; } }
+.sk { background: #e9eef5; border-radius: 10px; background-image: linear-gradient(90deg, #e9eef5 0%, #f4f7fb 20%, #e9eef5 40%); background-size: 200% 100%; animation: sk-shimmer 1.25s ease-in-out infinite; }
+@media (prefers-reduced-motion: reduce) { .sk { animation: none; } }
+.sk-stat { height: 92px; border-radius: 14px; }
+.sk-line { height: 13px; margin: 9px 0; }
+.sk-tile { height: 118px; border-radius: 14px; }
+.sk-row { height: 46px; margin: 10px 0; }
+.sk-navitem { height: 40px; margin: 6px 8px; border-radius: 10px; }
+.sk-chip { width: 78px; height: 30px; border-radius: 999px; }
+.sk-avatar { width: 36px; height: 36px; border-radius: 50%; }
+
 /* Panels & grids */
 .panel { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 22px; margin-bottom: 18px; box-shadow: 0 1px 3px rgba(0,0,0,.05); }
 .panel h3 { margin: 0 0 4px; font-size: 17px; }
