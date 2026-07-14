@@ -125,11 +125,21 @@ async function tUsers() {
   loading();
   const { data } = await apiGet('/api/admin/users');
   const users = data.users || [];
+  const via = (ps) => (ps && ps.length ? ps.map((p) => (p === 'email' ? 'Email' : p.charAt(0).toUpperCase() + p.slice(1))).join(', ') : 'Email');
   content().innerHTML = `
     <p class="page-sub">${users.length} registered user(s).</p>
     <div class="panel"><table class="table">
-      <thead><tr><th>Username</th><th>Email</th><th class="num">KES</th><th class="num">USD</th><th class="num">Refs</th><th>Joined</th><th>Role</th></tr></thead>
-      <tbody>${users.map((u) => `<tr><td>${esc(u.username || '—')}</td><td class="p-sub">${esc(u.email)}</td><td class="num">${kes(u.balance)}</td><td class="num">${usd(u.usd)}</td><td class="num">${u.referralCount}</td><td class="p-sub">${new Date(u.createdAt).toLocaleDateString()}</td><td>${u.isAdmin ? '<span class="st approved">admin</span>' : '<span class="st pending">member</span>'}</td></tr>`).join('')}</tbody>
+      <thead><tr><th>Name</th><th>Email</th><th>Signed up via</th><th>Country</th><th class="num">KES</th><th class="num">USD</th><th class="num">Refs</th><th>Joined</th><th>Role</th></tr></thead>
+      <tbody>${users.map((u) => `<tr>
+        <td>${esc(u.name || u.username || '—')}<br><span class="p-sub">@${esc(u.username || '')}</span></td>
+        <td class="p-sub">${esc(u.email)}</td>
+        <td><span class="st ${u.providers && u.providers.some((p) => p !== 'email') ? 'approved' : 'pending'}">${esc(via(u.providers))}</span></td>
+        <td class="p-sub">${esc(u.country || '—')}</td>
+        <td class="num">${kes(u.balance)}</td><td class="num">${usd(u.usd)}</td>
+        <td class="num">${u.referralCount}</td>
+        <td class="p-sub">${new Date(u.createdAt).toLocaleDateString()}</td>
+        <td>${u.isAdmin ? '<span class="st approved">admin</span>' : '<span class="st pending">member</span>'}</td>
+      </tr>`).join('')}</tbody>
     </table></div>`;
 }
 

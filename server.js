@@ -159,19 +159,21 @@ app.use(express.static(path.join(__dirname, 'public')));
 const dbReady = Promise.resolve(db.init()).catch((err) => console.error('[gweno] storage init failed:', err && err.message));
 const ON_VERCEL = !!process.env.VERCEL;
 
-// Serverless request guard: wait for storage to be ready, and for API calls flush
-// any pending write before the response is sent (so nothing is lost when the
-// function freezes after responding). We deliberately do NOT re-read the whole DB
-// per request — that added a round-trip to every call (slow) and could clobber a
-// just-created session before its write landed (the sign-in bounce). State is
-// loaded once at cold start and mutated in place, which is fast and consistent for
-// a warm instance.
+// Serverless request guard. Each Vercel invocation may be a different instance, so
+// for API calls we (1) reload fresh state from Postgres so a session created on
+// another instance is visible here (fixes the sign-in bounce), and (2) flush the
+// pending write before responding so nothing is lost when the function freezes.
+// Writes snapshot state at save-time (see db.persist), so this reload can't clobber
+// a just-created session. With Supabase's transaction pooler the reload is cheap.
 app.use(async (req, res, next) => {
   try { await dbReady; } catch (_) {}
-  if (ON_VERCEL && req.path.startsWith('/api') && db.flush) {
-    for (const name of ['json', 'redirect']) {
-      const orig = res[name].bind(res);
-      res[name] = (...args) => { db.flush().finally(() => orig(...args)); return res; };
+  if (ON_VERCEL && req.path.startsWith('/api')) {
+    if (db.reload) { try { await db.reload(); } catch (_) {} }
+    if (db.flush) {
+      for (const name of ['json', 'redirect']) {
+        const orig = res[name].bind(res);
+        res[name] = (...args) => { db.flush().finally(() => orig(...args)); return res; };
+      }
     }
   }
   next();
@@ -672,7 +674,7 @@ app.post('/api/oauth/apple/callback', handleOAuthCallback); // Apple posts (form
 // =============================================================================
 //  FORGOT PASSWORD  -> issue reset token           — guards #3 (reset abuse)
 // =============================================================================
-app.post('/api/forgot-password', (req, res) => {
+app.post('/api/forgot-password', async (req, res) => {
   const email = normEmail(req.body.email);
   const s = db.get();
 
@@ -703,7 +705,9 @@ app.post('/api/forgot-password', (req, res) => {
     });
     const link = `${baseUrl(req)}/reset.html?token=${raw}`;
     if (mailer.configured()) {
-      mailer.sendPasswordReset(user.email, link).catch((e) => console.error('[gweno] reset email failed:', e.message));
+      // Await on serverless so the email actually sends before the function freezes.
+      try { await mailer.sendPasswordReset(user.email, link); }
+      catch (e) { console.error('[gweno] reset email failed:', e.message); }
     } else {
       // No SMTP yet: log server-side only (never exposed to the page).
       console.log(`\n[gweno] SMTP not configured — reset link for ${email}:\n  ${link}\n`);
@@ -1000,6 +1004,10 @@ app.get('/api/admin/users', requireAdminSession, (req, res) => {
     id: u.id, name: u.name, username: u.username, email: u.email, isAdmin: !!u.isAdmin,
     balance: round2(u.balance || 0), usd: round2(u.usd || 0), onboarded: !!u.onboarded,
     referralCount: u.referralCount || 0, createdAt: u.createdAt,
+    providers: u.providers || [],                       // how they joined (email / google / facebook / apple)
+    gender: (u.profile && u.profile.gender) || '',
+    country: (u.profile && u.profile.country) || '',
+    phone: (u.profile && u.profile.phone) || '',
   })).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   res.json({ users });
 });
@@ -1508,14 +1516,16 @@ app.post('/api/settings/avatar', requireAuth, (req, res) => {
 // =============================================================================
 //  SUPPORT  —  contact form (stored + emailed to the support inbox)
 // =============================================================================
-app.post('/api/support', requireAuth, (req, res) => {
+app.post('/api/support', requireAuth, async (req, res) => {
   const subject = String(req.body.subject || '').trim();
   const message = String(req.body.message || '').trim();
   if (!subject || !message) return res.status(400).json({ error: 'Please enter a subject and a message.' });
   db.get().support.push({ id: rid(8), userId: req.user.id, email: req.user.email, subject, message, createdAt: new Date().toISOString() });
   db.save();
   if (mailer.configured()) {
-    mailer.sendSupport({ fromEmail: req.user.email, subject, message }).catch((e) => console.error('[gweno] support email failed:', e.message));
+    // Await on serverless so the email sends before the function freezes.
+    try { await mailer.sendSupport({ fromEmail: req.user.email, subject, message }); }
+    catch (e) { console.error('[gweno] support email failed:', e.message); }
   }
   res.json({ ok: true, message: 'Thanks — your message has been received. We will reply by email.' });
 });
