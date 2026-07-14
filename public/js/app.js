@@ -2,6 +2,7 @@
 
 let ME = null;
 let FX = 129; // KES per USD; overwritten from /api/me
+let PAGE_POLL = null; // stop() for the current page's smart poller (see data.js)
 
 // ---------- tiny helpers ----------
 const usd = (n) => '$' + (Number(n) || 0).toFixed(2);
@@ -71,7 +72,10 @@ function renderMethodCards(root, methods, onSelect) {
   return () => current;
 }
 
+// GETs go through the data layer so concurrent identical requests are deduplicated
+// (pattern 1). Falls back to a plain fetch if data.js hasn't loaded.
 async function apiGet(path) {
+  if (window.Data && Data.get) return Data.get(path);
   const r = await fetch(path);
   let d = {}; try { d = await r.json(); } catch (_) {}
   return { ok: r.ok, status: r.status, data: d };
@@ -117,6 +121,111 @@ async function boot() {
   renderShell();
   window.addEventListener('hashchange', router);
   router();
+  setTimeout(() => { try { maybeStartTour(); } catch (_) {} }, 900); // first-login guided tour
+}
+
+// ===================== FIRST-LOGIN GUIDED TOUR =====================
+// Bubbles that point at each part of the app so a new member knows where things are.
+// Shows once; if skipped, re-prompts after 5 min, then 24 h, then never (see /api/tour).
+const TOUR_STEPS = [
+  { title: 'Welcome to Gweno! 👋', body: "Here's a 30-second tour showing where everything is. You can skip anytime." },
+  { sel: '#sidebar', title: 'Your menu', body: 'Everything lives in this menu — Dashboard, Earn, Investments, Withdraw, Settings and more. On a phone, tap the ☰ button to open it.' },
+  { sel: '#topRight', title: 'Your balance', body: 'Your money shows here in USD and KES. On the Dashboard you can press and hold the balance to switch between US Dollars and Kenya Shillings.' },
+  { sel: '[data-route="earn"]', title: 'Earn money', body: 'Do simple tasks and surveys, and refer friends, to earn money straight into your wallet.' },
+  { sel: '[data-route="invest"]', title: 'Invest & grow', body: 'Put money into an investment plan (Starter, Growth or Premium) and earn fixed interest until it matures.' },
+  { sel: '[data-route="redeem"]', title: 'Deposit & withdraw', body: 'Top up your wallet and cash out here — M-Pesa, card, PayPal or bank. There is a small minimum to withdraw.' },
+  { sel: '[data-route="settings"]', title: 'Your profile & name', body: 'Change your name, password, payout details and picture in Settings.' },
+  { sel: '[data-route="support"]', title: 'Need help?', body: 'Find guides and contact our support team here any time.' },
+  { title: "You're all set! 🎉", body: 'That\'s the whole app. Explore Gweno and start earning — you can reach everything from the menu.' },
+];
+let TOUR_I = 0;
+let TOUR_TIMER = null;
+const tourActive = () => !!document.getElementById('tourOverlay');
+const isMobile = () => window.innerWidth <= 900;
+
+function maybeStartTour(force) {
+  if (!ME || tourActive()) return;
+  const t = ME.tour || { done: false, skips: 0, lastSkipAt: null };
+  if (!force) {
+    if (t.done) return;
+    const skips = t.skips || 0;
+    if (skips >= 3) return;
+    if (skips >= 1) {
+      const since = t.lastSkipAt ? Date.now() - new Date(t.lastSkipAt).getTime() : Infinity;
+      const wait = skips === 1 ? 5 * 60 * 1000 : 24 * 60 * 60 * 1000;
+      if (since < wait) { if (wait - since <= 60 * 60 * 1000) scheduleReprompt(wait - since); return; }
+    }
+  }
+  startTour();
+}
+function scheduleReprompt(ms) {
+  if (TOUR_TIMER) clearTimeout(TOUR_TIMER);
+  TOUR_TIMER = setTimeout(() => maybeStartTour(), Math.max(1000, ms));
+}
+function startTour() {
+  TOUR_I = 0;
+  const sb = document.getElementById('sidebar'); if (sb) sb.classList.add('open'); // reveal nav on mobile
+  const ov = document.createElement('div');
+  ov.id = 'tourOverlay';
+  ov.className = 'tour-overlay';
+  ov.innerHTML = `<div class="tour-spot" id="tourSpot"></div><div class="tour-bubble" id="tourBubble"></div>`;
+  document.body.appendChild(ov);
+  window.addEventListener('resize', renderTourStep);
+  renderTourStep();
+}
+function renderTourStep() {
+  const ov = document.getElementById('tourOverlay'); if (!ov) return;
+  const step = TOUR_STEPS[TOUR_I];
+  const spot = document.getElementById('tourSpot');
+  const bubble = document.getElementById('tourBubble');
+  const target = step.sel ? document.querySelector(step.sel) : null;
+  const last = TOUR_I === TOUR_STEPS.length - 1;
+  ov.classList.toggle('has-spot', !!target);
+  if (target) {
+    const r = target.getBoundingClientRect(); const pad = 6;
+    spot.style.display = 'block';
+    spot.style.top = (r.top - pad) + 'px'; spot.style.left = (r.left - pad) + 'px';
+    spot.style.width = (r.width + pad * 2) + 'px'; spot.style.height = (r.height + pad * 2) + 'px';
+  } else { spot.style.display = 'none'; }
+  bubble.innerHTML = `
+    <div class="tour-count">Step ${TOUR_I + 1} of ${TOUR_STEPS.length}</div>
+    <h4>${esc(step.title)}</h4>
+    <p>${esc(step.body)}</p>
+    <div class="tour-btns">
+      <button class="tour-skip" id="tourSkip">Skip</button>
+      <div>
+        ${TOUR_I > 0 ? '<button class="tour-back" id="tourBack">Back</button>' : ''}
+        <button class="btn btn-primary auto" id="tourNext">${last ? 'Finish' : 'Next'}</button>
+      </div>
+    </div>`;
+  positionBubble(bubble, target);
+  document.getElementById('tourSkip').onclick = () => endTour('skip');
+  document.getElementById('tourNext').onclick = () => { if (last) endTour('done'); else { TOUR_I += 1; renderTourStep(); } };
+  const back = document.getElementById('tourBack'); if (back) back.onclick = () => { TOUR_I -= 1; renderTourStep(); };
+}
+function positionBubble(bubble, target) {
+  bubble.style.visibility = 'hidden'; bubble.style.display = 'block';
+  const bw = bubble.offsetWidth, bh = bubble.offsetHeight, vw = window.innerWidth, vh = window.innerHeight;
+  let top, left;
+  if (!target) { top = (vh - bh) / 2; left = (vw - bw) / 2; }
+  else {
+    const r = target.getBoundingClientRect();
+    if (r.right + bw + 24 < vw) { left = r.right + 16; top = Math.min(Math.max(12, r.top), vh - bh - 12); }
+    else if (r.bottom + bh + 24 < vh) { top = r.bottom + 14; left = Math.min(Math.max(12, r.left), vw - bw - 12); }
+    else { top = Math.max(12, r.top - bh - 14); left = Math.min(Math.max(12, r.left), vw - bw - 12); }
+  }
+  bubble.style.top = Math.max(12, top) + 'px'; bubble.style.left = Math.max(12, left) + 'px';
+  bubble.style.visibility = 'visible';
+}
+async function endTour(action) {
+  const ov = document.getElementById('tourOverlay'); if (ov) ov.remove();
+  window.removeEventListener('resize', renderTourStep);
+  if (isMobile()) { const sb = document.getElementById('sidebar'); if (sb) sb.classList.remove('open'); }
+  try {
+    const { ok, data } = await api('/api/tour', { action });
+    if (ok && data.tour) ME.tour = data.tour;
+  } catch (_) {}
+  if (action === 'skip' && ME.tour && (ME.tour.skips || 0) === 1) scheduleReprompt(5 * 60 * 1000);
 }
 
 const NAV = [
@@ -191,6 +300,8 @@ function setActive(route) {
 
 // ---------- router ----------
 function router() {
+  // Stop any page-scoped smart poller before leaving the current page.
+  if (PAGE_POLL) { try { PAGE_POLL(); } catch (_) {} PAGE_POLL = null; }
   const hash = location.hash.replace(/^#\/?/, '') || 'dashboard';
   const key = (hash.split('/')[0] || 'dashboard').split('?')[0]; // ignore any ?query (e.g. #/invest?paid=INV…)
   document.getElementById('pageTitle').textContent = TITLES[key] || 'Gweno';
@@ -232,13 +343,10 @@ const loading = () => { view().innerHTML = skeletonView(); };
 //  DASHBOARD
 // =====================================================================
 async function pageDashboard() {
-  loading();
-  const [tasks, ref, surveys, activity] = await Promise.all([
-    apiGet('/api/tasks'), apiGet('/api/referral'), apiGet('/api/surveys'), apiGet('/api/public/activity'),
-  ]);
-  const t = tasks.data, r = ref.data;
-  const feed = activity.data.items || [];
-
+  // Streaming UI (pattern 3): paint the full structure immediately (with tiny
+  // shimmers), then fill each section the moment its own request resolves — no
+  // waiting on Promise.all before anything shows.
+  const skv = (w) => `<span class="sk sk-line" style="display:inline-block;width:${w};height:22px;vertical-align:middle"></span>`;
   view().innerHTML = `
     <p class="page-sub">Welcome back, <b>${esc(ME.username || ME.name)}</b>. Here's your activity.</p>
 
@@ -248,16 +356,16 @@ async function pageDashboard() {
         <div class="value" id="balValue"></div>
         <div class="p-sub" id="balAlt"></div>
       </div>
-      <div class="stat"><div class="label">Pending earnings</div><div class="value">${usd(t.pendingUSD)}</div></div>
-      <div class="stat"><div class="label">Tasks available</div><div class="value">${t.totalAvailable ?? '—'}</div></div>
-      <div class="stat"><div class="label">Money available</div><div class="value">${usd(t.moneyAvailableUSD)}</div></div>
+      <div class="stat"><div class="label">Pending earnings</div><div class="value" id="dPending">${skv('62px')}</div></div>
+      <div class="stat"><div class="label">Tasks available</div><div class="value" id="dTasksAvail">${skv('40px')}</div></div>
+      <div class="stat"><div class="label">Money available</div><div class="value" id="dMoneyAvail">${skv('62px')}</div></div>
     </div>
 
     <div class="panel" style="margin-top:18px">
       <h3>Quick start</h3>
       <p class="p-sub">Jump straight into earning.</p>
       <div class="tiles">
-        <a class="tile" href="#/tasks"><div class="ico">${ICON.tasks}</div><h4>Do tasks</h4><p>${t.totalAvailable ?? 0} tasks worth ${usd(t.moneyAvailableUSD)} available.</p><span class="tag">Start earning →</span></a>
+        <a class="tile" href="#/tasks"><div class="ico">${ICON.tasks}</div><h4>Do tasks</h4><p id="dQsTasks">Loading available tasks…</p><span class="tag">Start earning →</span></a>
         <a class="tile" href="#/earn"><div class="ico">${ICON.survey}</div><h4>Take surveys</h4><p>Share your opinion and earn in minutes.</p><span class="tag">View surveys →</span></a>
         <a class="tile" href="#/referral"><div class="ico">${ICON.gift}</div><h4>Refer & earn</h4><p>Earn 5 KES for every friend who joins.</p><span class="tag">Get your link →</span></a>
       </div>
@@ -267,34 +375,70 @@ async function pageDashboard() {
       <h3>Your referral link</h3>
       <p class="p-sub">Single-use — a new one is issued after each successful referral. Your friend must answer the welcome questions before your 5 KES is paid.</p>
       <div class="copybox">
-        <input id="refLink" class="" readonly value="${esc(r.link || '')}" />
+        <input id="refLink" readonly value="" placeholder="Loading your link…" />
         <button class="btn btn-primary auto" id="copyRef">Copy</button>
       </div>
-      <p class="p-sub" style="margin-top:12px">Referrals: <b>${r.count || 0}</b> · Earned: <b>${kes(r.earningsKES)}</b></p>
+      <p class="p-sub" style="margin-top:12px" id="dRefStats">Referrals: <b>—</b> · Earned: <b>—</b></p>
     </div>
 
     <div class="panel">
       <h3>Recent task completions</h3>
       <p class="p-sub">A live look at what members are earning.</p>
-      ${feed.length ? feed.map((f) => `
-        <div class="task-row">
-          <div class="t-ico">${esc((f.username || '?').slice(0, 2).toUpperCase())}</div>
-          <div class="t-main"><h4>${esc(f.username)}${f.country ? ` · ${esc(f.country)}` : ''}</h4><p>completed “${esc(f.task)}”</p></div>
-          <div class="t-reward">+${usd(f.reward)}</div>
-        </div>`).join('') : `<p class="p-sub">No completions yet — be the first to finish a task!</p>`}
+      <div id="dFeed"><div class="sk sk-row"></div><div class="sk sk-row"></div><div class="sk sk-row"></div></div>
     </div>`;
 
-  document.getElementById('copyRef').addEventListener('click', () => copyText(r.link));
-
-  // Single balance shown in USD; press-and-hold to convert to KES (and back).
+  // Balance card — driven by in-memory ME totals; press-and-hold switches currency.
   let showUsd = true;
-  const tot = totals();
   const renderBal = () => {
-    document.getElementById('balValue').textContent = showUsd ? usd(tot.usd) : kes(tot.kes);
+    const bv = document.getElementById('balValue'); if (!bv) return;
+    const tot = totals();
+    bv.textContent = showUsd ? usd(tot.usd) : kes(tot.kes);
     document.getElementById('balAlt').textContent = '≈ ' + (showUsd ? kes(tot.kes) : usd(tot.usd));
   };
   renderBal();
   attachLongPress(document.getElementById('balCard'), () => { showUsd = !showUsd; renderBal(); toast(showUsd ? 'Showing USD' : 'Showing KES'); });
+
+  // Section renderers (reused by SWR and the smart poller). Each is null-safe in
+  // case the user has already navigated away.
+  const renderTasks = (t) => {
+    if (!t) return;
+    const set = (id, v) => { const el = document.getElementById(id); if (el) el.textContent = v; };
+    set('dPending', usd(t.pendingUSD));
+    set('dTasksAvail', t.totalAvailable ?? '—');
+    set('dMoneyAvail', usd(t.moneyAvailableUSD));
+    set('dQsTasks', `${t.totalAvailable ?? 0} tasks worth ${usd(t.moneyAvailableUSD)} available.`);
+  };
+  const renderRef = (r) => {
+    if (!r) return;
+    const link = document.getElementById('refLink'); if (link) link.value = r.link || '';
+    const stats = document.getElementById('dRefStats'); if (stats) stats.innerHTML = `Referrals: <b>${r.count || 0}</b> · Earned: <b>${kes(r.earningsKES)}</b>`;
+    const copy = document.getElementById('copyRef'); if (copy) copy.onclick = () => copyText(r.link);
+  };
+  const renderFeed = (d) => {
+    const el = document.getElementById('dFeed'); if (!el || !d) return;
+    const feed = d.items || [];
+    el.innerHTML = feed.length ? feed.map((f) => `
+      <div class="task-row">
+        <div class="t-ico">${esc((f.username || '?').slice(0, 2).toUpperCase())}</div>
+        <div class="t-main"><h4>${esc(f.username)}${f.country ? ` · ${esc(f.country)}` : ''}</h4><p>completed “${esc(f.task)}”</p></div>
+        <div class="t-reward">+${usd(f.reward)}</div>
+      </div>`).join('') : `<p class="p-sub">No completions yet — be the first to finish a task!</p>`;
+  };
+
+  // Stale-while-revalidate (pattern 4): on repeat visits the cached values paint
+  // instantly, then each section revalidates in the background.
+  Data.swr('/api/tasks', (d) => renderTasks(d));
+  Data.swr('/api/referral', (d) => renderRef(d));
+  Data.swr('/api/public/activity', (d) => renderFeed(d));
+
+  // Smart polling (pattern 5): keep the live sections + balance fresh while the
+  // tab is visible; auto-pauses when the tab is hidden, resumes on focus.
+  PAGE_POLL = Data.poll(async () => {
+    const [tasks, feed] = await Promise.all([Data.get('/api/tasks'), Data.get('/api/public/activity')]);
+    if (tasks.ok) { Data.setCache('/api/tasks', tasks.data); renderTasks(tasks.data); }
+    if (feed.ok) { Data.setCache('/api/public/activity', feed.data); renderFeed(feed.data); }
+    await refreshMe(); renderBal();
+  }, 20000);
 }
 
 // =====================================================================
@@ -1311,8 +1455,25 @@ function setNotifications() {
     <button class="btn btn-primary" id="save" style="margin-top:16px">Save preferences</button>
   </div>`;
   document.getElementById('save').addEventListener('click', async () => {
-    const { ok, data } = await api('/api/settings/notifications', { newTasks: document.getElementById('newTasks').checked, account: document.getElementById('account').checked, promotions: document.getElementById('promotions').checked });
-    if (ok) { ME.notifications = data.notifications; toast(data.message); } else toast(data.error, 'error');
+    const next = {
+      newTasks: document.getElementById('newTasks').checked,
+      account: document.getElementById('account').checked,
+      promotions: document.getElementById('promotions').checked,
+    };
+    const applyToggles = (v) => {
+      ME.notifications = v;
+      ['newTasks', 'account', 'promotions'].forEach((k) => { const el = document.getElementById(k); if (el) el.checked = !!v[k]; });
+    };
+    // Optimistic update (pattern 2): keep the toggles as the user set them and save
+    // in the background; if the request fails, Data.optimistic rolls the UI back.
+    Data.setCache('me:notifications', ME.notifications || {});
+    try {
+      const res = await Data.optimistic('me:notifications', () => next, () => api('/api/settings/notifications', next), applyToggles);
+      ME.notifications = (res.data && res.data.notifications) || next;
+      toast((res.data && res.data.message) || 'Notification preferences saved.');
+    } catch (_) {
+      toast('Could not save preferences — changes reverted.', 'error');
+    }
   });
 }
 
