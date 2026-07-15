@@ -183,6 +183,26 @@
 /* Local-currency amount shown beside a USD figure */
 .loc { color: var(--muted); font-weight: 500; font-size: .86em; white-space: nowrap; }
 
+/* First-login guided tour (coach marks) */
+.tour-overlay { position: fixed; inset: 0; z-index: 200; background: rgba(15,23,42,.62); }
+.tour-overlay.has-spot { background: transparent; } /* the spotlight's box-shadow does the dimming */
+.tour-spot { position: fixed; border-radius: 10px; border: 2px solid var(--brand); box-shadow: 0 0 0 9999px rgba(15,23,42,.62); transition: top .2s, left .2s, width .2s, height .2s; pointer-events: none; }
+.tour-bubble { position: fixed; z-index: 201; width: min(330px, 92vw); background: var(--card); border: 1px solid var(--line); border-radius: 16px; padding: 16px 18px; box-shadow: 0 14px 44px rgba(0,0,0,.28); }
+.tour-bubble h4 { margin: 6px 0 6px; font-size: 17px; }
+.tour-bubble p { margin: 0 0 16px; color: var(--muted); font-size: 14px; line-height: 1.55; }
+.tour-count { font-size: 12px; color: var(--brand-2); font-weight: 700; letter-spacing: .3px; }
+.tour-btns { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.tour-btns > div { display: flex; gap: 8px; }
+.tour-btns .btn { padding: 8px 16px; }
+.tour-skip { background: transparent; border: none; color: var(--muted); cursor: pointer; font-size: 14px; padding: 8px 4px; }
+.tour-skip:hover { color: var(--text); }
+.tour-back { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 8px 14px; cursor: pointer; color: var(--text); font-size: 14px; }
+/* Arrow on the bubble pointing at the highlighted thing */
+.tour-bubble::before { content: ""; position: absolute; width: 0; height: 0; display: none; }
+.tour-bubble[data-arrow="left"]::before { display: block; left: -10px; top: 26px; border: 10px solid transparent; border-right-color: var(--card); }
+.tour-bubble[data-arrow="up"]::before   { display: block; top: -10px; left: 28px; border: 10px solid transparent; border-bottom-color: var(--card); }
+.tour-bubble[data-arrow="down"]::before { display: block; bottom: -10px; left: 28px; border: 10px solid transparent; border-top-color: var(--card); }
+
 /* Settings sub-nav (tabs) */
 .tabs { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 18px; }
 .tab { padding: 8px 14px; border-radius: 999px; border: 1px solid var(--line); background: var(--card); cursor: pointer; font-size: 14px; color: var(--text); }
@@ -223,4 +243,11 @@
   .g4 .stat .value { font-size: 20px; }
   .g4 .stat .label { font-size: 12px; }
   .chip { display: none; }
+}
+/* Admin panel on phones/tablets: wide data tables scroll sideways instead of being clipped. */
+.admin-body .view { padding: 16px; max-width: 100%; }
+@media (max-width: 1000px) {
+  .admin-body .panel { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+  .admin-body .table { min-width: 640px; }
+  .admin-body .tabs { overflow-x: auto; flex-wrap: nowrap; }
 }

@@ -141,7 +141,8 @@ async function tUsers() {
     <div class="panel"><table class="table">
       <thead><tr><th>Name</th><th>Email</th><th>Via</th><th class="num">KES</th><th class="num">USD</th><th>Status</th><th>Actions</th></tr></thead>
       <tbody>${users.map((u) => `<tr>
-        <td>${esc(u.name || u.username || '—')}<br><span class="p-sub">@${esc(u.username || '')}</span></td>
+        <td>${esc(u.name || u.username || '—')}<br><span class="p-sub">@${esc(u.username || '')}</span>
+          <div style="margin-top:6px">${act('delete', u, '🗑 Delete', ' style="border-color:var(--danger);color:#c0143c;padding:4px 10px;font-size:12px"')}</div></td>
         <td class="p-sub">${esc(u.email)}</td>
         <td class="p-sub">${esc(via(u.providers))}</td>
         <td class="num">${kes(u.balance)}</td><td class="num">${usd(u.usd)}</td>
@@ -152,7 +153,6 @@ async function tUsers() {
           ${act('balance', u, 'Balance')}
           ${act('email', u, 'Email')}
           ${act('password', u, 'Password')}
-          ${act('delete', u, 'Delete', ' style="border-color:var(--danger);color:#c0143c"')}
         </div></td>
       </tr>`).join('') || `<tr><td colspan="7" class="p-sub">No users yet.</td></tr>`}</tbody>
     </table></div>`;
@@ -278,8 +278,32 @@ async function tSupport() {
   const { data } = await apiGet('/api/admin/support');
   const t = data.tickets || [];
   content().innerHTML = `
-    <p class="page-sub">${t.length} support message(s).</p>
-    <div class="panel">${t.length ? t.map((x) => `<div style="padding:14px 0;border-bottom:1px solid var(--line)"><div style="display:flex;justify-content:space-between;gap:10px"><b>${esc(x.subject)}</b><span class="p-sub">${new Date(x.createdAt).toLocaleString()}</span></div><p class="p-sub" style="margin:4px 0">from ${esc(x.email)}</p><p style="margin:0">${esc(x.message)}</p></div>`).join('') : `<p class="p-sub">No support messages yet.</p>`}</div>`;
+    <p class="page-sub">${t.length} support message(s). Tap <b>Reply</b> to email the member back.${data.emailReady === false ? ' <span class="st pending">Email not set up — replies are saved but not sent.</span>' : ''}</p>
+    <div class="panel">${t.length ? t.map((x) => `
+      <div style="padding:14px 0;border-bottom:1px solid var(--line)">
+        <div style="display:flex;justify-content:space-between;gap:10px"><b>${esc(x.subject || '(no subject)')}</b><span class="p-sub">${new Date(x.createdAt).toLocaleString()}</span></div>
+        <p class="p-sub" style="margin:4px 0">from ${esc(x.email)}</p>
+        <p style="margin:0 0 8px">${esc(x.message)}</p>
+        ${(x.replies || []).map((r) => `<div style="margin:6px 0;padding:9px 12px;background:var(--green-pale);border:1px solid var(--line);border-radius:10px"><b>Your reply</b> <span class="p-sub">· ${new Date(r.at).toLocaleString()}</span><br>${esc(r.message)}</div>`).join('')}
+        <button class="btn btn-ghost auto reply-btn" data-id="${esc(x.id)}">↩ Reply</button>
+        <div class="reply-box" data-id="${esc(x.id)}" style="display:none;margin-top:8px">
+          <textarea class="reply-text" rows="3" style="width:100%;border:1px solid var(--line);border-radius:10px;padding:10px;font:inherit" placeholder="Type your reply to ${esc(x.email)}…"></textarea>
+          <button class="btn btn-primary auto reply-send" data-id="${esc(x.id)}" style="margin-top:6px">Send reply</button>
+        </div>
+      </div>`).join('') : `<p class="p-sub">No support messages yet.</p>`}</div>`;
+  content().querySelectorAll('.reply-btn').forEach((b) => b.addEventListener('click', () => {
+    const box = content().querySelector('.reply-box[data-id="' + b.dataset.id + '"]');
+    box.style.display = box.style.display === 'none' ? 'block' : 'none';
+    if (box.style.display === 'block') box.querySelector('.reply-text').focus();
+  }));
+  content().querySelectorAll('.reply-send').forEach((b) => b.addEventListener('click', async () => {
+    const box = content().querySelector('.reply-box[data-id="' + b.dataset.id + '"]');
+    const msg = box.querySelector('.reply-text').value.trim();
+    if (!msg) return toast('Type a reply first', 'error');
+    b.disabled = true;
+    const { ok, data: d } = await api('/api/admin/support/' + b.dataset.id + '/reply', { message: msg });
+    if (ok) { toast(d.message || 'Reply sent'); tSupport(); } else { b.disabled = false; toast(d.error || 'Failed', 'error'); }
+  }));
 }
 
 boot();

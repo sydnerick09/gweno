@@ -1179,7 +1179,29 @@ app.post('/api/admin/redemptions/:id/mark', requireAdminSession, async (req, res
 
 app.get('/api/admin/support', requireAdminSession, (req, res) => {
   const tickets = db.get().support.slice().sort((a, b) => b.createdAt.localeCompare(a.createdAt));
-  res.json({ tickets });
+  res.json({ tickets, emailReady: mailer.configured() });
+});
+
+// Reply to a support message — saves the reply and emails it to the member.
+app.post('/api/admin/support/:id/reply', requireAdminSession, async (req, res) => {
+  const ticket = db.get().support.find((t) => t.id === req.params.id);
+  if (!ticket) return res.status(404).json({ error: 'Support message not found.' });
+  const message = String(req.body.message || '').trim();
+  if (!message) return res.status(400).json({ error: 'Enter a reply message.' });
+  ticket.replies = ticket.replies || [];
+  ticket.replies.push({ message, at: new Date().toISOString() });
+  db.save();
+  if (!mailer.configured()) return res.json({ ok: true, emailed: false, message: 'Reply saved. (Email is not set up, so it was not sent — configure SMTP to email members.)' });
+  try {
+    await mailer.send({
+      to: ticket.email,
+      subject: `Re: ${ticket.subject || 'Your Gweno support message'}`,
+      text: `${message}\n\n— Gweno Support\n\n------\nIn reply to your message:\n"${ticket.message}"`,
+    });
+    res.json({ ok: true, emailed: true, message: `Reply emailed to ${ticket.email}.` });
+  } catch (err) {
+    res.status(502).json({ error: 'Reply saved, but the email failed: ' + (err.message || err) });
+  }
 });
 
 // =============================================================================

@@ -127,16 +127,18 @@ async function boot() {
 // ===================== FIRST-LOGIN GUIDED TOUR =====================
 // Bubbles that point at each part of the app so a new member knows where things are.
 // Shows once; if skipped, re-prompts after 5 min, then 24 h, then never (see /api/tour).
+// Each step opens the real page it describes (route) and points an arrow at the menu
+// item, so a new member sees exactly where each thing is and what that screen looks like.
 const TOUR_STEPS = [
-  { title: 'Welcome to Gweno! 👋', body: "Here's a 30-second tour showing where everything is. You can skip anytime." },
-  { sel: '#sidebar', title: 'Your menu', body: 'Everything lives in this menu — Dashboard, Earn, Investments, Withdraw, Settings and more. On a phone, tap the ☰ button to open it.' },
-  { sel: '#topRight', title: 'Your balance', body: 'Your money shows here in USD and KES. On the Dashboard you can press and hold the balance to switch between US Dollars and Kenya Shillings.' },
-  { sel: '[data-route="earn"]', title: 'Earn money', body: 'Do simple tasks and surveys, and refer friends, to earn money straight into your wallet.' },
-  { sel: '[data-route="invest"]', title: 'Invest & grow', body: 'Put money into an investment plan (Starter, Growth or Premium) and earn fixed interest until it matures.' },
-  { sel: '[data-route="redeem"]', title: 'Deposit & withdraw', body: 'Top up your wallet and cash out here — M-Pesa, card, PayPal or bank. There is a small minimum to withdraw.' },
-  { sel: '[data-route="settings"]', title: 'Your profile & name', body: 'Change your name, password, payout details and picture in Settings.' },
-  { sel: '[data-route="support"]', title: 'Need help?', body: 'Find guides and contact our support team here any time.' },
-  { title: "You're all set! 🎉", body: 'That\'s the whole app. Explore Gweno and start earning — you can reach everything from the menu.' },
+  { route: '#/dashboard', title: 'Welcome to Gweno! 👋', body: "Quick tour — I'll open each page for you so you know exactly where everything is. You can skip anytime." },
+  { route: '#/dashboard', sel: '#sidebar', title: 'This is your menu', body: 'Everything is in this menu. On a phone, tap the ☰ button at the top-left to open it. Let\'s walk through each page.' },
+  { route: '#/dashboard', sel: '#topRight', title: 'Your balance', body: 'Your money shows here in USD and KES. On the Dashboard, press and hold the balance to switch between US Dollars and Kenya Shillings.' },
+  { route: '#/tasks', sel: '[data-route="earn"]', title: 'Tasks — earn money', body: 'This is where you do tasks and surveys to earn money into your wallet. Tap "Earn" in the menu to get here.' },
+  { route: '#/invest', sel: '[data-route="invest"]', title: 'Investments — grow your money', body: 'This is Investments. Buy into a plan (Starter, Growth or Premium), invest by shares, and earn fixed interest until it matures.' },
+  { route: '#/redeem', sel: '[data-route="redeem"]', title: 'Redeem — deposit & withdraw', body: 'This is Redeem. Deposit (top up) your wallet, or withdraw (cash out) to M-Pesa, card, PayPal or bank. There\'s a small minimum to withdraw.' },
+  { route: '#/settings', sel: '[data-route="settings"]', title: 'Settings — your name & profile', body: 'This is Settings. Change your name, password, payout details and picture here.' },
+  { route: '#/support', sel: '[data-route="support"]', title: 'Support — get help', body: 'This is Support. Read guides and message our team any time you need help.' },
+  { route: '#/dashboard', title: "You're all set! 🎉", body: "That's the whole app. Explore Gweno and start earning — everything is reachable from the menu." },
 ];
 let TOUR_I = 0;
 let TOUR_TIMER = null;
@@ -176,6 +178,9 @@ function startTour() {
 function renderTourStep() {
   const ov = document.getElementById('tourOverlay'); if (!ov) return;
   const step = TOUR_STEPS[TOUR_I];
+  // Open the actual page this step is about, and keep the menu visible.
+  if (step.route && location.hash !== step.route) location.hash = step.route;
+  const sb = document.getElementById('sidebar'); if (sb) sb.classList.add('open');
   const spot = document.getElementById('tourSpot');
   const bubble = document.getElementById('tourBubble');
   const target = step.sel ? document.querySelector(step.sel) : null;
@@ -206,14 +211,15 @@ function renderTourStep() {
 function positionBubble(bubble, target) {
   bubble.style.visibility = 'hidden'; bubble.style.display = 'block';
   const bw = bubble.offsetWidth, bh = bubble.offsetHeight, vw = window.innerWidth, vh = window.innerHeight;
-  let top, left;
+  let top, left, side = 'center';
   if (!target) { top = (vh - bh) / 2; left = (vw - bw) / 2; }
   else {
     const r = target.getBoundingClientRect();
-    if (r.right + bw + 24 < vw) { left = r.right + 16; top = Math.min(Math.max(12, r.top), vh - bh - 12); }
-    else if (r.bottom + bh + 24 < vh) { top = r.bottom + 14; left = Math.min(Math.max(12, r.left), vw - bw - 12); }
-    else { top = Math.max(12, r.top - bh - 14); left = Math.min(Math.max(12, r.left), vw - bw - 12); }
+    if (r.right + bw + 24 < vw) { left = r.right + 16; top = Math.min(Math.max(12, r.top), vh - bh - 12); side = 'left'; }
+    else if (r.bottom + bh + 24 < vh) { top = r.bottom + 14; left = Math.min(Math.max(12, r.left), vw - bw - 12); side = 'up'; }
+    else { top = Math.max(12, r.top - bh - 14); left = Math.min(Math.max(12, r.left), vw - bw - 12); side = 'down'; }
   }
+  bubble.setAttribute('data-arrow', side); // CSS draws the arrow pointing at the target
   bubble.style.top = Math.max(12, top) + 'px'; bubble.style.left = Math.max(12, left) + 'px';
   bubble.style.visibility = 'visible';
 }
