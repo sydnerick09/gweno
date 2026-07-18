@@ -88,6 +88,59 @@ async function paystackVerify(reference) {
   return r.ok && j.status && j.data && j.data.status === 'success';
 }
 
+/* --------- Paystack Transfers (REAL bank payouts from the balance) --------- */
+async function paystackApi(method, path, body) {
+  const r = await fetch('https://api.paystack.co' + path, {
+    method,
+    headers: { Authorization: `Bearer ${paystackKey()}`, 'Content-Type': 'application/json' },
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok || j.status === false) throw new Error((j && j.message) || `Paystack HTTP ${r.status}`);
+  return j.data;
+}
+
+// List banks the account can pay out to (for the withdrawal dropdown).
+async function paystackBanks({ currency = 'KES', country = 'kenya' } = {}) {
+  const data = await paystackApi('GET', `/bank?currency=${encodeURIComponent(currency)}&country=${encodeURIComponent(country)}&perPage=200`);
+  return (data || []).map((b) => ({ name: b.name, code: b.code }));
+}
+
+// Verify an account number → returns the real account holder name.
+async function paystackResolveAccount(accountNumber, bankCode) {
+  const data = await paystackApi('GET', `/bank/resolve?account_number=${encodeURIComponent(accountNumber)}&bank_code=${encodeURIComponent(bankCode)}`);
+  return { accountName: data.account_name, accountNumber: data.account_number };
+}
+
+// Create a recipient and send a real transfer from the Paystack balance.
+// `type` = 'nuban' (bank) or 'mobile_money' (e.g. M-Pesa, bankCode 'MPESA').
+// Returns { status } — 'success' | 'pending' | 'otp' | 'failed'. 'otp' means the
+// account still requires an OTP per transfer (disable it in Paystack settings for
+// fully-automated payouts).
+async function paystackTransfer({ type = 'nuban', name, accountNumber, bankCode, amountMajor, currency = 'KES', reason, reference }) {
+  const recipient = await paystackApi('POST', '/transferrecipient', {
+    type, name, account_number: accountNumber, bank_code: bankCode, currency,
+  });
+  const transfer = await paystackApi('POST', '/transfer', {
+    source: 'balance', amount: cents(amountMajor), recipient: recipient.recipient_code,
+    reason: reason || 'Gweno payout', reference, currency,
+  });
+  return {
+    recipientCode: recipient.recipient_code,
+    transferCode: transfer.transfer_code,
+    transferId: transfer.id,
+    status: transfer.status,
+    reference: transfer.reference || reference,
+    raw: { status: transfer.status, id: transfer.id, transfer_code: transfer.transfer_code, reference: transfer.reference, createdAt: transfer.createdAt },
+  };
+}
+
+// Poll a transfer's current status (used to reconcile if the webhook is delayed).
+async function paystackTransferStatus(reference) {
+  const data = await paystackApi('GET', `/transfer/verify/${encodeURIComponent(reference)}`);
+  return { status: data.status, raw: { status: data.status, id: data.id, reference: data.reference } };
+}
+
 /* ------------------------------ PayPal ------------------------------ */
 const paypalEnv = () => (String(process.env.PAYPAL_ENV || 'sandbox').toLowerCase() === 'live'
   ? 'https://api-m.paypal.com' : 'https://api-m.sandbox.paypal.com');
@@ -158,4 +211,5 @@ async function verify(method, providerRef) {
 module.exports = {
   stripeConfigured, paypalConfigured, paystackConfigured,
   createCheckout, verify,
+  paystackBanks, paystackResolveAccount, paystackTransfer, paystackTransferStatus,
 };

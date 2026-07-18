@@ -70,7 +70,7 @@ function investMethodConfigured(method) {
 }
 const investMethodsInfo = () => INVEST_METHODS.map((key) => ({ key, configured: investMethodConfigured(key) }));
 const USERNAME_COOLDOWN_MS = 30 * 24 * 60 * 60 * 1000;   // username changeable once / 30 days
-const MIN_REDEEM = { KES: 10, USD: 3 };          // minimum cash-out: $3 (KES kept for legacy)
+const MIN_REDEEM = { KES: 39, USD: 0.3 };        // minimum cash-out: $0.30 (M-Pesa ≈ 39 KES)
 const DEPOSIT_MIN_KES = 10;                              // DEPOSITS via M-Pesa STK Push (KES)
 const FX_KES_PER_USD = Number(process.env.FX_KES_PER_USD) || 129; // conversion rate (configurable)
 const SUBSCRIPTION_USD = 10;                            // Premium unlocks $1–$4 tasks
@@ -84,8 +84,22 @@ const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || '';
 const ADMIN_COOKIE = 'gweno_admin';
 const ADMIN_SESSION_TTL_MS = 2 * 60 * 60 * 1000; // admin sessions expire after 2h
 
+// M-Pesa Daraja server-to-server callbacks must hit a PUBLIC https URL. We auto-derive
+// them (explicit env override -> PUBLIC_URL when not localhost -> the current request
+// host, which is your live domain on Vercel), so you only need the CORE M-Pesa keys:
+// MPESA_CONSUMER_KEY/SECRET, MPESA_STK_SHORTCODE, MPESA_PASSKEY, MPESA_SHORTCODE,
+// MPESA_INITIATOR_NAME, MPESA_SECURITY_CREDENTIAL (+ MPESA_ENV, MPESA_COMMAND_ID).
+function mpesaBase(req) {
+  const pub = (process.env.PUBLIC_URL || '').replace(/\/$/, '');
+  if (pub && !/localhost|127\.0\.0\.1/.test(pub)) return pub;
+  return `${req.protocol}://${req.get('host')}`;
+}
+const stkCallbackUrl = (req) => process.env.MPESA_STK_CALLBACK_URL || `${mpesaBase(req)}/api/mpesa/stk-callback`;
+const b2cResultUrl = (req) => process.env.MPESA_RESULT_URL || `${mpesaBase(req)}/api/mpesa/result`;
+const b2cTimeoutUrl = (req) => process.env.MPESA_TIMEOUT_URL || `${mpesaBase(req)}/api/mpesa/timeout`;
+
 app.set('trust proxy', 1); // trust the first proxy (correct client IPs when deployed)
-app.use(express.json({ limit: '2mb' })); // room for base64 avatar uploads
+app.use(express.json({ limit: '2mb', verify: (req, res, buf) => { req.rawBody = buf; } })); // raw body kept for Paystack webhook signature
 app.use(express.urlencoded({ extended: false })); // Apple OAuth returns via form_post
 app.use(cookieParser());
 
@@ -1162,7 +1176,7 @@ app.post('/api/admin/redemptions/:id/mark', requireAdminSession, async (req, res
   if (status === 'Paid' && rec.method === 'M-Pesa' && rec.status !== 'Paid' && payments.mpesaConfigured()) {
     const kesAmount = rec.currency === 'KES' ? Math.round(rec.amount) : Math.round(heldUSD * FX_KES_PER_USD);
     try {
-      rec.provider = { type: 'mpesa', kesAmount, ...(await payments.mpesaB2C({ phone: rec.destination, amount: kesAmount })) };
+      rec.provider = { type: 'mpesa', kesAmount, ...(await payments.mpesaB2C({ phone: rec.destination, amount: kesAmount, resultUrl: b2cResultUrl(req), timeoutUrl: b2cTimeoutUrl(req) })) };
       rec.status = 'Processing'; rec.reviewedAt = new Date().toISOString(); // final Paid/Failed comes on the M-Pesa result callback
       db.save();
       return res.json({ ok: true, redemption: rec, message: `M-Pesa payout of ${kesAmount.toLocaleString()} KES submitted.` });
@@ -1297,11 +1311,20 @@ app.get('/api/redeem', requireAuth, (req, res) => {
 // PayPal & Bank are in USD. NOTHING is auto-paid — the amount is held (deducted) and the
 // request is left "Requested" for an admin to verify and release from the admin panel.
 // Rejecting a withdrawal refunds the held balance.
-app.post('/api/redeem', requireAuth, (req, res) => {
+app.post('/api/redeem', requireAuth, async (req, res) => {
   if (req.user.held) return res.status(403).json({ error: 'Your account is on hold, so withdrawals are paused. Please contact support.' });
   const method = String(req.body.method || '').trim();
   const rawAmount = round2(req.body.amount);
-  const destination = String(req.body.destination || '').trim();
+  let destination = String(req.body.destination || '').trim();
+  const bankCode = String(req.body.bankCode || '').trim();
+  const accountNumber = String(req.body.accountNumber || '').replace(/\s+/g, '');
+  const idemKey = String(req.body.idempotencyKey || '').trim().slice(0, 80);
+
+  // Idempotency: a repeated request (double-click, retry) never pays out twice.
+  if (idemKey) {
+    const existing = db.get().redemptions.find((r) => r.userId === req.user.id && r.idempotencyKey === idemKey);
+    if (existing) return res.json({ ok: true, redemption: existing, duplicate: true, message: 'Withdrawal already submitted.' });
+  }
 
   if (!WITHDRAW_METHODS.includes(method)) return res.status(400).json({ error: 'Choose a payout method.' });
   if (!(rawAmount > 0)) return res.status(400).json({ error: 'Enter a valid amount.' });
@@ -1312,48 +1335,189 @@ app.post('/api/redeem', requireAuth, (req, res) => {
   if (currency === 'KES' && rawAmount < MIN_REDEEM.KES) return res.status(400).json({ error: `Minimum M-Pesa withdrawal is ${MIN_REDEEM.KES} KES.` });
   if (currency === 'USD' && rawAmount < MIN_REDEEM.USD) return res.status(400).json({ error: `Minimum withdrawal is $${MIN_REDEEM.USD}.` });
 
-  // Per-method destination rules.
+  const paystackLive = investPay.paystackConfigured(); // real payouts via Paystack Transfers
+
+  // Per-method destination validation.
   if (method === 'M-Pesa') {
     if (!/^(?:254|0)\d{9}$/.test(destination.replace(/\s+/g, ''))) return res.status(400).json({ error: 'Enter a valid M-Pesa phone number (e.g. 0712345678).' });
   } else if (method === 'PayPal') {
     if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(destination)) return res.status(400).json({ error: 'Enter a valid PayPal email address.' });
   } else if (method === 'Bank account') {
-    if (destination.replace(/\s+/g, '').length < 6) return res.status(400).json({ error: 'Enter your bank account details (name, bank and account number).' });
+    if (paystackLive) {
+      if (!bankCode || accountNumber.length < 6) return res.status(400).json({ error: 'Choose your bank and enter a valid account number.' });
+    } else if (destination.replace(/\s+/g, '').length < 6) {
+      return res.status(400).json({ error: 'Enter your bank account details (name, bank and account number).' });
+    }
   }
 
   if (amountUSD > combinedUSD(req.user)) return res.status(400).json({ error: 'Amount exceeds your available balance.' });
 
-  // Hold the funds (in USD) until an admin verifies and releases the payout.
+  // Which methods are REAL, automated Paystack payouts.
+  const isBankReal = method === 'Bank account' && paystackLive && bankCode && accountNumber;
+  const isMpesaReal = method === 'M-Pesa' && paystackLive;
+
+  // Hold the funds (in USD) first, then attempt the payout; refund on any failure.
   deductCombined(req.user, 'USD', amountUSD);
+  const reference = 'wd_' + (idemKey ? idemKey.replace(/[^A-Za-z0-9_]/g, '') : rid(10));
   const rec = {
-    id: rid(8), userId: req.user.id,
-    amount: rawAmount, currency, amountUSD, method, destination,
-    status: 'Requested', createdAt: new Date().toISOString(), provider: null, error: null,
+    id: rid(8), userId: req.user.id, idempotencyKey: idemKey || null,
+    amount: rawAmount, currency, amountUSD, method, destination, reference,
+    status: 'Requested', createdAt: new Date().toISOString(), resultAt: null,
+    provider: null, recipient: null, error: null,
   };
   db.get().redemptions.push(rec);
   db.save();
+  console.log(`[gweno] withdrawal ${rec.id} user=${req.user.id} ${method} $${amountUSD} ref=${reference}`);
+
+  const refund = () => { ensureUserShape(req.user); req.user.usd = round2(req.user.usd + amountUSD); };
+
+  if (isBankReal || isMpesaReal) {
+    const payoutCurrency = (process.env.PAYSTACK_CURRENCY || 'KES').toUpperCase();
+    const amountLocal = payoutCurrency === 'KES' ? Math.round(amountUSD * FX_KES_PER_USD) : round2(amountUSD);
+    try {
+      let transferArgs, destLabel;
+      if (isMpesaReal) {
+        const phone = payments.normalizePhone(destination); // 2547XXXXXXXX
+        rec.recipient = { type: 'mobile_money', provider: 'MPESA', phone };
+        rec.destination = phone;
+        destLabel = 'your M-Pesa (' + phone + ')';
+        transferArgs = { type: 'mobile_money', name: req.user.name || 'Gweno member', accountNumber: phone, bankCode: 'MPESA', amountMajor: amountLocal, currency: payoutCurrency, reason: 'Gweno withdrawal', reference };
+      } else {
+        let name = String(req.body.accountName || '').trim();
+        try { const rr = await investPay.paystackResolveAccount(accountNumber, bankCode); if (rr.accountName) name = rr.accountName; } catch (_) {}
+        if (!name) name = req.user.name || 'Gweno member';
+        rec.recipient = { type: 'bank', name, bankCode, accountNumber };
+        rec.destination = destination || `${name} · ${accountNumber}`;
+        destLabel = name;
+        transferArgs = { type: 'nuban', name, accountNumber, bankCode, amountMajor: amountLocal, currency: payoutCurrency, reason: 'Gweno withdrawal', reference };
+      }
+
+      const t = await investPay.paystackTransfer(transferArgs);
+      // Full audit trail of the provider response.
+      rec.provider = {
+        type: 'paystack-transfer', reference: t.reference || reference,
+        transferCode: t.transferCode, transferId: t.transferId, recipientCode: t.recipientCode,
+        amountLocal, currency: payoutCurrency, providerStatus: t.status, response: t.raw || null,
+      };
+
+      if (t.status === 'otp') {
+        refund(); rec.status = 'Failed'; rec.error = 'otp_required'; rec.resultAt = new Date().toISOString();
+        db.save();
+        return res.status(503).json({ error: 'Automated payouts need OTP disabled on Paystack (Settings → Preferences → turn off "OTP for transfers"). Your balance was refunded.' });
+      }
+      // Only 'success' is final here; 'pending'/'processing' stay Processing until the webhook confirms.
+      rec.status = t.status === 'success' ? 'Paid' : 'Processing';
+      rec.resultAt = t.status === 'success' ? new Date().toISOString() : null;
+      db.save();
+      console.log(`[gweno] withdrawal ${rec.id} paystack status=${t.status}`);
+      return res.json({ ok: true, redemption: publicRedemption(rec), message: `Payout of ${amountLocal.toLocaleString()} ${payoutCurrency} sent to ${destLabel}. Tracking status…` });
+    } catch (err) {
+      refund(); rec.status = 'Failed'; rec.error = String(err.message || err); rec.resultAt = new Date().toISOString();
+      db.save();
+      console.error(`[gweno] withdrawal ${rec.id} FAILED: ${rec.error}`);
+      return res.status(502).json({ error: 'Payout failed: ' + rec.error + '. Your balance was refunded.' });
+    }
+  }
+
+  // PayPal (or bank/M-Pesa when Paystack isn't configured) — held for admin verification.
   const shown = currency === 'KES' ? `${rawAmount.toLocaleString()} KES` : `$${rawAmount}`;
-  return res.json({ ok: true, redemption: rec,
+  return res.json({ ok: true, redemption: publicRedemption(rec),
     message: `Withdrawal of ${shown} via ${method} submitted. It will be sent once we verify it (usually within 24 hours).` });
+});
+
+// A member's own view of a withdrawal (no internal provider secrets).
+function publicRedemption(r) {
+  return {
+    id: r.id, amount: r.amount, currency: r.currency, amountUSD: r.amountUSD,
+    method: r.method, destination: r.destination, status: r.status,
+    reference: r.reference, createdAt: r.createdAt, resultAt: r.resultAt, error: r.error || null,
+  };
+}
+
+// Real-time status of a member's own withdrawal (frontend polls this).
+app.get('/api/redemptions/:id/status', requireAuth, async (req, res) => {
+  const rec = db.get().redemptions.find((r) => r.id === req.params.id && r.userId === req.user.id);
+  if (!rec) return res.status(404).json({ error: 'Withdrawal not found.' });
+  // If still processing and we have a Paystack reference, reconcile with the provider
+  // (in case the webhook is delayed).
+  if (rec.status === 'Processing' && rec.provider && rec.provider.type === 'paystack-transfer' && investPay.paystackConfigured()) {
+    try {
+      const s = await investPay.paystackTransferStatus(rec.provider.reference);
+      if (s.status === 'success' && rec.status !== 'Paid') { rec.status = 'Paid'; rec.resultAt = new Date().toISOString(); db.save(); }
+      else if ((s.status === 'failed' || s.status === 'reversed') && !/failed/i.test(rec.status)) {
+        rec.status = 'Failed'; rec.error = s.status;
+        const u = userById(rec.userId); if (u) { ensureUserShape(u); u.usd = round2(u.usd + (rec.amountUSD != null ? rec.amountUSD : rec.amount)); }
+        rec.resultAt = new Date().toISOString(); db.save();
+      }
+    } catch (_) { /* keep Processing; webhook will finalise */ }
+  }
+  res.json({ status: rec.status, error: rec.error || null, resultAt: rec.resultAt || null });
+});
+
+// Banks available for bank withdrawals (Paystack). Used to populate the dropdown.
+let BANKS_CACHE = { at: 0, banks: [] };
+app.get('/api/banks', requireAuth, async (req, res) => {
+  if (!investPay.paystackConfigured()) return res.json({ banks: [], live: false });
+  if (Date.now() - BANKS_CACHE.at < 6 * 60 * 60 * 1000 && BANKS_CACHE.banks.length) {
+    return res.json({ banks: BANKS_CACHE.banks, live: true });
+  }
+  try {
+    const banks = await investPay.paystackBanks({ currency: (process.env.PAYSTACK_CURRENCY || 'KES'), country: 'kenya' });
+    BANKS_CACHE = { at: Date.now(), banks };
+    res.json({ banks, live: true });
+  } catch (err) {
+    res.json({ banks: BANKS_CACHE.banks, live: true, error: String(err.message || err) });
+  }
+});
+
+// Paystack webhook — finalises transfers (and confirms charges). Point Paystack's
+// dashboard webhook URL at https://<domain>/api/paystack/webhook.
+app.post('/api/paystack/webhook', (req, res) => {
+  const secret = process.env.PAYSTACK_SECRET_KEY || '';
+  const sig = req.headers['x-paystack-signature'];
+  const body = req.rawBody || Buffer.from(JSON.stringify(req.body || {}));
+  const hash = crypto.createHmac('sha512', secret).update(body).digest('hex');
+  if (!secret || sig !== hash) return res.status(401).json({ error: 'bad signature' });
+
+  const evt = req.body || {};
+  if (typeof evt.event === 'string' && evt.event.startsWith('transfer.')) {
+    const ref = evt.data && evt.data.reference;
+    const rec = db.get().redemptions.find((r) => r.provider && r.provider.reference === ref);
+    if (rec && !/paid|failed/i.test(rec.status)) {
+      if (evt.event === 'transfer.success') rec.status = 'Paid';
+      else if (evt.event === 'transfer.failed' || evt.event === 'transfer.reversed') {
+        rec.status = 'Failed';
+        const u = userById(rec.userId);
+        if (u) { ensureUserShape(u); u.usd = round2(u.usd + (rec.amountUSD != null ? rec.amountUSD : rec.amount)); }
+      }
+      rec.resultAt = new Date().toISOString();
+      db.save();
+    }
+  }
+  res.json({ received: true });
 });
 
 // M-Pesa B2C callbacks (point MPESA_RESULT_URL / MPESA_TIMEOUT_URL here via a public tunnel).
 app.post('/api/mpesa/result', (req, res) => {
-  res.json({ ResultCode: 0, ResultDesc: 'Accepted' }); // acknowledge immediately
+  // IMPORTANT: do the work (and db.save) BEFORE responding. On serverless the instance
+  // can freeze right after the response, so anything after res.json() may never run.
   const r = req.body && req.body.Result;
-  if (!r) return;
-  const rec = db.get().redemptions.find((x) => x.provider && (
-    x.provider.conversationId === r.ConversationID || x.provider.originatorConversationId === r.OriginatorConversationID));
-  if (!rec) return;
-  if (Number(r.ResultCode) === 0) {
-    rec.status = 'Paid';
-  } else {
-    rec.status = 'Failed'; rec.error = r.ResultDesc;
-    const u = userById(rec.userId); // refund the held USD if the payout fails
-    if (u) { ensureUserShape(u); u.usd = round2(u.usd + (rec.amountUSD != null ? rec.amountUSD : rec.amount)); }
+  if (r) {
+    const rec = db.get().redemptions.find((x) => x.provider && (
+      x.provider.conversationId === r.ConversationID || x.provider.originatorConversationId === r.OriginatorConversationID));
+    if (rec && !/paid|failed/i.test(rec.status)) {
+      if (Number(r.ResultCode) === 0) {
+        rec.status = 'Paid';
+      } else {
+        rec.status = 'Failed'; rec.error = r.ResultDesc;
+        const u = userById(rec.userId); // refund the held USD if the payout fails
+        if (u) { ensureUserShape(u); u.usd = round2(u.usd + (rec.amountUSD != null ? rec.amountUSD : rec.amount)); }
+      }
+      rec.resultAt = new Date().toISOString();
+      db.save();
+    }
   }
-  rec.resultAt = new Date().toISOString();
-  db.save();
+  res.json({ ResultCode: 0, ResultDesc: 'Accepted' });
 });
 app.post('/api/mpesa/timeout', (req, res) => { res.json({ ok: true }); });
 
@@ -1384,7 +1548,7 @@ app.post('/api/deposit', requireAuth, async (req, res) => {
   db.save();
 
   try {
-    rec.provider = { type: 'mpesa-stk', ...(await payments.mpesaStkPush({ phone, amount, accountRef: 'Gweno', description: 'Wallet top-up' })) };
+    rec.provider = { type: 'mpesa-stk', ...(await payments.mpesaStkPush({ phone, amount, accountRef: 'Gweno', description: 'Wallet top-up', callbackUrl: stkCallbackUrl(req) })) };
     db.save(); // final success/fail arrives on the STK callback
     return res.json({ ok: true, reference, message: 'Payment request sent. Enter your M-Pesa PIN on your phone to complete the deposit.' });
   } catch (err) {
@@ -1474,10 +1638,15 @@ app.get('/api/deposit/pay/return', async (req, res) => {
 // Safaricom posts the STK result here (point MPESA_STK_CALLBACK_URL to this via a public tunnel).
 // Handles both wallet top-ups (credit balance) and Premium subscriptions (grant premium).
 app.post('/api/mpesa/stk-callback', (req, res) => {
-  res.json({ ResultCode: 0, ResultDesc: 'Accepted' });
+  // IMPORTANT: process (and db.save) BEFORE responding — on serverless the instance can
+  // freeze immediately after res.json(), so crediting must not happen after the response.
   const cb = req.body && req.body.Body && req.body.Body.stkCallback;
-  if (!cb) return;
-
+  if (cb) {
+    handleStkCallback(cb);
+  }
+  res.json({ ResultCode: 0, ResultDesc: 'Accepted' });
+});
+function handleStkCallback(cb) {
   // An investment funded via M-Pesa STK? Activate it on success.
   const invRec = db.get().investments.find((i) => i.provider && i.provider.checkoutRequestId === cb.CheckoutRequestID);
   if (invRec) {
@@ -1510,7 +1679,7 @@ app.post('/api/mpesa/stk-callback', (req, res) => {
     rec.status = 'failed'; rec.error = cb.ResultDesc;
   }
   db.save();
-});
+}
 
 // =============================================================================
 //  PREMIUM SUBSCRIPTION  —  $10 (charged in KES) via M-Pesa STK, unlocks $1–$4 tasks
@@ -1541,7 +1710,7 @@ app.post('/api/subscribe', requireAuth, async (req, res) => {
   db.save();
 
   try {
-    rec.provider = { type: 'mpesa-stk', ...(await payments.mpesaStkPush({ phone, amount: amountKES, accountRef: 'Gweno Premium', description: 'Premium subscription' })) };
+    rec.provider = { type: 'mpesa-stk', ...(await payments.mpesaStkPush({ phone, amount: amountKES, accountRef: 'Gweno Premium', description: 'Premium subscription', callbackUrl: stkCallbackUrl(req) })) };
     db.save();
     return res.json({ ok: true, reference, message: 'Payment request sent. Enter your M-Pesa PIN to activate Premium.' });
   } catch (err) {
@@ -1551,22 +1720,51 @@ app.post('/api/subscribe', requireAuth, async (req, res) => {
   }
 });
 
-// Subscribe with any non-M-Pesa method (Card / PayPal / Bank / Paystack). Real
-// charging is wired once provider keys are added; for now the payment is recorded
-// and Premium is activated so any member — not just M-Pesa users — can subscribe.
-const SUBSCRIBE_METHODS = ['M-Pesa', 'Card', 'PayPal', 'Bank account', 'Paystack'];
-app.post('/api/subscribe/manual', requireAuth, (req, res) => {
+// Subscribe by card via Paystack. Premium is NOT granted here — only after the payment
+// is CONFIRMED on the return from the hosted checkout (see /api/subscribe/pay/return).
+app.post('/api/subscribe/manual', requireAuth, async (req, res) => {
   if (isPremium(req.user)) return res.status(400).json({ error: 'You already have an active Premium subscription.' });
   const method = String(req.body.method || '').trim();
-  if (!SUBSCRIBE_METHODS.includes(method) || method === 'M-Pesa') return res.status(400).json({ error: 'Choose a payment method.' });
-  const amountKES = Math.round(SUBSCRIPTION_USD * FX_KES_PER_USD);
-  db.get().deposits.push({
-    id: rid(8), userId: req.user.id, amount: SUBSCRIPTION_USD, currency: 'USD', reference: 'sub_' + rid(8),
-    purpose: 'subscription', method, status: 'success', createdAt: new Date().toISOString(), paidAt: new Date().toISOString(), provider: null, error: null,
-  });
-  grantPremium(req.user);
+  if (!['Card', 'Paystack'].includes(method)) return res.status(400).json({ error: 'Choose a card payment method.' });
+  if (!investPay.paystackConfigured()) {
+    return res.status(503).json({ error: "Card payments for Premium aren't set up yet. Premium only unlocks after a confirmed payment." });
+  }
+  const ref = 'sub_' + rid(10);
+  const rec = {
+    id: rid(8), userId: req.user.id, amount: SUBSCRIPTION_USD, currency: 'USD', reference: ref,
+    purpose: 'subscription', method, status: 'pending', createdAt: new Date().toISOString(), paidAt: null, provider: null, error: null,
+  };
+  db.get().deposits.push(rec);
   db.save();
-  res.json({ ok: true, message: `Premium activated via ${method}. Enjoy all $1–$4 tasks for ${SUBSCRIPTION_DAYS} days.`, priceKES: amountKES });
+  try {
+    const cur = (process.env.PAYSTACK_CURRENCY || 'KES').toUpperCase();
+    const amountMajor = cur === 'KES' ? Math.round(SUBSCRIPTION_USD * FX_KES_PER_USD) : SUBSCRIPTION_USD;
+    const returnUrl = `${appBase(req)}/api/subscribe/pay/return?ref=${ref}`;
+    const { url, providerRef } = await investPay.createCheckout(method, { amountUSD: SUBSCRIPTION_USD, amountMajor, currency: cur, email: req.user.email, ref, returnUrl });
+    rec.provider = { type: 'paystack', method, providerRef, currency: cur, amountCharged: amountMajor };
+    db.save();
+    return res.json({ ok: true, mode: 'redirect', url, message: 'Redirecting to pay for Premium…' });
+  } catch (err) {
+    rec.status = 'failed'; rec.error = String(err.message || err); db.save();
+    return res.status(502).json({ error: 'Could not start Premium payment: ' + rec.error });
+  }
+});
+
+// Paystack redirects the browser back here after a Premium payment; grant Premium only
+// once the payment is verified as successful.
+app.get('/api/subscribe/pay/return', async (req, res) => {
+  const rec = db.get().deposits.find((d) => d.reference === String(req.query.ref || '') && d.purpose === 'subscription');
+  if (!rec || !rec.provider) return res.redirect('/app.html#/tasks');
+  try {
+    if (rec.status === 'pending' && await investPay.verify(rec.provider.method, rec.provider.providerRef)) {
+      rec.status = 'success'; rec.paidAt = new Date().toISOString();
+      const u = userById(rec.userId);
+      if (u) { ensureUserShape(u); grantPremium(u); } // <-- only after confirmed payment
+      db.save();
+    }
+  } catch (_) { /* leave pending; premium stays locked */ }
+  const done = rec.status === 'success';
+  res.redirect(`/app.html#/tasks?${done ? 'premium' : 'premfail'}=1`);
 });
 
 // =============================================================================
@@ -1849,7 +2047,7 @@ app.post('/api/investments', requireAuth, async (req, res) => {
         return res.status(400).json({ error: 'Enter a valid M-Pesa phone number (e.g. 0712345678).' });
       }
       const amountKES = Math.max(1, Math.round(amount * FX_KES_PER_USD));
-      const push = await payments.mpesaStkPush({ phone, amount: amountKES, accountRef: 'Gweno Invest', description: `${plan.name} investment` });
+      const push = await payments.mpesaStkPush({ phone, amount: amountKES, accountRef: 'Gweno Invest', description: `${plan.name} investment`, callbackUrl: stkCallbackUrl(req) });
       inv.provider = { type: 'mpesa-stk', method, amountKES, ...push };
       db.save();
       return res.status(201).json({ ok: true, mode: 'stk', id: inv.id, investment: publicInvestment(inv),

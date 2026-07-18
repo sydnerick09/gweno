@@ -578,6 +578,12 @@ function openSurvey(s) {
 let TASK_STATE = { search: '', tier: 'all' };
 async function pageTasks() {
   loading();
+  // Returning from a Premium card payment? (Premium is granted server-side only after payment verifies.)
+  const pq = new URLSearchParams(location.hash.split('?')[1] || '');
+  if (pq.get('premium')) { toast('Payment confirmed — Premium is now active!'); await refreshMe(); }
+  else if (pq.get('premfail')) toast('Payment was not completed. Premium stays locked until it is confirmed.', 'error');
+  if (pq.get('premium') || pq.get('premfail')) history.replaceState(null, '', `${location.pathname}${location.search}#/tasks`);
+
   const { data } = await apiGet('/api/tasks');
   const all = data.tasks || [];
   const sub = data.subscription || {};
@@ -649,8 +655,6 @@ async function pageTasks() {
 const SUBSCRIBE_METHODS = [
   { key: 'M-Pesa', logo: LOGO.mpesa, desc: 'STK push' },
   { key: 'Card', logo: LOGO.card, desc: 'Debit / credit card' },
-  { key: 'PayPal', logo: LOGO.paypal, desc: 'Pay with PayPal' },
-  { key: 'Bank account', logo: LOGO.bank, desc: 'Bank transfer' },
   { key: 'Paystack', logo: LOGO.paystack, desc: 'Cards & bank' },
 ];
 
@@ -668,10 +672,8 @@ function openSubscribe(sub) {
 
   const subFields = bg.querySelector('#subFields');
   const getSubMethod = renderMethodCards(bg.querySelector('#subMethods'), SUBSCRIBE_METHODS, (m) => {
-    if (m === 'M-Pesa') subFields.innerHTML = `<div class="field"><label>M-Pesa phone number</label><input id="subPhone" placeholder="e.g. +254 712 345 678"></div><p class="p-sub">You'll get an STK PIN prompt to pay ${kes(sub.priceKES)}.</p>`;
-    else if (m === 'Card') subFields.innerHTML = `<div class="field"><label>Card number</label><input id="subCard" inputmode="numeric" placeholder="1234 5678 9012 3456"></div><div class="grid g2"><div class="field"><label>Expiry</label><input id="subExp" placeholder="MM/YY"></div><div class="field"><label>CVC</label><input id="subCvc" inputmode="numeric" maxlength="4" placeholder="123"></div></div>`;
-    else if (m === 'PayPal' || m === 'Paystack') subFields.innerHTML = `<div class="field"><label>${m} email</label><input id="subEmail" type="email" placeholder="you@example.com"></div>`;
-    else subFields.innerHTML = `<p class="p-sub">Bank transfer instructions will be shown after you confirm. Premium activates once payment is received.</p>`;
+    if (m === 'M-Pesa') subFields.innerHTML = `<div class="field"><label>M-Pesa phone number</label><input id="subPhone" placeholder="e.g. +254 712 345 678"></div><p class="p-sub">You'll get an STK PIN prompt to pay ${kes(sub.priceKES)}. Premium unlocks once the payment is confirmed.</p>`;
+    else subFields.innerHTML = `<p class="p-sub">You'll be taken to a secure ${m === 'Card' ? 'card' : 'Paystack'} page to pay. <b>Premium unlocks only after the payment is confirmed</b> — not before.</p>`;
   });
 
   bg.querySelector('#subForm').addEventListener('submit', async (e) => {
@@ -691,9 +693,11 @@ function openSubscribe(sub) {
         else if ((s.ok && s.data.status === 'failed') || tries >= 20) { clearInterval(poll); btn.disabled = false; if (s.data && s.data.status === 'failed') toast('Payment not completed.', 'error'); }
       }, 3000);
     } else {
+      // Card / Paystack: go to the hosted checkout. Premium is granted server-side ONLY after payment verifies.
       const { ok, data } = await api('/api/subscribe/manual', { method });
-      if (ok) { bg.remove(); toast(data.message); await refreshMe(); pageTasks(); }
-      else { btn.disabled = false; toast(data.error || 'Could not activate Premium', 'error'); }
+      if (!ok) { btn.disabled = false; return toast(data.error || 'Could not start Premium payment', 'error'); }
+      if (data.mode === 'redirect' && data.url) { toast(data.message || 'Redirecting to pay…'); location.href = data.url; return; }
+      btn.disabled = false;
     }
   });
 }
@@ -1289,9 +1293,11 @@ async function pageRedeem() {
     }
   });
 
-  // ---------- Withdraw (USD) ----------
+  // ---------- Withdraw (USD; Bank account is a REAL payout via Paystack) ----------
   const wdFields = document.getElementById('wdFields');
   const minHint = document.getElementById('minHint');
+  let BANKS = null, bankLive = false;
+
   function wdForm(m) {
     // M-Pesa pays out in KES (Kenyan users don't hold USD in M-Pesa); PayPal/Bank are USD.
     const cur = m === 'M-Pesa' ? 'KES' : 'USD';
@@ -1299,10 +1305,9 @@ async function pageRedeem() {
     if (m === 'Bank account') {
       return `${amt}
         <div class="grid g2">
-          <div class="field"><label>Account holder name</label><input id="bkName" placeholder="Full name on the account"></div>
-          <div class="field"><label>Bank name</label><input id="bkBank" placeholder="Your bank's name"></div>
-          <div class="field"><label>Account number / IBAN</label><input id="bkAcct" placeholder="Your account number"></div>
-          <div class="field"><label>SWIFT / branch code <span class="p-sub">(optional)</span></label><input id="bkSwift" placeholder="Your SWIFT or branch code"></div>
+          <div class="field"><label>Bank</label><select id="bkBankCode"><option value="">Loading banks…</option></select></div>
+          <div class="field"><label>Account number</label><input id="bkAcct" inputmode="numeric" placeholder="Your account number"></div>
+          <div class="field"><label>Account holder name <span class="p-sub">(optional)</span></label><input id="bkName" placeholder="Full name on the account"></div>
         </div>`;
     }
     let dest = '';
@@ -1311,30 +1316,63 @@ async function pageRedeem() {
     else dest = `<div class="field"><label>Destination</label><input id="rDest" placeholder="Account details"></div>`;
     return `<div class="grid g2">${amt}${dest}</div>`;
   }
+
+  async function loadBanks() {
+    const sel = document.getElementById('bkBankCode'); if (!sel) return;
+    if (BANKS === null) { const r = await apiGet('/api/banks'); BANKS = (r.data && r.data.banks) || []; bankLive = !!(r.data && r.data.live); }
+    if (!bankLive || !BANKS.length) { sel.innerHTML = '<option value="">Manual bank transfer</option>'; return; }
+    sel.innerHTML = '<option value="">Select your bank…</option>' + BANKS.map((b) => `<option value="${esc(b.code)}">${esc(b.name)}</option>`).join('');
+  }
+
   const getWdMethod = renderMethodCards(document.getElementById('wdMethods'), WITHDRAW_METHODS, (m) => {
     wdFields.innerHTML = wdForm(m);
-    minHint.textContent = m === 'M-Pesa'
-      ? `Entered in KES and paid to your M-Pesa. We verify every withdrawal before sending it (usually within 24 hours).`
+    if (m === 'Bank account') { loadBanks(); minHint.textContent = 'Paid straight to your bank account — real payout, usually arrives within minutes.'; }
+    else minHint.textContent = m === 'M-Pesa'
+      ? 'Entered in KES and sent straight to your M-Pesa — real payout, usually arrives within minutes.'
       : `Entered in USD and paid to your ${m}. We verify every withdrawal before sending it (usually within 24 hours).`;
   });
 
+  // Poll a submitted withdrawal for its real status (Processing → Successful/Failed).
+  async function trackWithdrawal(rec) {
+    if (!rec || !rec.id) { await refreshMe(); return pageRedeem(); }
+    if (!/processing/i.test(rec.status || '')) { await refreshMe(); return pageRedeem(); }
+    toast('Payout processing…');
+    let tries = 0;
+    const poll = setInterval(async () => {
+      tries += 1;
+      const s = await apiGet('/api/redemptions/' + rec.id + '/status');
+      const st = s.data && s.data.status;
+      if (st && /paid|success/i.test(st)) { clearInterval(poll); toast('Withdrawal successful — money sent ✓'); await refreshMe(); pageRedeem(); }
+      else if (st && /failed/i.test(st)) { clearInterval(poll); toast('Withdrawal failed — your balance was refunded.', 'error'); await refreshMe(); pageRedeem(); }
+      else if (tries >= 15) { clearInterval(poll); await refreshMe(); pageRedeem(); }
+    }, 3000);
+  }
+
   document.getElementById('rForm').addEventListener('submit', async (e) => {
     e.preventDefault();
+    const btn = e.target.querySelector('button[type="submit"]');
     const m = getWdMethod();
     if (!m) return toast('Choose a payout method', 'error');
-    const amtEl = document.getElementById('rAmt'), destEl = document.getElementById('rDest');
-    const amount = Number(amtEl ? amtEl.value : 0);
-    let destination = destEl ? destEl.value : '';
+    const amount = Number((document.getElementById('rAmt') || {}).value || 0);
+    // One idempotency key per submit — prevents duplicate payouts on retry/double-click.
+    const idempotencyKey = 'wd' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+    const body = { method: m, idempotencyKey, amount, currency: m === 'M-Pesa' ? 'KES' : 'USD' };
+
     if (m === 'Bank account') {
       const g = (id) => (document.getElementById(id) || {}).value || '';
-      const name = g('bkName').trim(), bnk = g('bkBank').trim(), acct = g('bkAcct').trim(), swift = g('bkSwift').trim();
-      if (!name || !bnk || !acct) return toast('Fill in your account name, bank and account number', 'error');
-      destination = `${name} · ${bnk} · ${acct}${swift ? ' · ' + swift : ''}`;
+      const bankCode = g('bkBankCode'), accountNumber = g('bkAcct').trim(), accountName = g('bkName').trim();
+      if (bankLive) { if (!bankCode || !accountNumber) return toast('Choose your bank and enter your account number', 'error'); }
+      else if (!accountNumber) return toast('Enter your account details', 'error');
+      Object.assign(body, { bankCode, accountNumber, accountName, destination: `${accountName ? accountName + ' · ' : ''}${accountNumber}` });
+    } else {
+      const destEl = document.getElementById('rDest');
+      body.destination = destEl ? destEl.value : '';
     }
-    const currency = m === 'M-Pesa' ? 'KES' : 'USD';
-    const { ok, data: d } = await api('/api/redeem', { method: m, currency, amount, destination });
-    if (ok) { toast(d.message); await refreshMe(); pageRedeem(); }
-    else toast(d.error || 'Could not redeem', 'error');
+
+    if (btn) btn.disabled = true;
+    const { ok, data: d } = await api('/api/redeem', body);
+    if (ok) { toast(d.message); await trackWithdrawal(d.redemption); }
+    else { if (btn) btn.disabled = false; toast(d.error || 'Could not redeem', 'error'); }
   });
 }
 
