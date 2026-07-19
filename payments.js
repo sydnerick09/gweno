@@ -27,13 +27,14 @@ const CFG = {
 
 const base = () => (CFG.env === 'production' ? 'https://api.safaricom.co.ke' : 'https://sandbox.safaricom.co.ke');
 
-// Withdrawals ready?
+// Withdrawals (B2C) ready? Result/timeout URLs are auto-derived by the server, so
+// they aren't required here — only the core Daraja credentials are.
 function mpesaConfigured() {
-  return !!(CFG.key && CFG.secret && CFG.shortcode && CFG.initiator && CFG.securityCredential && CFG.resultUrl && CFG.timeoutUrl);
+  return !!(CFG.key && CFG.secret && CFG.shortcode && CFG.initiator && CFG.securityCredential);
 }
-// Deposits (STK) ready?
+// Deposits (STK) ready? The callback URL is auto-derived, so it isn't required here.
 function mpesaStkConfigured() {
-  return !!(CFG.key && CFG.secret && CFG.stkShortcode && CFG.passkey && CFG.stkCallbackUrl);
+  return !!(CFG.key && CFG.secret && CFG.stkShortcode && CFG.passkey);
 }
 
 // Normalise a Kenyan number to 2547XXXXXXXX / 2541XXXXXXXX.
@@ -63,7 +64,9 @@ async function token() {
 }
 
 // ---- Deposits: STK Push ----
-async function mpesaStkPush({ phone, amount, accountRef = 'Gweno', description = 'Wallet top-up' }) {
+async function mpesaStkPush({ phone, amount, accountRef = 'Gweno', description = 'Wallet top-up', callbackUrl }) {
+  const cbUrl = callbackUrl || CFG.stkCallbackUrl;
+  if (!cbUrl) throw new Error('M-Pesa STK callback URL is not configured.');
   const t = await token();
   const ts = stkTimestamp();
   const sc = CFG.stkShortcode;
@@ -77,7 +80,7 @@ async function mpesaStkPush({ phone, amount, accountRef = 'Gweno', description =
     PartyA: normalizePhone(phone),
     PartyB: sc,
     PhoneNumber: normalizePhone(phone),
-    CallBackURL: CFG.stkCallbackUrl,
+    CallBackURL: cbUrl,
     AccountReference: accountRef,
     TransactionDesc: description,
   };
@@ -94,7 +97,10 @@ async function mpesaStkPush({ phone, amount, accountRef = 'Gweno', description =
 }
 
 // ---- Withdrawals: B2C ----
-async function mpesaB2C({ phone, amount, remarks = 'Gweno payout' }) {
+async function mpesaB2C({ phone, amount, remarks = 'Gweno payout', resultUrl, timeoutUrl }) {
+  const rUrl = resultUrl || CFG.resultUrl;
+  const tUrl = timeoutUrl || CFG.timeoutUrl;
+  if (!rUrl || !tUrl) throw new Error('M-Pesa B2C result/timeout URLs are not configured.');
   const t = await token();
   const body = {
     InitiatorName: CFG.initiator,
@@ -104,8 +110,8 @@ async function mpesaB2C({ phone, amount, remarks = 'Gweno payout' }) {
     PartyA: CFG.shortcode,
     PartyB: normalizePhone(phone),
     Remarks: remarks,
-    QueueTimeOutURL: CFG.timeoutUrl,
-    ResultURL: CFG.resultUrl,
+    QueueTimeOutURL: tUrl,
+    ResultURL: rUrl,
     Occasion: 'Redeem',
   };
   const r = await fetch(`${base()}/mpesa/b2c/v1/paymentrequest`, {

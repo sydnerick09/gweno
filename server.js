@@ -210,7 +210,20 @@ app.use(async (req, res, next) => {
 // ---- Helpers ----------------------------------------------------------------
 const now = () => Date.now();
 const normEmail = (e) => String(e || '').trim().toLowerCase();
-const isEmail = (e) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e);
+// Strict-but-inclusive email check: valid local part, a real domain with a TLD (>=2
+// letters). Accepts Gmail/Outlook/Yahoo/iCloud/custom domains; rejects malformed input
+// (missing @, no TLD, spaces, leading/trailing/consecutive dots, over-long addresses).
+const isEmail = (e) => {
+  const s = String(e || '').trim();
+  if (!s || s.length > 254 || /\s/.test(s) || s.includes('..')) return false;
+  const at = s.lastIndexOf('@');
+  if (at < 1) return false;
+  const local = s.slice(0, at), domain = s.slice(at + 1);
+  if (local.length > 64 || local.startsWith('.') || local.endsWith('.')) return false;
+  if (!/^[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+$/.test(local)) return false;
+  if (domain.startsWith('.') || domain.endsWith('.') || domain.startsWith('-')) return false;
+  return /^[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,24}$/.test(domain);
+};
 const rid = (n = 16) => crypto.randomBytes(n).toString('hex');
 const sha = (s) => crypto.createHash('sha256').update(s).digest('hex');
 
@@ -1412,10 +1425,17 @@ app.post('/api/redeem', requireAuth, async (req, res) => {
       console.log(`[gweno] withdrawal ${rec.id} paystack status=${t.status}`);
       return res.json({ ok: true, redemption: publicRedemption(rec), message: `Payout of ${amountLocal.toLocaleString()} ${payoutCurrency} sent to ${destLabel}. Tracking status…` });
     } catch (err) {
-      refund(); rec.status = 'Failed'; rec.error = String(err.message || err); rec.resultAt = new Date().toISOString();
+      const raw = String(err.message || err);
+      refund(); rec.status = 'Failed'; rec.error = raw; rec.resultAt = new Date().toISOString();
       db.save();
-      console.error(`[gweno] withdrawal ${rec.id} FAILED: ${rec.error}`);
-      return res.status(502).json({ error: 'Payout failed: ' + rec.error + '. Your balance was refunded.' });
+      console.error(`[gweno] withdrawal ${rec.id} FAILED: ${raw}`);
+      // Merchant/config problems (payouts not enabled, insufficient float, OTP) shouldn't
+      // be exposed to members — show a clean message, keep the real error for the admin.
+      const merchantIssue = /starter business|third party payouts|balance|otp|not enabled|permission/i.test(raw);
+      const msg = merchantIssue
+        ? 'Withdrawals are temporarily unavailable. Your balance was not affected — please try again later.'
+        : 'Payout failed: ' + raw + '. Your balance was refunded.';
+      return res.status(502).json({ error: msg });
     }
   }
 

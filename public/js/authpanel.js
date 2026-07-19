@@ -3,6 +3,24 @@
   const root = document.getElementById('auth-root');
   if (!root) return;
 
+  // Client-side validators (mirror the server). Clear messages, no malformed submits.
+  const validEmail = (e) => {
+    const s = String(e || '').trim();
+    if (!s || s.length > 254 || /\s/.test(s) || s.includes('..')) return false;
+    const at = s.lastIndexOf('@'); if (at < 1) return false;
+    const local = s.slice(0, at), domain = s.slice(at + 1);
+    if (local.length > 64 || local.startsWith('.') || local.endsWith('.')) return false;
+    if (!/^[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+$/.test(local)) return false;
+    if (domain.startsWith('.') || domain.endsWith('.') || domain.startsWith('-')) return false;
+    return /^[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,24}$/.test(domain);
+  };
+  const passwordIssue = (pw) => {
+    if (typeof pw !== 'string' || pw.length < 8) return 'Password must be at least 8 characters.';
+    if (!/[a-zA-Z]/.test(pw) || !/[0-9]/.test(pw)) return 'Password must include a letter and a number.';
+    return null;
+  };
+  const usernameIssue = (u) => (/^[a-zA-Z0-9]{6,10}$/.test(u || '') ? null : 'Username must be 6–10 letters or numbers.');
+
   const socialRow = () => `<div class="ap-socials">${['google', 'facebook']
     .map((p) => `<button type="button" data-provider="${p}" aria-label="Continue with ${p}">${SOCIAL_SVGS[p]}</button>`).join('')}</div>`;
 
@@ -103,8 +121,10 @@
   formIn.addEventListener('submit', async (e) => {
     e.preventDefault();
     clearMsg(msgIn);
+    if (!validEmail(formIn.email.value)) return showMsg(msgIn, 'Please enter a valid email address.', 'error');
+    if (!formIn.password.value) return showMsg(msgIn, 'Please enter your password.', 'error');
     siBtn.disabled = true;
-    const { ok, data } = await api('/api/login', { email: formIn.email.value, password: formIn.password.value });
+    const { ok, data } = await api('/api/login', { email: formIn.email.value.trim(), password: formIn.password.value });
     if (ok) routeAfterAuth(data.user);
     else { showMsg(msgIn, data.error || 'Could not sign in.', 'error'); siBtn.disabled = false; }
   });
@@ -115,7 +135,14 @@
   formUp.addEventListener('submit', async (e) => {
     e.preventDefault();
     clearMsg(msgUp);
-    if (formUp.password.value !== formUp.confirm.value) { setSignup(true); return showMsg(msgUp, 'Passwords do not match.', 'error'); }
+    setSignup(true);
+    const fail = (m) => showMsg(msgUp, m, 'error');
+    if (!formUp.name.value.trim()) return fail('Please enter your name.');
+    if (!validEmail(formUp.email.value)) return fail('Please enter a valid email address (e.g. name@gmail.com).');
+    if (!formUp.country.value) return fail('Please select your country.');
+    const uErr = usernameIssue(formUp.username.value.trim()); if (uErr) return fail(uErr);
+    const pErr = passwordIssue(formUp.password.value); if (pErr) return fail(pErr);
+    if (formUp.password.value !== formUp.confirm.value) return fail('Passwords do not match.');
     suBtn.disabled = true;
     const { ok, data } = await api('/api/signup', {
       name: formUp.name.value, email: formUp.email.value, username: formUp.username.value,

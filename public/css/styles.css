@@ -24,6 +24,30 @@
   color-scheme: light;
 }
 
+/* ---------- Dark theme (toggled via html[data-theme="dark"]) ---------- */
+html[data-theme="dark"] {
+  --bg: #0f1522;
+  --bg-2: #171f2e;
+  --card: #151d2b;
+  --line: #29344a;
+  --text: #e7edf6;
+  --muted: #93a1b5;
+  --brand: #16b8a6;
+  --brand-2: #2dd4bf;
+  --green-pale: #10251f;
+  --gold-pale: #241b0e;
+  --shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+  color-scheme: dark;
+}
+/* Override the few hardcoded light surfaces for dark mode. */
+html[data-theme="dark"] .topbar { background: rgba(21,29,43,.82); }
+html[data-theme="dark"] .stat.brand { background: #10251f; border-color: #1c4a3d; }
+html[data-theme="dark"] .panel.premium-active { background: #10251f; border-color: #1c4a3d; }
+html[data-theme="dark"] .panel.upgrade { background: #241b0e; border-color: #4a3a1c; }
+html[data-theme="dark"] .sk { background: #1c2636; background-image: linear-gradient(90deg,#1c2636 0%,#26344a 20%,#1c2636 40%); }
+html[data-theme="dark"] .tier-badge.premium { background: #3a2c0c; color: #f0c665; border-color: #5a4514; }
+html[data-theme="dark"] .card-feat, html[data-theme="dark"] .step { background: var(--card); }
+
 * { box-sizing: border-box; }
 
 body {

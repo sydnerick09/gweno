@@ -4,6 +4,15 @@ let ME = null;
 let FX = 129; // KES per USD; overwritten from /api/me
 let PAGE_POLL = null; // stop() for the current page's smart poller (see data.js)
 
+// ---------- theme (light/dark) ----------
+const THEME_ICONS = {
+  moon: '<svg viewBox="0 0 24 24"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>',
+  sun: '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>',
+};
+const currentTheme = () => (document.documentElement.dataset.theme === 'dark' ? 'dark' : 'light');
+function setTheme(t) { document.documentElement.dataset.theme = t; try { localStorage.setItem('theme', t); } catch (_) {} }
+function toggleTheme() { setTheme(currentTheme() === 'dark' ? 'light' : 'dark'); updateTopbar(); }
+
 // ---------- tiny helpers ----------
 const usd = (n) => '$' + (Number(n) || 0).toFixed(2);
 const kes = (n) => Math.round(Number(n) || 0).toLocaleString() + ' KES';
@@ -249,7 +258,7 @@ const NAV = [
 const TITLES = {
   dashboard: 'Dashboard', stats: 'Stats', earn: 'Earn', tasks: 'Tasks', submissions: 'My submissions',
   referral: 'Refer & earn', invest: 'Investments', advertise: 'Advertise', learn: 'Learn', redeem: 'Redeem',
-  settings: 'Settings', chat: 'Chat', support: 'Support', admin: 'Admin review',
+  settings: 'Settings', chat: 'Chat', support: 'Support', admin: 'Admin review', profile: 'Profile',
 };
 
 function renderShell() {
@@ -274,7 +283,13 @@ function renderShell() {
         </header>
         <main class="view" id="view"></main>
       </div>
-    </div>`;
+    </div>
+    <nav class="bottom-nav" id="bottomNav" aria-label="Primary">
+      <a class="bn-item" data-route="dashboard" href="#/dashboard"><span class="bn-ico">🏠</span><span class="bn-lbl">Dashboard</span></a>
+      <span class="bn-gap" aria-hidden="true"></span>
+      <a class="bn-item" data-route="earn" href="#/earn"><span class="bn-ico">💰</span><span class="bn-lbl">Earn</span></a>
+      <a class="bn-fab" data-route="redeem" href="#/redeem" aria-label="Redeem — deposit or withdraw"><span class="bn-fab-ico">🏦</span><span class="bn-fab-lbl">Redeem</span></a>
+    </nav>`;
 
   document.getElementById('signout').addEventListener('click', async () => { await api('/api/logout', {}); location.href = '/'; });
   document.getElementById('ham').addEventListener('click', (e) => { e.stopPropagation(); document.getElementById('sidebar').classList.toggle('open'); });
@@ -290,9 +305,12 @@ function renderShell() {
 function updateTopbar() {
   const t = totals();
   document.getElementById('topRight').innerHTML = `
+    <button class="theme-toggle" id="themeBtn" title="Toggle dark mode" aria-label="Toggle dark mode">${currentTheme() === 'dark' ? THEME_ICONS.sun : THEME_ICONS.moon}</button>
     <span class="chip usd">💵 ${usd(t.usd)}</span>
     <span class="chip kes">🪙 ${kes(t.kes)}</span>
-    ${avatarHTML(ME, 'avatar-sm')}`;
+    <a href="#/profile" class="avatar-link" title="Profile">${avatarHTML(ME, 'avatar-sm')}</a>`;
+  const tb = document.getElementById('themeBtn');
+  if (tb) tb.addEventListener('click', toggleTheme);
 }
 
 async function refreshMe() {
@@ -302,6 +320,7 @@ async function refreshMe() {
 
 function setActive(route) {
   document.querySelectorAll('.nav-item').forEach((a) => a.classList.toggle('active', a.dataset.route === route));
+  document.querySelectorAll('.bottom-nav [data-route]').forEach((a) => a.classList.toggle('active', a.dataset.route === route));
 }
 
 // ---------- router ----------
@@ -316,7 +335,7 @@ function router() {
     dashboard: pageDashboard, stats: pageStats, earn: pageEarn, tasks: pageTasks,
     submissions: pageSubmissions, referral: pageReferral, invest: pageInvest, advertise: pageAdvertise,
     learn: pageLearn, redeem: pageRedeem, settings: pageSettings, chat: pageChat,
-    support: pageSupport, admin: pageAdmin,
+    support: pageSupport, admin: pageAdmin, profile: pageProfile,
   };
   (map[key] || pageDashboard)();
   window.scrollTo(0, 0);
@@ -1379,21 +1398,25 @@ async function pageRedeem() {
 // =====================================================================
 //  SETTINGS
 // =====================================================================
-let SETTINGS_TAB = 'profile';
+let SETTINGS_TAB = 'password';
 function pageSettings() {
-  const tabs = [['profile', 'Profile'], ['password', 'Password'], ['email', 'Email'], ['username', 'Username'], ['notifications', 'Notifications'], ['payment', 'Payment'], ['picture', 'Profile picture']];
+  const tabs = [['password', 'Password'], ['email', 'Email'], ['username', 'Username'], ['notifications', 'Notifications'], ['payment', 'Payment'], ['picture', 'Profile picture']];
+  if (!tabs.some(([k]) => k === SETTINGS_TAB)) SETTINGS_TAB = 'password';
   view().innerHTML = `
-    <p class="page-sub">Manage your account and preferences.</p>
+    <p class="page-sub">Manage your account and preferences. Edit your personal details in <a href="#/profile">Profile</a>.</p>
     <div class="tabs">${tabs.map(([k, l]) => `<button class="tab ${k === SETTINGS_TAB ? 'active' : ''}" data-tab="${k}">${l}</button>`).join('')}</div>
     <div id="settingsPanel"></div>`;
   view().querySelectorAll('.tab').forEach((b) => b.addEventListener('click', () => { SETTINGS_TAB = b.dataset.tab; pageSettings(); }));
-  ({ profile: setProfile, password: setPassword, email: setEmail, username: setUsername, notifications: setNotifications, payment: setPayment, picture: setPicture }[SETTINGS_TAB])();
+  ({ password: setPassword, email: setEmail, username: setUsername, notifications: setNotifications, payment: setPayment, picture: setPicture }[SETTINGS_TAB] || setPassword)();
 }
 const sPanel = () => document.getElementById('settingsPanel');
 
-function setProfile() {
+// Profile page — opened from the top-right avatar. Personal details + the Danger Zone.
+function pageProfile() {
   const p = ME.profile || {};
-  sPanel().innerHTML = `<div class="panel"><h3>Profile</h3>
+  view().innerHTML = `
+    <p class="page-sub">Your personal details. Account & security options are in <a href="#/settings">Settings</a>.</p>
+    <div class="panel"><h3>Profile</h3>
     <form id="f">
       <div class="grid g2">
         <div class="field"><label>Full name</label><input id="name" value="${esc(ME.name)}"></div>
@@ -1406,12 +1429,12 @@ function setProfile() {
       </div>
       <button class="btn btn-primary" type="submit">Save profile</button>
     </form></div>
-    <div class="panel" style="border-color:rgba(255,92,114,.4)">
-      <h3>Delete account</h3>
-      <p class="p-sub">This permanently deletes your account and cannot be undone. For fraud prevention, this device will not be able to register a new account afterwards.</p>
-      <button class="btn btn-ghost auto" id="delAcc" style="border-color:var(--danger);color:#ffb3bf">Delete my account</button>
+    <div class="panel danger-zone">
+      <h3>⚠ Danger Zone</h3>
+      <p class="p-sub">Deleting your account is <b>permanent</b> and cannot be undone. It removes your profile, balances, transactions, tasks and all related records. For fraud prevention, this device will not be able to register a new account afterwards.</p>
+      <button class="btn auto" id="delAcc" style="background:var(--danger);border-color:var(--danger);color:#fff">Delete my account</button>
     </div>`;
-  sPanel().querySelector('#f').addEventListener('submit', async (e) => {
+  view().querySelector('#f').addEventListener('submit', async (e) => {
     e.preventDefault();
     const body = ['name', 'gender', 'country', 'phone', 'dob', 'postalCode', 'state'].reduce((o, k) => (o[k] = document.getElementById(k).value, o), {});
     const { ok, data } = await api('/api/settings/profile', body);
