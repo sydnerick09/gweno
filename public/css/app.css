@@ -41,6 +41,10 @@
 .view { padding: 24px; max-width: 1080px; width: 100%; }
 .page-sub { color: var(--muted); margin: -4px 0 22px; }
 
+/* Small inline line-icon used inside buttons and paragraphs (matches the app icon set). */
+.bico { display: inline-grid; place-items: center; vertical-align: -3px; }
+.bico svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+
 /* Skeleton loaders (YouTube-style shimmer) shown instantly while data loads. */
 @keyframes sk-shimmer { 0% { background-position: 200% 0; } 100% { background-position: -200% 0; } }
 .sk { background: #e9eef5; border-radius: 10px; background-image: linear-gradient(90deg, #e9eef5 0%, #f4f7fb 20%, #e9eef5 40%); background-size: 200% 100%; animation: sk-shimmer 1.25s ease-in-out infinite; }
@@ -72,7 +76,7 @@
 
 /* Tiles (Earn hub, quick actions) */
 .tiles { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
-.tile { display: block; background: var(--card); border: 1px solid var(--line); border-radius: var(--radius); padding: 20px; text-decoration: none; color: var(--text); box-shadow: var(--shadow-sm); transition: transform .06s ease, border-color .15s, box-shadow .15s; }
+.tile { display: block; min-width: 0; background: var(--card); border: 1px solid var(--line); border-radius: var(--radius); padding: 20px; text-decoration: none; color: var(--text); box-shadow: var(--shadow-sm); transition: transform .06s ease, border-color .15s, box-shadow .15s; }
 .tile:hover { border-color: var(--brand); text-decoration: none; transform: translateY(-2px); box-shadow: 0 6px 18px rgba(16,24,40,.10); }
 .tile .ico { font-size: 28px; }
 /* Line-icon styling (used in place of emojis across tiles and cards). */
@@ -106,9 +110,9 @@
 .task-row .t-main p { margin: 0; color: var(--muted); font-size: 13px; }
 .task-row .t-reward { font-weight: 800; color: var(--brand-2); font-size: 16px; }
 
-/* Task cards */
-.task-cards { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; margin-top: 4px; }
-.task-card { background: var(--card); border: 1px solid var(--line); border-radius: var(--radius); padding: 18px; display: flex; flex-direction: column; gap: 8px; box-shadow: var(--shadow-sm); transition: border-color .15s, transform .06s; }
+/* Task cards — auto-fitting grid: equal-width cards, never overlap, no horizontal scroll. */
+.task-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 260px), 1fr)); gap: 16px; margin-top: 4px; }
+.task-card { min-width: 0; overflow-wrap: anywhere; background: var(--card); border: 1px solid var(--line); border-radius: var(--radius); padding: 18px; display: flex; flex-direction: column; gap: 8px; box-shadow: var(--shadow-sm); transition: border-color .15s, transform .06s; }
 .task-card:hover { border-color: var(--brand); transform: translateY(-2px); }
 .task-card h4 { margin: 2px 0; font-size: 15px; line-height: 1.35; }
 .task-card .tc-top { display: flex; align-items: center; justify-content: space-between; }

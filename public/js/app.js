@@ -45,6 +45,10 @@ const ICON = {
   submissions: '<svg viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M12 3v12M8 7l4-4 4 4"/></svg>',
   games: '<svg viewBox="0 0 24 24"><rect x="2" y="7" width="20" height="10" rx="5"/><path d="M7 12h3M8.5 10.5v3"/><circle cx="16" cy="11" r="1"/><circle cx="18" cy="13.5" r="1"/></svg>',
   clicks: '<svg viewBox="0 0 24 24"><path d="M9 3v10l3-2 2 4 2-1-2-4h4z"/></svg>',
+  // Consistent Feather (2017) line icons for the earning shortcuts.
+  edit: '<svg viewBox="0 0 24 24"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4z"/></svg>',
+  clipboard: '<svg viewBox="0 0 24 24"><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><rect x="8" y="2" width="8" height="4" rx="1" ry="1"/><path d="M9 12h6M9 16h4"/></svg>',
+  userplus: '<svg viewBox="0 0 24 24"><path d="M16 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="8.5" cy="7" r="4"/><path d="M20 8v6M23 11h-6"/></svg>',
   clock: '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>',
   ban: '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M5.6 5.6l12.8 12.8"/></svg>',
   bank: '<svg viewBox="0 0 24 24"><path d="M3 10l9-6 9 6"/><path d="M5 10v9M19 10v9M9 10v9M15 10v9M3 21h18"/></svg>',
@@ -435,9 +439,9 @@ async function pageDashboard() {
       <h3>Quick start</h3>
       <p class="p-sub">Jump straight into earning.</p>
       <div class="tiles">
-        <a class="tile" href="#/tasks"><div class="ico">${ICON.tasks}</div><h4>Do tasks</h4><p id="dQsTasks">Loading available tasks…</p><span class="tag">Start earning →</span></a>
-        <a class="tile" href="#/earn"><div class="ico">${ICON.survey}</div><h4>Take surveys</h4><p>Share your opinion and earn in minutes.</p><span class="tag">View surveys →</span></a>
-        <a class="tile" href="#/referral"><div class="ico">${ICON.gift}</div><h4>Refer & earn</h4><p>Earn 5 KES for every friend who joins.</p><span class="tag">Get your link →</span></a>
+        <a class="tile" href="#/tasks"><div class="ico">${ICON.edit}</div><h4>Do tasks</h4><p id="dQsTasks">Loading available tasks…</p><span class="tag">Start earning →</span></a>
+        <a class="tile" href="#/earn"><div class="ico">${ICON.clipboard}</div><h4>Take surveys</h4><p>Share your opinion and earn in minutes.</p><span class="tag">View surveys →</span></a>
+        <a class="tile" href="#/referral"><div class="ico">${ICON.userplus}</div><h4>Refer & earn</h4><p>Earn 5 KES for every friend who joins.</p><span class="tag">Get your link →</span></a>
       </div>
     </div>
 
@@ -566,9 +570,9 @@ async function pageEarn() {
   view().innerHTML = `
     <p class="page-sub">Every way to earn on Gweno, in one place.</p>
     <div class="tiles">
-      <a class="tile" href="#/tasks"><div class="ico">${ICON.tasks}</div><h4>Tasks</h4><p>Complete microtasks for cash rewards.</p><span class="tag">Open →</span></a>
-      <a class="tile" href="#/earn/surveys" id="surveysTile"><div class="ico">${ICON.survey}</div><h4>Surveys</h4><p>Answer surveys and earn in minutes.</p><span class="tag">Open →</span></a>
-      <a class="tile" href="#/referral"><div class="ico">${ICON.gift}</div><h4>Refer & earn</h4><p>5 KES per friend who joins.</p><span class="tag">Open →</span></a>
+      <a class="tile" href="#/tasks"><div class="ico">${ICON.edit}</div><h4>Tasks</h4><p>Complete microtasks for cash rewards.</p><span class="tag">Open →</span></a>
+      <a class="tile" href="#/earn/surveys" id="surveysTile"><div class="ico">${ICON.clipboard}</div><h4>Surveys</h4><p>Answer surveys and earn in minutes.</p><span class="tag">Open →</span></a>
+      <a class="tile" href="#/referral"><div class="ico">${ICON.userplus}</div><h4>Refer & earn</h4><p>5 KES per friend who joins.</p><span class="tag">Open →</span></a>
       <a class="tile" href="#/submissions"><div class="ico">${ICON.submissions}</div><h4>My submissions</h4><p>Track approvals, rejections & disputes.</p><span class="tag">Open →</span></a>
       <div class="tile" style="opacity:.7"><div class="ico">${ICON.games}</div><h4>Games</h4><p>Get paid to play with our partners.</p><span class="tag">Coming soon</span></div>
       <div class="tile" style="opacity:.7"><div class="ico">${ICON.clicks}</div><h4>Paid clicks</h4><p>View partner offers for small rewards.</p><span class="tag">Coming soon</span></div>
@@ -702,7 +706,7 @@ async function pageTasks() {
           <p class="tc-meta">~${t.estMinutes} min · Approve rate: N/A</p>
           <div class="tc-bottom">
             <span class="tc-reward">${usd(t.reward)}</span>
-            ${t.locked ? `<button class="btn btn-ghost auto sub-lock">🔒 Premium</button>` : `<button class="btn btn-primary auto open-task" data-id="${t.id}">Start</button>`}
+            ${t.locked ? `<button class="btn btn-ghost auto sub-lock"><span class="bico">${ICON.lock}</span> Premium</button>` : `<button class="btn btn-primary auto open-task" data-id="${t.id}">Start</button>`}
           </div>
         </div>`).join('') : `<p class="p-sub">No tasks match your filters.</p>`}
     </div>`;
@@ -1537,6 +1541,24 @@ function pageSettings() {
 }
 const sPanel = () => document.getElementById('settingsPanel');
 
+// Ask before signing out, then clear the session and go to the login screen.
+function confirmSignOut() {
+  const bg = openModal(`
+    <button class="close">×</button>
+    <h3>Sign out?</h3>
+    <p class="p-sub">You'll need to sign in again to access your account.</p>
+    <div style="display:flex;gap:10px;margin-top:14px">
+      <button class="btn btn-ghost auto" id="soCancel">Cancel</button>
+      <button class="btn btn-primary auto" id="soConfirm"><span class="bico">${ICON.logout}</span> Sign out</button>
+    </div>`);
+  bg.querySelector('#soCancel').addEventListener('click', () => bg.remove());
+  bg.querySelector('#soConfirm').addEventListener('click', async (e) => {
+    e.currentTarget.disabled = true;
+    try { await api('/api/logout', {}); } catch (_) {}
+    location.href = '/login.html';
+  });
+}
+
 // Profile page, opened from the top-right avatar. Personal details + the Danger Zone.
 function pageProfile() {
   const p = ME.profile || {};
@@ -1555,6 +1577,11 @@ function pageProfile() {
       </div>
       <button class="btn btn-primary" type="submit">Save profile</button>
     </form></div>
+    <div class="panel">
+      <h3>Session</h3>
+      <p class="p-sub">Sign out of your Gweno account on this device.</p>
+      <button class="btn btn-ghost auto" id="signOutBtn"><span class="bico">${ICON.logout}</span> Sign out</button>
+    </div>
     <div class="panel danger-zone">
       <h3>⚠ Danger Zone</h3>
       <p class="p-sub">Deleting your account is <b>permanent</b> and cannot be undone. It removes your profile, balances, transactions, tasks and all related records. For fraud prevention, this device will not be able to register a new account afterwards.</p>
@@ -1566,6 +1593,7 @@ function pageProfile() {
     const { ok, data } = await api('/api/settings/profile', body);
     if (ok) { ME = data.user; updateTopbar(); toast(data.message); } else toast(data.error, 'error');
   });
+  document.getElementById('signOutBtn').addEventListener('click', confirmSignOut);
   document.getElementById('delAcc').addEventListener('click', () => {
     const bg = openModal(`
       <button class="close">×</button>
@@ -1733,7 +1761,7 @@ function setPayment() {
     <form id="payForm" style="margin-top:14px"><div id="payFields"><p class="p-sub">Select a method above to add its details.</p></div>
       <button class="btn btn-primary" type="submit">Save payment method</button>
     </form>
-    <p class="p-sub" style="margin-top:10px">🔒 For your security we only store a masked reference, full card numbers, CVC and secret keys are never saved.</p>
+    <p class="p-sub" style="margin-top:10px"><span class="bico">${ICON.lock}</span> For your security we only store a masked reference, full card numbers, CVC and secret keys are never saved.</p>
   </div>`;
 
   const payFields = sPanel().querySelector('#payFields');
