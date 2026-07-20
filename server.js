@@ -552,27 +552,21 @@ app.get('/api/public/activity', (req, res) => {
 });
 
 // Public, no-auth stats for the home page social-proof band.
-// Time-based so the figures grow steadily and wobble a little (they feel live and
-// "update over time") while staying realistic and presentable across restarts.
-const STATS_EPOCH = Date.UTC(2026, 0, 1);
-// Deterministic pseudo-random wobble in the range [-range, +range] from a seed.
-function statWobble(seed, range) {
-  const x = Math.sin(seed * 12.9898) * 43758.5453;
-  return Math.round(((x - Math.floor(x)) * 2 - 1) * range);
-}
+// Day 1 baselines, then a 20% compound increase every 24 hours. Because every metric
+// grows at the same daily rate from its own baseline, the ratios (and therefore the
+// logical relationships: earning ≤ joined, completed ≤ available) are always preserved,
+// and the numbers only ever increase.
+const STATS_EPOCH = Date.UTC(2026, 6, 20); // day 1
+const STATS_BASE = { members: 100, workers: 73, tasksLive: 100, tasksCompleted: 77 };
+const STATS_DAILY_GROWTH = 1.2; // +20% per day, compounding
 app.get('/api/public/stats', (req, res) => {
-  const now = Date.now();
-  const hours = Math.max(0, (now - STATS_EPOCH) / 3600000);
-  const tick = Math.floor(now / 45000); // the wobble changes roughly every 45 seconds
-  const members = 14340 + Math.floor(hours * 0.8) + statWobble(tick, 4) + 4;
-  const workers = Math.round(members * 0.70) + statWobble(tick + 7, 3);
-  const tasksLive = 1470 + (Math.floor(hours * 0.3) % 300) + statWobble(tick + 3, 10) + 10;
-  const tasksCompleted = 68420 + Math.floor(hours * 4) + statWobble(tick + 11, 6);
+  const dayIndex = Math.max(0, Math.floor((Date.now() - STATS_EPOCH) / 86400000));
+  const factor = Math.pow(STATS_DAILY_GROWTH, dayIndex);
   res.json({
-    members,
-    workers,
-    tasksLive: Math.max(200, tasksLive),
-    tasksCompleted,
+    members: Math.round(STATS_BASE.members * factor),
+    workers: Math.round(STATS_BASE.workers * factor),
+    tasksLive: Math.round(STATS_BASE.tasksLive * factor),
+    tasksCompleted: Math.round(STATS_BASE.tasksCompleted * factor),
   });
 });
 

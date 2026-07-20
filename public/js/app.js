@@ -131,6 +131,9 @@ async function apiGet(path) {
 function toast(msg, type = 'ok') {
   const t = document.createElement('div');
   t.className = 'toast ' + type;
+  // Announce to screen readers: errors are assertive, everything else polite.
+  t.setAttribute('role', type === 'error' ? 'alert' : 'status');
+  t.setAttribute('aria-live', type === 'error' ? 'assertive' : 'polite');
   t.textContent = msg;
   document.body.appendChild(t);
   requestAnimationFrame(() => t.classList.add('show'));
@@ -146,9 +149,17 @@ function avatarHTML(u, cls) {
 function openModal(html) {
   const bg = document.createElement('div');
   bg.className = 'modal-bg';
-  bg.innerHTML = `<div class="modal">${html}</div>`;
+  bg.innerHTML = `<div class="modal" role="dialog" aria-modal="true" tabindex="-1">${html}</div>`;
+  const onKey = (e) => {
+    if (e.key === 'Escape') { bg.remove(); }
+    if (!document.body.contains(bg)) document.removeEventListener('keydown', onKey); // self-clean
+  };
   bg.addEventListener('click', (e) => { if (e.target === bg || e.target.classList.contains('close')) bg.remove(); });
+  document.addEventListener('keydown', onKey);
   document.body.appendChild(bg);
+  // Move keyboard focus into the dialog (first field, else the dialog itself).
+  const modal = bg.querySelector('.modal');
+  (modal.querySelector('input, textarea, select, button:not(.close)') || modal).focus();
   return bg;
 }
 
@@ -362,8 +373,16 @@ async function refreshMe() {
 function setActive(routeKey) {
   // Side nav groups tasks/submissions/referral under "Earn"; the bottom nav highlights the real page.
   const sideKey = ['tasks', 'submissions', 'referral'].includes(routeKey) ? 'earn' : routeKey;
-  document.querySelectorAll('.nav-item').forEach((a) => a.classList.toggle('active', a.dataset.route === sideKey));
-  document.querySelectorAll('.bottom-nav [data-route]').forEach((a) => a.classList.toggle('active', a.dataset.route === routeKey));
+  document.querySelectorAll('.nav-item').forEach((a) => {
+    const on = a.dataset.route === sideKey;
+    a.classList.toggle('active', on);
+    if (on) a.setAttribute('aria-current', 'page'); else a.removeAttribute('aria-current');
+  });
+  document.querySelectorAll('.bottom-nav [data-route]').forEach((a) => {
+    const on = a.dataset.route === routeKey;
+    a.classList.toggle('active', on);
+    if (on) a.setAttribute('aria-current', 'page'); else a.removeAttribute('aria-current');
+  });
   // Keep the active item visible in the horizontally scrollable bottom bar.
   const bn = document.querySelector('.bottom-nav');
   const active = document.querySelector('.bottom-nav [data-route].active');
