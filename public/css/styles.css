@@ -67,6 +67,9 @@ html[data-theme="dark"] .avatar-sm,
 html[data-theme="dark"] .task-row .t-ico,
 html[data-theme="dark"] .tab.active,
 html[data-theme="dark"] .step .n { color: #111827; }
+/* The logo is inked in dark navy, so on the dark theme show it as a clean white silhouette. */
+html[data-theme="dark"] .brand-logo,
+html[data-theme="dark"] .brand .dot { filter: brightness(0) invert(1); }
 
 * { box-sizing: border-box; }
 
