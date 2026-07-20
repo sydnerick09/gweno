@@ -333,6 +333,7 @@ function renderShell() {
         <main class="view" id="view"></main>
       </div>
     </div>
+    <div class="nav-scrim" id="navScrim" aria-hidden="true"></div>
     <nav class="bottom-nav" id="bottomNav" aria-label="Primary">
       <a class="bn-item" data-route="dashboard" href="#/dashboard"><span class="bn-ico">${ICON.home}</span><span class="bn-lbl">Dashboard</span></a>
       <a class="bn-item" data-route="tasks" href="#/tasks"><span class="bn-ico">${ICON.tasks}</span><span class="bn-lbl">Tasks</span></a>
@@ -343,14 +344,34 @@ function renderShell() {
       <a class="bn-item" data-route="advertise" href="#/advertise"><span class="bn-ico">${ICON.advertise}</span><span class="bn-lbl">Advertise</span></a>
     </nav>`;
 
+  // ---- Mobile nav drawer (standard behaviour) ----
+  const sidebarEl = () => document.getElementById('sidebar');
+  const scrimEl = () => document.getElementById('navScrim');
+  function setMenu(open) {
+    const sb = sidebarEl(), sc = scrimEl();
+    if (sb) sb.classList.toggle('open', open);
+    if (sc) sc.classList.toggle('show', open);
+  }
   document.getElementById('signout').addEventListener('click', async () => { await api('/api/logout', {}); location.href = '/'; });
-  document.getElementById('ham').addEventListener('click', (e) => { e.stopPropagation(); document.getElementById('sidebar').classList.toggle('open'); });
-  document.querySelectorAll('.nav-item').forEach((a) => a.addEventListener('click', () => document.getElementById('sidebar').classList.remove('open')));
-  // Tap anywhere outside the open menu (on mobile) to close it.
-  document.addEventListener('click', (e) => {
-    const sb = document.getElementById('sidebar');
-    if (sb && sb.classList.contains('open') && !sb.contains(e.target)) sb.classList.remove('open');
-  });
+  document.getElementById('ham').addEventListener('click', (e) => { e.stopPropagation(); setMenu(!sidebarEl().classList.contains('open')); });
+  // Selecting a nav item, tapping the scrim (outside), or pressing Esc all close it.
+  document.querySelectorAll('.nav-item').forEach((a) => a.addEventListener('click', () => setMenu(false)));
+  scrimEl().addEventListener('click', () => setMenu(false));
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape') setMenu(false); });
+
+  // ---- Auto-hide bottom nav: slide out on scroll-down, back in on scroll-up ----
+  let lastY = window.scrollY || 0, ticking = false;
+  function onScroll() {
+    const bn = document.getElementById('bottomNav');
+    const y = window.scrollY || 0;
+    if (bn) {
+      if (y > lastY + 6 && y > 90) bn.classList.add('bn-hidden');      // scrolling down past a small threshold
+      else if (y < lastY - 6) bn.classList.remove('bn-hidden');        // any upward scroll reveals it
+    }
+    lastY = y; ticking = false;
+  }
+  window.addEventListener('scroll', () => { if (!ticking) { requestAnimationFrame(onScroll); ticking = true; } }, { passive: true });
+
   updateTopbar();
 }
 
@@ -798,7 +819,7 @@ function proofFieldFor(t) {
     social: { label: 'Profile / post link or @username', kind: 'input', type: 'text', ph: '@yourname or https://…', hint: 'Your @username or a profile/post link.' },
     code:   { label: 'Confirmation code', kind: 'input', type: 'text', ph: 'Enter the exact code', hint: 'Type the exact confirmation code from the steps.' },
     data:   { label: 'Your rows (one per line)', kind: 'textarea', ph: 'One row per line, e.g. Jane Doe, +254712345678, jane@example.com', hint: `At least ${t.minLines || 3} rows, one per line, in the format shown.` },
-    match:  { label: 'Paste your typed text', kind: 'textarea', ph: 'Type the passage exactly as shown above', hint: 'Must closely match the passage above.' },
+    match:  { label: 'Type the text here', kind: 'textarea', ph: 'Type the passage exactly as shown above', hint: 'Type it yourself — copy and paste are disabled. Must closely match the passage above.' },
     text:   { label: 'Your answer', kind: 'textarea', ph: 'Paste your completed work here', hint: `At least ${t.minWords || 8} words of your own writing.` },
   }[t.proofType] || {};
   const label = cfg.label || 'Proof of completion';
@@ -839,7 +860,7 @@ function validateProofClient(t, raw) {
         ? '' : 'Each row must use the requested format (values separated by a comma or colon).';
     }
     case 'match': {
-      if (junk(proof)) return 'Please paste your full typed text.';
+      if (junk(proof)) return 'Please type your full answer.';
       const norm = (s) => s.toLowerCase().replace(/[^\w\s]/g, ' ').replace(/\s+/g, ' ').trim();
       const a = norm(proof), b = norm(t.expected || '');
       // quick similarity: shared-length ratio via Levenshtein
@@ -858,17 +879,33 @@ function validateProofClient(t, raw) {
 }
 
 function openTask(t) {
+  // Typing tasks (proofType 'match') must be typed by hand — copy & paste are disabled.
+  const noPaste = t.proofType === 'match';
   const bg = openModal(`
     <button class="close">×</button>
     <h3>${esc(t.title)}</h3>
     <p class="p-sub">${esc(t.category)} · Reward ${usd(t.reward)} · ~${t.estMinutes} min</p>
     <h4 style="margin:16px 0 6px">How to complete this task</h4>
-    <ol class="instr">${t.instructions.map((s) => `<li>${esc(s)}</li>`).join('')}</ol>
+    <ol class="instr${noPaste ? ' no-copy' : ''}">${t.instructions.map((s) => `<li>${esc(s)}</li>`).join('')}</ol>
+    ${noPaste ? '<p class="p-sub">This is a typing task — please type the text yourself. Copy and paste are disabled.</p>' : ''}
     <form id="taskForm">
       ${proofFieldFor(t)}
       <p class="p-sub">Submissions are usually reviewed within 5 hours.</p>
       <button class="btn btn-primary" type="submit">Submit for review</button>
     </form>`);
+
+  if (noPaste) {
+    const pasteMsg = 'Please type the text manually. Copying and pasting is not allowed for this task.';
+    const proofEl = bg.querySelector('#proof');
+    // One 'paste' handler covers Ctrl/Cmd+V, right-click paste and mobile long-press paste.
+    const blockPaste = (e) => { e.preventDefault(); toast(pasteMsg, 'error'); };
+    proofEl.addEventListener('paste', blockPaste);
+    proofEl.addEventListener('drop', blockPaste);              // dragging text in
+    proofEl.addEventListener('dragover', (e) => e.preventDefault());
+    // Stop the shown passage from being copied out of the task content.
+    bg.querySelectorAll('.no-copy').forEach((el) => el.addEventListener('copy', (e) => { e.preventDefault(); toast(pasteMsg, 'error'); }));
+  }
+
   bg.querySelector('#taskForm').addEventListener('submit', async (e) => {
     e.preventDefault();
     const proof = bg.querySelector('#proof').value;

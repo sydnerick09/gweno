@@ -346,7 +346,7 @@ function validateProof(task, raw) {
     }
 
     case 'match': {
-      if (looksLikeJunk(proof)) return { ok: false, error: 'Please paste your full typed text.' };
+      if (looksLikeJunk(proof)) return { ok: false, error: 'Please type your full answer.' };
       if (similarity(proof, task.expected) < (task.minSimilarity || 0.8)) {
         return { ok: false, error: 'Your text does not closely match the passage. Please type it exactly as shown.' };
       }
