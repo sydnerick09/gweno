@@ -1,4 +1,4 @@
-/* Sliding Sign In / Sign Up panel. Colours: purple (--brand) + white only. */
+/* Sliding Sign In / Sign Up panel. Colours: blue (--brand) + white only. */
 /* Align the card to the top so it isn't stranded in the middle of tall screens. */
 .ap-wrap { display: grid; place-items: start center; min-height: calc(100vh - 74px); padding: 28px 16px 40px; }
 
@@ -25,6 +25,15 @@
 .ap-forgot { color: var(--muted); font-size: 13px; margin: 10px 0 6px; }
 .ap-forgot:hover { color: var(--brand); }
 .ap .msg { text-align: left; }
+
+/* "Email me a sign-in link" — a text button styled like a link */
+.ap-link-btn { background: none; border: 0; color: var(--brand); font-size: 13px; cursor: pointer; margin: 10px 0 2px; padding: 4px; font-weight: 600; }
+.ap-link-btn:hover { text-decoration: underline; }
+.ap-link-btn:disabled { color: var(--muted); cursor: default; text-decoration: none; }
+
+/* Turnstile CAPTCHA container (empty until the widget renders) */
+.ap-captcha { display: flex; justify-content: center; margin: 6px 0; }
+.ap-captcha:empty { margin: 0; }
 
 /* The password show/hide reuses .pw-wrap / .pw-toggle from styles.css */
 

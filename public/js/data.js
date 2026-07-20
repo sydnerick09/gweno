@@ -1,10 +1,10 @@
 /**
- * Gweno client data layer — five performance/UX patterns in one small module:
- *   1) Request deduplication  — concurrent GETs to the same URL share one request
- *   2) Optimistic update      — patch cache/UI now, roll back if the request fails
- *   3) Streaming UI           — render sections as each request resolves (helpers)
- *   4) Stale-while-revalidate — show cached data instantly, refresh in background
- *   5) Smart polling          — poll only while the tab is visible; pause when hidden
+ * Gweno client data layer, five performance/UX patterns in one small module:
+ *   1) Request deduplication: concurrent GETs to the same URL share one request
+ *   2) Optimistic update:     patch cache/UI now, roll back if the request fails
+ *   3) Streaming UI:          render sections as each request resolves (helpers)
+ *   4) Stale-while-revalidate: show cached data instantly, refresh in background
+ *   5) Smart polling:         poll only while the tab is visible; pause when hidden
  *
  * Written as a UMD module so it runs in the browser (window.Data) and can be
  * unit-tested in Node (module.exports). Depends only on global fetch.
@@ -41,7 +41,7 @@
 
   // 4) Stale-while-revalidate: fire `onData` immediately with cached data (if any),
   //    then revalidate over the network and fire `onData` again with fresh data.
-  //    `onData(data, meta)` — meta = { stale:true } for cache, { stale:false } for fresh,
+  //    `onData(data, meta)`, meta = { stale:true } for cache, { stale:false } for fresh,
   //    or { error } if there's nothing cached and the request fails.
   function swr(url, onData, opts) {
     const options = opts || {};

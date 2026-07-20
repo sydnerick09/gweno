@@ -49,6 +49,40 @@ const ICON = {
   ban: '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M5.6 5.6l12.8 12.8"/></svg>',
   bank: '<svg viewBox="0 0 24 24"><path d="M3 10l9-6 9 6"/><path d="M5 10v9M19 10v9M9 10v9M15 10v9M3 21h18"/></svg>',
   shield: '<svg viewBox="0 0 24 24"><path d="M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z"/><path d="M9 12l2 2 4-4"/></svg>',
+  // ---- Navigation icons (Feather Icons, 2017), monochrome line icons via currentColor ----
+  home: '<svg viewBox="0 0 24 24"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><path d="M9 22V12h6v10"/></svg>',
+  chart: '<svg viewBox="0 0 24 24"><path d="M18 20V10M12 20V4M6 20v-6"/></svg>',
+  money: '<svg viewBox="0 0 24 24"><path d="M12 1v22"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>',
+  invest: '<svg viewBox="0 0 24 24"><path d="M23 6l-9.5 9.5-5-5L1 18"/><path d="M17 6h6v6"/></svg>',
+  advertise: '<svg viewBox="0 0 24 24"><path d="M3 11v2a1 1 0 0 0 1 1h2l4 4V6L6 10H4a1 1 0 0 0-1 1z"/><path d="M15 8.5a4 4 0 0 1 0 7"/></svg>',
+  learn: '<svg viewBox="0 0 24 24"><path d="M2 4h6a3 3 0 0 1 3 3v13a2 2 0 0 0-2-2H2z"/><path d="M22 4h-6a3 3 0 0 0-3 3v13a2 2 0 0 1 2-2h7z"/></svg>',
+  settings: '<svg viewBox="0 0 24 24"><path d="M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3M1 14h6M9 8h6M17 16h6"/></svg>',
+  chat: '<svg viewBox="0 0 24 24"><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8z"/></svg>',
+  support: '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="4"/><path d="M4.9 4.9l4.2 4.2M14.9 14.9l4.2 4.2M14.9 9.1l4.2-4.2M4.9 19.1l4.2-4.2"/></svg>',
+  menu: '<svg viewBox="0 0 24 24"><path d="M3 12h18M3 6h18M3 18h18"/></svg>',
+  coins: '<svg viewBox="0 0 24 24"><ellipse cx="12" cy="6" rx="8" ry="3"/><path d="M4 6v6c0 1.66 3.58 3 8 3s8-1.34 8-3V6"/><path d="M4 12v6c0 1.66 3.58 3 8 3s8-1.34 8-3v-6"/></svg>',
+  // ---- Extended Feather Icons roster (dashboard / admin set) ----
+  grid: '<svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>',
+  analytics: '<svg viewBox="0 0 24 24"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>',
+  users: '<svg viewBox="0 0 24 24"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>',
+  orders: '<svg viewBox="0 0 24 24"><circle cx="9" cy="21" r="1"/><circle cx="20" cy="21" r="1"/><path d="M1 1h4l2.68 13.39a2 2 0 0 0 2 1.61h9.72a2 2 0 0 0 2-1.61L23 6H6"/></svg>',
+  products: '<svg viewBox="0 0 24 24"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><path d="M3.27 6.96L12 12.01l8.73-5.05"/><path d="M12 22.08V12"/></svg>',
+  messages: '<svg viewBox="0 0 24 24"><path d="M4 4h16a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2z"/><path d="M22 6l-10 7L2 6"/></svg>',
+  notifications: '<svg viewBox="0 0 24 24"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>',
+  calendar: '<svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><path d="M16 2v4M8 2v4M3 10h18"/></svg>',
+  files: '<svg viewBox="0 0 24 24"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>',
+  reports: '<svg viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="M16 13H8M16 17H8M10 9H8"/></svg>',
+  logout: '<svg viewBox="0 0 24 24"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="M16 17l5-5-5-5"/><path d="M21 12H9"/></svg>',
+  help: '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><path d="M12 17h.01"/></svg>',
+  billing: '<svg viewBox="0 0 24 24"><rect x="1" y="4" width="22" height="16" rx="2" ry="2"/><path d="M1 10h22"/></svg>',
+  card: '<svg viewBox="0 0 24 24"><rect x="1" y="4" width="22" height="16" rx="2" ry="2"/><path d="M1 10h22"/></svg>',
+  wallet: '<svg viewBox="0 0 24 24"><path d="M20 12V8H6a2 2 0 0 1-2-2 2 2 0 0 1 2-2h12v4"/><path d="M4 6v12a2 2 0 0 0 2 2h14v-4"/><path d="M18 12a2 2 0 0 0-2 2 2 2 0 0 0 2 2h4v-4z"/></svg>',
+  database: '<svg viewBox="0 0 24 24"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/></svg>',
+  server: '<svg viewBox="0 0 24 24"><rect x="2" y="2" width="20" height="8" rx="2" ry="2"/><rect x="2" y="14" width="20" height="8" rx="2" ry="2"/><path d="M6 6h.01M6 18h.01"/></svg>',
+  cloud: '<svg viewBox="0 0 24 24"><path d="M18 10h-1.26A8 8 0 1 0 9 20h9a5 5 0 0 0 0-10z"/></svg>',
+  lock: '<svg viewBox="0 0 24 24"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>',
+  api: '<svg viewBox="0 0 24 24"><path d="M4 17l6-6-6-6"/><path d="M12 19h8"/></svg>',
+  code: '<svg viewBox="0 0 24 24"><path d="M16 18l6-6-6-6"/><path d="M8 6l-6 6 6 6"/></svg>',
 };
 
 // Brand logos for the payment-method picker (approximate, self-contained SVGs/wordmarks).
@@ -139,15 +173,15 @@ async function boot() {
 // Each step opens the real page it describes (route) and points an arrow at the menu
 // item, so a new member sees exactly where each thing is and what that screen looks like.
 const TOUR_STEPS = [
-  { route: '#/dashboard', title: 'Welcome to Gweno! 👋', body: "Quick tour — I'll open each page for you so you know exactly where everything is. You can skip anytime." },
+  { route: '#/dashboard', title: 'Welcome to Gweno! 👋', body: "Quick tour, I'll open each page for you so you know exactly where everything is. You can skip anytime." },
   { route: '#/dashboard', sel: '#sidebar', title: 'This is your menu', body: 'Everything is in this menu. On a phone, tap the ☰ button at the top-left to open it. Let\'s walk through each page.' },
   { route: '#/dashboard', sel: '#topRight', title: 'Your balance', body: 'Your money shows here in USD and KES. On the Dashboard, press and hold the balance to switch between US Dollars and Kenya Shillings.' },
-  { route: '#/tasks', sel: '[data-route="earn"]', title: 'Tasks — earn money', body: 'This is where you do tasks and surveys to earn money into your wallet. Tap "Earn" in the menu to get here.' },
-  { route: '#/invest', sel: '[data-route="invest"]', title: 'Investments — grow your money', body: 'This is Investments. Buy into a plan (Starter, Growth or Premium), invest by shares, and earn fixed interest until it matures.' },
-  { route: '#/redeem', sel: '[data-route="redeem"]', title: 'Redeem — deposit & withdraw', body: 'This is Redeem. Deposit (top up) your wallet, or withdraw (cash out) to M-Pesa, card, PayPal or bank. There\'s a small minimum to withdraw.' },
-  { route: '#/settings', sel: '[data-route="settings"]', title: 'Settings — your name & profile', body: 'This is Settings. Change your name, password, payout details and picture here.' },
-  { route: '#/support', sel: '[data-route="support"]', title: 'Support — get help', body: 'This is Support. Read guides and message our team any time you need help.' },
-  { route: '#/dashboard', title: "You're all set! 🎉", body: "That's the whole app. Explore Gweno and start earning — everything is reachable from the menu." },
+  { route: '#/tasks', sel: '[data-route="earn"]', title: 'Tasks, earn money', body: 'This is where you do tasks and surveys to earn money into your wallet. Tap "Earn" in the menu to get here.' },
+  { route: '#/invest', sel: '[data-route="invest"]', title: 'Investments, grow your money', body: 'This is Investments. Buy into a plan (Starter, Growth or Premium), invest by shares, and earn fixed interest until it matures.' },
+  { route: '#/redeem', sel: '[data-route="redeem"]', title: 'Redeem, deposit & withdraw', body: 'This is Redeem. Deposit (top up) your wallet, or withdraw (cash out) to M-Pesa, card, PayPal or bank. There\'s a small minimum to withdraw.' },
+  { route: '#/settings', sel: '[data-route="settings"]', title: 'Settings, your name & profile', body: 'This is Settings. Change your name, password, payout details and picture here.' },
+  { route: '#/support', sel: '[data-route="support"]', title: 'Support, get help', body: 'This is Support. Read guides and message our team any time you need help.' },
+  { route: '#/dashboard', title: "You're all set! 🎉", body: "That's the whole app. Explore Gweno and start earning, everything is reachable from the menu." },
 ];
 let TOUR_I = 0;
 let TOUR_TIMER = null;
@@ -244,16 +278,16 @@ async function endTour(action) {
 }
 
 const NAV = [
-  ['dashboard', 'Dashboard', '🏠'],
-  ['stats', 'Stats', '📊'],
-  ['earn', 'Earn', '💰'],
-  ['invest', 'Investments', '📈'],
-  ['advertise', 'Advertise', '📣'],
-  ['learn', 'Learn', '🎓'],
-  ['redeem', 'Redeem', '🏦'],
-  ['settings', 'Settings', '⚙️'],
-  ['chat', 'Chat', '💬'],
-  ['support', 'Support', '🛟'],
+  ['dashboard', 'Dashboard', ICON.home],
+  ['stats', 'Stats', ICON.chart],
+  ['earn', 'Earn', ICON.money],
+  ['invest', 'Investments', ICON.invest],
+  ['advertise', 'Advertise', ICON.advertise],
+  ['learn', 'Learn', ICON.learn],
+  ['redeem', 'Redeem', ICON.bank],
+  ['settings', 'Settings', ICON.settings],
+  ['chat', 'Chat', ICON.chat],
+  ['support', 'Support', ICON.support],
 ];
 const TITLES = {
   dashboard: 'Dashboard', stats: 'Stats', earn: 'Earn', tasks: 'Tasks', submissions: 'My submissions',
@@ -276,7 +310,7 @@ function renderShell() {
       <div class="content">
         <header class="topbar">
           <div style="display:flex;align-items:center;gap:12px">
-            <button class="hamburger" id="ham">☰</button>
+            <button class="hamburger" id="ham" aria-label="Menu">${ICON.menu}</button>
             <h1 id="pageTitle">Dashboard</h1>
           </div>
           <div class="top-right" id="topRight"></div>
@@ -285,10 +319,13 @@ function renderShell() {
       </div>
     </div>
     <nav class="bottom-nav" id="bottomNav" aria-label="Primary">
-      <a class="bn-item" data-route="dashboard" href="#/dashboard"><span class="bn-ico">🏠</span><span class="bn-lbl">Dashboard</span></a>
-      <span class="bn-gap" aria-hidden="true"></span>
-      <a class="bn-item" data-route="earn" href="#/earn"><span class="bn-ico">💰</span><span class="bn-lbl">Earn</span></a>
-      <a class="bn-fab" data-route="redeem" href="#/redeem" aria-label="Redeem — deposit or withdraw"><span class="bn-fab-ico">🏦</span><span class="bn-fab-lbl">Redeem</span></a>
+      <a class="bn-item" data-route="dashboard" href="#/dashboard"><span class="bn-ico">${ICON.home}</span><span class="bn-lbl">Dashboard</span></a>
+      <a class="bn-item" data-route="tasks" href="#/tasks"><span class="bn-ico">${ICON.tasks}</span><span class="bn-lbl">Tasks</span></a>
+      <a class="bn-item" data-route="redeem" href="#/redeem"><span class="bn-ico">${ICON.bank}</span><span class="bn-lbl">Redeem</span></a>
+      <a class="bn-item" data-route="invest" href="#/invest"><span class="bn-ico">${ICON.invest}</span><span class="bn-lbl">Invest</span></a>
+      <a class="bn-item" data-route="invest" href="#/invest"><span class="bn-ico">${ICON.coins}</span><span class="bn-lbl">Investments</span></a>
+      <a class="bn-item" data-route="stats" href="#/stats"><span class="bn-ico">${ICON.chart}</span><span class="bn-lbl">Stats</span></a>
+      <a class="bn-item" data-route="advertise" href="#/advertise"><span class="bn-ico">${ICON.advertise}</span><span class="bn-lbl">Advertise</span></a>
     </nav>`;
 
   document.getElementById('signout').addEventListener('click', async () => { await api('/api/logout', {}); location.href = '/'; });
@@ -306,8 +343,8 @@ function updateTopbar() {
   const t = totals();
   document.getElementById('topRight').innerHTML = `
     <button class="theme-toggle" id="themeBtn" title="Toggle dark mode" aria-label="Toggle dark mode">${currentTheme() === 'dark' ? THEME_ICONS.sun : THEME_ICONS.moon}</button>
-    <span class="chip usd">💵 ${usd(t.usd)}</span>
-    <span class="chip kes">🪙 ${kes(t.kes)}</span>
+    <span class="chip usd">${ICON.money} ${usd(t.usd)}</span>
+    <span class="chip kes">${ICON.coins} ${kes(t.kes)}</span>
     <a href="#/profile" class="avatar-link" title="Profile">${avatarHTML(ME, 'avatar-sm')}</a>`;
   const tb = document.getElementById('themeBtn');
   if (tb) tb.addEventListener('click', toggleTheme);
@@ -318,9 +355,17 @@ async function refreshMe() {
   if (r.ok) { const j = await r.json(); ME = j.user; if (j.fx) FX = j.fx; updateTopbar(); }
 }
 
-function setActive(route) {
-  document.querySelectorAll('.nav-item').forEach((a) => a.classList.toggle('active', a.dataset.route === route));
-  document.querySelectorAll('.bottom-nav [data-route]').forEach((a) => a.classList.toggle('active', a.dataset.route === route));
+function setActive(routeKey) {
+  // Side nav groups tasks/submissions/referral under "Earn"; the bottom nav highlights the real page.
+  const sideKey = ['tasks', 'submissions', 'referral'].includes(routeKey) ? 'earn' : routeKey;
+  document.querySelectorAll('.nav-item').forEach((a) => a.classList.toggle('active', a.dataset.route === sideKey));
+  document.querySelectorAll('.bottom-nav [data-route]').forEach((a) => a.classList.toggle('active', a.dataset.route === routeKey));
+  // Keep the active item visible in the horizontally scrollable bottom bar.
+  const bn = document.querySelector('.bottom-nav');
+  const active = document.querySelector('.bottom-nav [data-route].active');
+  if (bn && active && bn.scrollWidth > bn.clientWidth) {
+    bn.scrollTo({ left: active.offsetLeft - bn.clientWidth / 2 + active.clientWidth / 2, behavior: 'smooth' });
+  }
 }
 
 // ---------- router ----------
@@ -330,7 +375,7 @@ function router() {
   const hash = location.hash.replace(/^#\/?/, '') || 'dashboard';
   const key = (hash.split('/')[0] || 'dashboard').split('?')[0]; // ignore any ?query (e.g. #/invest?paid=INV…)
   document.getElementById('pageTitle').textContent = TITLES[key] || 'Gweno';
-  setActive(['tasks', 'submissions', 'referral'].includes(key) ? 'earn' : key);
+  setActive(key);
   const map = {
     dashboard: pageDashboard, stats: pageStats, earn: pageEarn, tasks: pageTasks,
     submissions: pageSubmissions, referral: pageReferral, invest: pageInvest, advertise: pageAdvertise,
@@ -369,7 +414,7 @@ const loading = () => { view().innerHTML = skeletonView(); };
 // =====================================================================
 async function pageDashboard() {
   // Streaming UI (pattern 3): paint the full structure immediately (with tiny
-  // shimmers), then fill each section the moment its own request resolves — no
+  // shimmers), then fill each section the moment its own request resolves, no
   // waiting on Promise.all before anything shows.
   const skv = (w) => `<span class="sk sk-line" style="display:inline-block;width:${w};height:22px;vertical-align:middle"></span>`;
   view().innerHTML = `
@@ -398,7 +443,7 @@ async function pageDashboard() {
 
     <div class="panel">
       <h3>Your referral link</h3>
-      <p class="p-sub">Single-use — a new one is issued after each successful referral. Your friend must answer the welcome questions before your 5 KES is paid.</p>
+      <p class="p-sub">Single-use, a new one is issued after each successful referral. Your friend must answer the welcome questions before your 5 KES is paid.</p>
       <div class="copybox">
         <input id="refLink" readonly value="" placeholder="Loading your link…" />
         <button class="btn btn-primary auto" id="copyRef">Copy</button>
@@ -412,7 +457,7 @@ async function pageDashboard() {
       <div id="dFeed"><div class="sk sk-row"></div><div class="sk sk-row"></div><div class="sk sk-row"></div></div>
     </div>`;
 
-  // Balance card — driven by in-memory ME totals; press-and-hold switches currency.
+  // Balance card, driven by in-memory ME totals; press-and-hold switches currency.
   let showUsd = true;
   const renderBal = () => {
     const bv = document.getElementById('balValue'); if (!bv) return;
@@ -447,7 +492,7 @@ async function pageDashboard() {
         <div class="t-ico">${esc((f.username || '?').slice(0, 2).toUpperCase())}</div>
         <div class="t-main"><h4>${esc(f.username)}${f.country ? ` · ${esc(f.country)}` : ''}</h4><p>completed “${esc(f.task)}”</p></div>
         <div class="t-reward">+${usd(f.reward)}</div>
-      </div>`).join('') : `<p class="p-sub">No completions yet — be the first to finish a task!</p>`;
+      </div>`).join('') : `<p class="p-sub">No completions yet, be the first to finish a task!</p>`;
   };
 
   // Stale-while-revalidate (pattern 4): on repeat visits the cached values paint
@@ -535,7 +580,7 @@ async function pageEarn() {
         <thead><tr><th>Source</th><th class="num">USD</th><th class="num">KES</th><th>Note</th></tr></thead>
         <tbody>${s.map((x) => {
           const kesVal = Number(x.kes) || 0;
-          // Show the true value in USD too — any KES earnings convert live at the current rate.
+          // Show the true value in USD too, any KES earnings convert live at the current rate.
           const usdVal = (Number(x.usd) || 0) + kesVal / FX;
           const note = kesVal ? `${x.note ? esc(x.note) + ' · ' : ''}${kes(kesVal)} ≈ ${usd(kesVal / FX)}` : esc(x.note || '');
           return `<tr><td>${esc(x.label)}</td><td class="num">${usd(usdVal)}</td><td class="num">${kesVal ? kes(kesVal) : '—'}</td><td class="p-sub">${note}</td></tr>`;
@@ -599,7 +644,7 @@ async function pageTasks() {
   loading();
   // Returning from a Premium card payment? (Premium is granted server-side only after payment verifies.)
   const pq = new URLSearchParams(location.hash.split('?')[1] || '');
-  if (pq.get('premium')) { toast('Payment confirmed — Premium is now active!'); await refreshMe(); }
+  if (pq.get('premium')) { toast('Payment confirmed, Premium is now active!'); await refreshMe(); }
   else if (pq.get('premfail')) toast('Payment was not completed. Premium stays locked until it is confirmed.', 'error');
   if (pq.get('premium') || pq.get('premfail')) history.replaceState(null, '', `${location.pathname}${location.search}#/tasks`);
 
@@ -613,7 +658,7 @@ async function pageTasks() {
   const banner = data.premium ? `
     <div class="panel premium-active">
       <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px">
-        <div><h3 style="margin:0">★ Premium active</h3><p class="p-sub" style="margin:2px 0 0">You can work on all premium tasks — up to $4 each${sub.expires ? ` · renews ${new Date(sub.expires).toLocaleDateString()}` : ''}.</p></div>
+        <div><h3 style="margin:0">★ Premium active</h3><p class="p-sub" style="margin:2px 0 0">You can work on all premium tasks, up to $4 each${sub.expires ? ` · renews ${new Date(sub.expires).toLocaleDateString()}` : ''}.</p></div>
         <span class="st approved">Premium</span>
       </div>
     </div>` : `
@@ -621,7 +666,7 @@ async function pageTasks() {
       <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:14px">
         <div>
           <h3 style="margin:0">★ Unlock Premium tasks</h3>
-          <p class="p-sub" style="margin:4px 0 0">Earn <b>up to $4</b> per task — ${usd(data.premiumMoneyUSD)} waiting. The 4 free basic tasks stay free.</p>
+          <p class="p-sub" style="margin:4px 0 0">Earn <b>up to $4</b> per task, ${usd(data.premiumMoneyUSD)} waiting. The 4 free basic tasks stay free.</p>
         </div>
         <div style="text-align:right">
           <div style="font-size:22px;font-weight:800">$${sub.priceUSD} <span class="p-sub" style="font-size:13px">≈ ${kes(sub.priceKES)}/mo</span></div>
@@ -681,7 +726,7 @@ function openSubscribe(sub) {
   const bg = openModal(`
     <button class="close">×</button>
     <h3>★ Go Premium</h3>
-    <p class="p-sub">Unlock all $1–$4 tasks for 30 days. Choose how you'd like to pay — anyone can subscribe.</p>
+    <p class="p-sub">Unlock all $1–$4 tasks for 30 days. Choose how you'd like to pay, anyone can subscribe.</p>
     <div class="stat brand" style="margin:12px 0"><div class="label">Subscription price</div><div class="value">$${sub.priceUSD} <span class="p-sub" style="font-size:14px">≈ ${kes(sub.priceKES)}</span></div></div>
     <div id="subMethods"></div>
     <form id="subForm" style="margin-top:12px">
@@ -692,7 +737,7 @@ function openSubscribe(sub) {
   const subFields = bg.querySelector('#subFields');
   const getSubMethod = renderMethodCards(bg.querySelector('#subMethods'), SUBSCRIBE_METHODS, (m) => {
     if (m === 'M-Pesa') subFields.innerHTML = `<div class="field"><label>M-Pesa phone number</label><input id="subPhone" placeholder="e.g. +254 712 345 678"></div><p class="p-sub">You'll get an STK PIN prompt to pay ${kes(sub.priceKES)}. Premium unlocks once the payment is confirmed.</p>`;
-    else subFields.innerHTML = `<p class="p-sub">You'll be taken to a secure ${m === 'Card' ? 'card' : 'Paystack'} page to pay. <b>Premium unlocks only after the payment is confirmed</b> — not before.</p>`;
+    else subFields.innerHTML = `<p class="p-sub">You'll be taken to a secure ${m === 'Card' ? 'card' : 'Paystack'} page to pay. <b>Premium unlocks only after the payment is confirmed</b>, not before.</p>`;
   });
 
   bg.querySelector('#subForm').addEventListener('submit', async (e) => {
@@ -721,6 +766,74 @@ function openSubscribe(sub) {
   });
 }
 
+// Per-type proof field + a short hint describing exactly what's expected.
+function proofFieldFor(t) {
+  const cfg = {
+    email:  { label: 'Your email address', kind: 'input', type: 'email', ph: 'name@example.com', hint: 'Enter a valid email address.' },
+    url:    { label: 'The link', kind: 'input', type: 'url', ph: 'https://…', hint: 'Paste a valid link (starts with http:// or https://).' },
+    photo:  { label: 'Direct image link', kind: 'input', type: 'url', ph: 'https://…/photo.jpg', hint: 'Paste a direct link to your uploaded image.' },
+    social: { label: 'Profile / post link or @username', kind: 'input', type: 'text', ph: '@yourname or https://…', hint: 'Your @username or a profile/post link.' },
+    code:   { label: 'Confirmation code', kind: 'input', type: 'text', ph: 'Enter the exact code', hint: 'Type the exact confirmation code from the steps.' },
+    data:   { label: 'Your rows (one per line)', kind: 'textarea', ph: 'One row per line, e.g. Jane Doe, +254712345678, jane@example.com', hint: `At least ${t.minLines || 3} rows, one per line, in the format shown.` },
+    match:  { label: 'Paste your typed text', kind: 'textarea', ph: 'Type the passage exactly as shown above', hint: 'Must closely match the passage above.' },
+    text:   { label: 'Your answer', kind: 'textarea', ph: 'Paste your completed work here', hint: `At least ${t.minWords || 8} words of your own writing.` },
+  }[t.proofType] || {};
+  const label = cfg.label || 'Proof of completion';
+  const field = cfg.kind === 'input'
+    ? `<input id="proof" type="${cfg.type || 'text'}" placeholder="${esc(cfg.ph || '')}">`
+    : `<textarea id="proof" placeholder="${esc(cfg.ph || '')}"></textarea>`;
+  return `<div class="field"><label>${esc(label)} <span class="p-sub">(required)</span></label>${field}
+    ${cfg.hint ? `<p class="hint">${esc(cfg.hint)}</p>` : ''}</div>`;
+}
+
+// Client-side mirror of the server's validateProof(), instant feedback before submit.
+function validateProofClient(t, raw) {
+  const proof = String(raw == null ? '' : raw).trim();
+  if (!proof) return 'Please enter your proof of completion.';
+  const isUrl = (s) => { try { const u = new URL(s.trim()); return u.protocol === 'http:' || u.protocol === 'https:'; } catch (_) { return false; } };
+  const junk = (s) => {
+    const x = s.trim();
+    if ((x.match(/[a-zA-Z]/g) || []).length < 3) return true;
+    if (/^(.)\1*$/.test(x.replace(/\s/g, ''))) return true;
+    return new Set(x.replace(/\s/g, '').toLowerCase()).size < 4;
+  };
+  switch (t.proofType) {
+    case 'email': return /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(proof) ? '' : 'Enter a valid email address, e.g. name@example.com.';
+    case 'url': return isUrl(proof) ? '' : 'Enter a valid link that starts with http:// or https://.';
+    case 'photo':
+      if (!isUrl(proof)) return 'Paste a valid image link that starts with http:// or https://.';
+      return (/\.(png|jpe?g|gif|webp|heic|bmp)(\?|#|$)/i.test(proof) || /(imgur|ibb\.co|imgbb|postimg|drive\.google|photos\.app\.goo|cloudinary|dropbox|githubusercontent)/i.test(proof))
+        ? '' : 'That does not look like an uploaded image link. Upload your photo and paste the direct image link.';
+    case 'social':
+      return (/^@?[a-z0-9_.]{3,30}$/i.test(proof) || isUrl(proof)) ? '' : 'Enter your profile/post link, or your @username.';
+    case 'code':
+      return (!t.code || proof.toLowerCase() === String(t.code).toLowerCase()) ? '' : 'That confirmation code is not correct. Follow the steps and enter the exact code shown.';
+    case 'data': {
+      const lines = proof.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+      const need = t.minLines || 3;
+      if (lines.length < need) return `Enter at least ${need} rows, one per line.`;
+      return lines.filter((l) => /[,:]/.test(l) && /[a-z0-9]/i.test(l)).length >= need
+        ? '' : 'Each row must use the requested format (values separated by a comma or colon).';
+    }
+    case 'match': {
+      if (junk(proof)) return 'Please paste your full typed text.';
+      const norm = (s) => s.toLowerCase().replace(/[^\w\s]/g, ' ').replace(/\s+/g, ' ').trim();
+      const a = norm(proof), b = norm(t.expected || '');
+      // quick similarity: shared-length ratio via Levenshtein
+      const lev = (x, y) => { const m = x.length, n = y.length; if (!m) return n; if (!n) return m; let p = Array.from({ length: n + 1 }, (_, i) => i); for (let i = 1; i <= m; i++) { const c = [i]; for (let j = 1; j <= n; j++) c[j] = Math.min(p[j] + 1, c[j - 1] + 1, p[j - 1] + (x[i - 1] === y[j - 1] ? 0 : 1)); p = c; } return p[n]; };
+      const sim = (!a || !b) ? 0 : 1 - lev(a, b) / Math.max(a.length, b.length);
+      return sim >= (t.minSimilarity || 0.8) ? '' : 'Your text does not closely match the passage. Please type it exactly as shown.';
+    }
+    default: {
+      if (junk(proof)) return 'Please enter a real answer, not random characters.';
+      const minW = t.minWords || 8, minC = t.minChars || 30;
+      if (proof.split(/\s+/).filter(Boolean).length < minW) return `Please write at least ${minW} words.`;
+      if (proof.length < minC) return `Your answer looks too short. Please write at least ${minC} characters.`;
+      return '';
+    }
+  }
+}
+
 function openTask(t) {
   const bg = openModal(`
     <button class="close">×</button>
@@ -729,16 +842,15 @@ function openTask(t) {
     <h4 style="margin:16px 0 6px">How to complete this task</h4>
     <ol class="instr">${t.instructions.map((s) => `<li>${esc(s)}</li>`).join('')}</ol>
     <form id="taskForm">
-      <div class="field">
-        <label>${t.requiresProof ? 'Proof of completion (required)' : 'Proof (optional)'}</label>
-        <textarea id="proof" placeholder="${esc(t.requiresProof ? 'Enter the code / answer / link that proves you finished.' : 'Add any note for the reviewer.')}"></textarea>
-      </div>
-      <p class="p-sub">⏱ Submissions are usually reviewed within 5 hours.</p>
+      ${proofFieldFor(t)}
+      <p class="p-sub">Submissions are usually reviewed within 5 hours.</p>
       <button class="btn btn-primary" type="submit">Submit for review</button>
     </form>`);
   bg.querySelector('#taskForm').addEventListener('submit', async (e) => {
     e.preventDefault();
     const proof = bg.querySelector('#proof').value;
+    const err = validateProofClient(t, proof);
+    if (err) return toast(err, 'error');
     const { ok, data } = await api('/api/tasks/' + t.id + '/submit', { proof });
     if (ok) { toast(data.message); bg.remove(); pageTasks(); }
     else toast(data.error || 'Could not submit', 'error');
@@ -753,7 +865,7 @@ async function pageSubmissions() {
   const { data } = await apiGet('/api/submissions');
   const subs = data.submissions || [];
   view().innerHTML = `
-    <p class="page-sub">A summary of your tasks — approved, rejected or still pending review.</p>
+    <p class="page-sub">A summary of your tasks, approved, rejected or still pending review.</p>
     <div class="panel">
       <p class="pill-note">ℹ Proof must be submitted within 2 days. If a task is rejected, you have 2 days to open a dispute.</p>
       <table class="table" style="margin-top:14px">
@@ -817,7 +929,7 @@ async function pageReferral() {
 
       <div class="panel" style="text-align:center">
         <h3>Your QR code</h3>
-        <p class="p-sub">Print it on a flyer or show it in person — it opens your referral link.</p>
+        <p class="p-sub">Print it on a flyer or show it in person, it opens your referral link.</p>
         <div class="qr" style="margin:0 auto"><img src="${esc(data.qr)}" alt="Referral QR code"></div>
         <a class="btn btn-ghost auto" style="margin-top:14px;display:inline-flex" href="${esc(data.qr)}" download="gweno-referral-qr.png" target="_blank">Download QR</a>
       </div>
@@ -838,7 +950,7 @@ async function pageReferral() {
 //  INVESTMENTS
 // =====================================================================
 // Interest matches the server (investments.js): simple, pro-rated over a 365-day
-// year — principal * rate% * days/365. Investments are funded from the KES wallet;
+// year, principal * rate% * days/365. Investments are funded from the KES wallet;
 // principal + interest is credited back to the wallet automatically at maturity.
 const calcInterest = (principal, rate, days) =>
   Math.round((Number(principal) || 0) * ((Number(rate) || 0) / 100) * ((Number(days) || 0) / 365) * 100) / 100;
@@ -870,12 +982,12 @@ async function pageInvest() {
 
   // Coming back from a hosted-checkout redirect (?paid / ?payfail in the hash).
   const rq = new URLSearchParams(location.hash.split('?')[1] || '');
-  if (rq.get('paid')) toast('Payment confirmed — your investment is now active!');
+  if (rq.get('paid')) toast('Payment confirmed, your investment is now active!');
   else if (rq.get('payfail')) toast('Payment was not completed. You can try again.', 'error');
   if (rq.get('paid') || rq.get('payfail')) history.replaceState(null, '', `${location.pathname}${location.search}#/invest`);
 
   view().innerHTML = `
-    <p class="page-sub">Grow your money in USD${hasLocal ? ` — amounts also shown in ${esc(local.code)}` : ''}. Pick a plan, pay with your preferred method, and earn fixed interest — paid to your USD wallet automatically at maturity.</p>
+    <p class="page-sub">Grow your money in USD${hasLocal ? `, amounts also shown in ${esc(local.code)}` : ''}. Pick a plan, pay with your preferred method, and earn fixed interest, paid to your USD wallet automatically at maturity.</p>
 
     <div class="grid g4">
       <div class="stat brand"><div class="label">Total invested (active)</div><div class="value">${usd(sum.totalInvested)}</div></div>
@@ -953,15 +1065,18 @@ async function pageInvest() {
 
     <div class="panel">
       <h3>Investment calculator</h3>
-      <p class="p-sub">Estimate returns for any amount, rate and term — updates as you type.</p>
-      <div class="grid g3">
-        <div class="field"><label>Amount (USD)</label><input id="calcAmt" type="number" min="0" step="1" value="100"></div>
+      <p class="p-sub">Estimate returns for any country, amount, rate and term. Results update as you type, in the currency of the country you choose.</p>
+      <div class="grid g2">
+        <div class="field"><label>Country</label><select id="calcCountry"></select></div>
+        <div class="field"><label>Amount (<span id="calcCur">select a country</span>)</label><input id="calcAmt" type="number" min="0" step="1" value="1000"></div>
+      </div>
+      <div class="grid g2">
         <div class="field"><label>Interest rate (% p.a.)</label><input id="calcRate" type="number" min="0" step="0.1" value="15"></div>
         <div class="field"><label>Duration (days)</label><input id="calcDays" type="number" min="1" step="1" value="180"></div>
       </div>
       <div class="grid g2" style="margin-top:6px">
-        <div class="stat"><div class="label">Interest</div><div class="value" id="calcInt">—</div></div>
-        <div class="stat brand"><div class="label">Total</div><div class="value" id="calcTot">—</div></div>
+        <div class="stat"><div class="label">Interest earned</div><div class="value" id="calcInt">—</div></div>
+        <div class="stat brand"><div class="label">Total return</div><div class="value" id="calcTot">—</div></div>
       </div>
     </div>
 
@@ -1023,7 +1138,7 @@ async function pageInvest() {
       ? 'Choose a payment method to continue.'
       : (methodReady(method)
           ? `Pay ${bothT(amt)} via ${method} to lock in ${p.days} days at ${p.rate}% p.a.`
-          : `${method} isn't set up yet — add its keys to .env, or pick another method.`);
+          : `${method} isn't set up yet, add its keys to .env, or pick another method.`);
     retEl.style.display = '';
     confirmEl.disabled = !method;
   }
@@ -1050,14 +1165,14 @@ async function pageInvest() {
     // Card / PayPal / Paystack: go to the provider's hosted checkout.
     if (d.mode === 'redirect' && d.url) { toast(d.message || 'Redirecting to pay…'); location.href = d.url; return; }
 
-    // M-Pesa: STK prompt on the phone — poll until it's paid.
+    // M-Pesa: STK prompt on the phone, poll until it's paid.
     if (d.mode === 'stk') {
       toast(d.message || 'Check your phone for the M-Pesa prompt, then enter your PIN.');
       let tries = 0;
       const poll = setInterval(async () => {
         tries += 1;
         const s = await apiGet('/api/investments/' + d.id + '/status');
-        if (s.ok && s.data.status === 'active') { clearInterval(poll); toast('Payment received — your investment is active!'); INVEST_PLAN = null; await refreshMe(); pageInvest(); }
+        if (s.ok && s.data.status === 'active') { clearInterval(poll); toast('Payment received, your investment is active!'); INVEST_PLAN = null; await refreshMe(); pageInvest(); }
         else if ((s.ok && s.data.status === 'failed') || tries >= 20) { clearInterval(poll); if (s.data && s.data.status === 'failed') toast('Payment was not completed.', 'error'); confirmEl.disabled = false; }
       }, 3000);
       return;
@@ -1072,13 +1187,21 @@ async function pageInvest() {
     amtEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
   }));
 
-  // ---- Live calculator ----
+  // ---- Live calculator (choose any country; results in that country's currency) ----
+  const cCountry = document.getElementById('calcCountry');
+  const cCur = document.getElementById('calcCur');
   const cAmt = document.getElementById('calcAmt'), cRate = document.getElementById('calcRate'), cDays = document.getElementById('calcDays');
+  if (window.populateCountries) populateCountries(cCountry, ''); // no default, the user picks a country
   function runCalc() {
+    const currency = (window.currencyForCountry && cCountry.value) ? currencyForCountry(cCountry.value) : null;
+    cCur.textContent = currency ? currency.code : 'select a country';
+    const intEl = document.getElementById('calcInt'), totEl = document.getElementById('calcTot');
+    if (!currency) { intEl.textContent = '—'; totEl.textContent = '—'; return; }
     const interest = calcInterest(cAmt.value, cRate.value, cDays.value);
-    document.getElementById('calcInt').textContent = bothT(interest);
-    document.getElementById('calcTot').textContent = bothT((Number(cAmt.value) || 0) + interest);
+    intEl.textContent = formatCurrency(interest, currency);
+    totEl.textContent = formatCurrency((Number(cAmt.value) || 0) + interest, currency);
   }
+  cCountry.addEventListener('change', runCalc);
   [cAmt, cRate, cDays].forEach((el) => el.addEventListener('input', runCalc));
   runCalc();
 
@@ -1125,10 +1248,10 @@ async function pageAdvertise() {
       <div class="panel">
         <h3>How it works</h3>
         <p class="p-sub">Four simple steps from creating a campaign to paying for results.</p>
-        <div class="check"><div class="box">1</div><span><b>Create &amp; set a budget</b> — add your title, link and how much you want to spend.</span></div>
-        <div class="check"><div class="box">2</div><span><b>We review your campaign</b> — our team checks it before it goes live to members.</span></div>
-        <div class="check"><div class="box">3</div><span><b>Members complete it</b> — Gweno members do your task and submit their proof.</span></div>
-        <div class="check"><div class="box">4</div><span><b>You approve results &amp; pay</b> — approve the good submissions; only pay for what you accept.</span></div>
+        <div class="check"><div class="box">1</div><span><b>Create &amp; set a budget</b>, add your title, link and how much you want to spend.</span></div>
+        <div class="check"><div class="box">2</div><span><b>We review your campaign</b>, our team checks it before it goes live to members.</span></div>
+        <div class="check"><div class="box">3</div><span><b>Members complete it</b>, Gweno members do your task and submit their proof.</span></div>
+        <div class="check"><div class="box">4</div><span><b>You approve results &amp; pay</b>, approve the good submissions; only pay for what you accept.</span></div>
       </div>
     </div>
 
@@ -1160,7 +1283,7 @@ async function pageLearn() {
     [ICON.tasks, 'How tasks work', 'Pick a task, follow the instructions exactly, and submit the proof requested. Accurate proof gets approved faster.'],
     [ICON.clock, 'Approvals', 'Most submissions are reviewed within 5 hours. Approved rewards go straight to your USD balance.'],
     [ICON.gift, 'Referrals', 'Each referral link works once and pays 5 KES. Grab a fresh link after every successful invite.'],
-    [ICON.ban, 'Avoid rejections', "Don't submit fake proof or repeat tasks — rejected work can't be paid and repeated abuse risks your account."],
+    [ICON.ban, 'Avoid rejections', "Don't submit fake proof or repeat tasks, rejected work can't be paid and repeated abuse risks your account."],
     [ICON.bank, 'Getting paid', 'Save your payout details in Settings, then withdraw to M-Pesa, PayPal or your bank once you hit the minimum.'],
     [ICON.shield, 'Staying safe', 'Never share your password. Gweno will never ask for it by email or chat.'],
   ];
@@ -1207,21 +1330,21 @@ async function pageRedeem() {
 
   // Coming back from a card / Paystack checkout redirect (?deposited / ?depfail).
   const rq = new URLSearchParams(location.hash.split('?')[1] || '');
-  if (rq.get('deposited')) { toast('Deposit received — your wallet has been credited!'); await refreshMe(); }
+  if (rq.get('deposited')) { toast('Deposit received, your wallet has been credited!'); await refreshMe(); }
   else if (rq.get('depfail')) toast('Payment was not completed. You can try again.', 'error');
   if (rq.get('deposited') || rq.get('depfail')) history.replaceState(null, '', `${location.pathname}${location.search}#/redeem`);
 
   // The wallet is one balance shown in both currencies, kept in sync via the live FX rate.
   const bal = totals();
   view().innerHTML = `
-    <p class="page-sub">Your wallet — deposit and withdraw worldwide.</p>
+    <p class="page-sub">Your wallet, deposit and withdraw worldwide.</p>
     <div class="grid g2">
       <div class="stat brand"><div class="label">KES balance</div><div class="value">${kes(bal.kes)}</div></div>
       <div class="stat"><div class="label">USD balance</div><div class="value">${usd(bal.usd)}</div></div>
     </div>
 
     <div class="panel">
-      <h3>Deposit — top up your wallet</h3>
+      <h3>Deposit to top up your wallet</h3>
       <p class="p-sub">Choose how you'd like to add money. Available worldwide.</p>
       <div id="depMethods"></div>
       <form id="dForm" style="margin-top:14px">
@@ -1232,8 +1355,8 @@ async function pageRedeem() {
     </div>
 
     <div class="panel">
-      <h3>Withdraw — cash out</h3>
-      <p class="p-sub"><b>M-Pesa</b> is entered and paid in <b>KES</b>; PayPal and bank in <b>USD</b>. Every withdrawal is reviewed and verified by our team before it's sent (usually within 24 hours).</p>
+      <h3>Withdraw to cash out</h3>
+      <p class="p-sub"><b>M-Pesa</b> is entered and paid in <b>KES</b>; PayPal and bank in <b>USD</b>. Withdrawals are usually verified by our team within 2 hours before funds are sent.</p>
       <div id="wdMethods"></div>
       <form id="rForm" style="margin-top:14px">
         <div id="wdFields"><p class="p-sub">Select a method above to continue.</p></div>
@@ -1257,7 +1380,7 @@ async function pageRedeem() {
     if (m === 'Card' || m === 'Paystack') return `${amtUSD}<p class="p-sub">You'll be taken to a secure ${m === 'Card' ? 'card payment' : 'Paystack'} page to enter your card and pay. Your wallet is credited automatically once the payment succeeds.</p>`;
     if (m === 'PayPal') return `<div class="grid g2">${amtUSD}<div class="field"><label>PayPal email</label><input id="dEmail" type="email" placeholder="you@example.com"></div></div>`;
     if (m === 'Bank account') {
-      if (!bank) return `${amtUSD}<p class="p-sub">Bank transfer isn't set up yet — please use another method for now.</p>`;
+      if (!bank) return `${amtUSD}<p class="p-sub">Bank transfer isn't set up yet, please use another method for now.</p>`;
       const row = (label, val) => (val ? `<div class="row"><span>${esc(label)}</span><b>${esc(val)}</b></div>` : '');
       return `
         <p class="p-sub" style="margin:0 0 6px"><b>How it works:</b> send your transfer to the account below, enter the amount and your bank reference, then click Deposit. Your wallet is credited once we confirm the payment (usually within 24 hours).</p>
@@ -1286,8 +1409,10 @@ async function pageRedeem() {
     if (!(amount > 0)) return toast('Enter a valid amount', 'error');
     const btn = document.getElementById('dBtn');
     if (m === 'M-Pesa') {
+      const phone = document.getElementById('dPhone').value;
+      if (!/^(?:254|0)\d{9}$/.test(String(phone).replace(/\s+/g, ''))) return toast('Enter a valid M-Pesa number (e.g. 0712345678)', 'error');
       btn.disabled = true;
-      const { ok, data: d } = await api('/api/deposit', { amount, phone: document.getElementById('dPhone').value });
+      const { ok, data: d } = await api('/api/deposit', { amount, phone });
       if (!ok) { btn.disabled = false; return toast(d.error || 'Could not start deposit', 'error'); }
       toast(d.message);
       let tries = 0;
@@ -1345,10 +1470,10 @@ async function pageRedeem() {
 
   const getWdMethod = renderMethodCards(document.getElementById('wdMethods'), WITHDRAW_METHODS, (m) => {
     wdFields.innerHTML = wdForm(m);
-    if (m === 'Bank account') { loadBanks(); minHint.textContent = 'Paid straight to your bank account — real payout, usually arrives within minutes.'; }
+    if (m === 'Bank account') { loadBanks(); minHint.textContent = 'Paid straight to your bank account, real payout, usually arrives within minutes.'; }
     else minHint.textContent = m === 'M-Pesa'
-      ? 'Entered in KES and sent straight to your M-Pesa — real payout, usually arrives within minutes.'
-      : `Entered in USD and paid to your ${m}. We verify every withdrawal before sending it (usually within 24 hours).`;
+      ? 'Entered in KES and sent straight to your M-Pesa, real payout, usually arrives within minutes.'
+      : `Entered in USD and paid to your ${m}. Withdrawals are usually verified by our team within 2 hours before funds are sent.`;
   });
 
   // Poll a submitted withdrawal for its real status (Processing → Successful/Failed).
@@ -1361,8 +1486,8 @@ async function pageRedeem() {
       tries += 1;
       const s = await apiGet('/api/redemptions/' + rec.id + '/status');
       const st = s.data && s.data.status;
-      if (st && /paid|success/i.test(st)) { clearInterval(poll); toast('Withdrawal successful — money sent ✓'); await refreshMe(); pageRedeem(); }
-      else if (st && /failed/i.test(st)) { clearInterval(poll); toast('Withdrawal failed — your balance was refunded.', 'error'); await refreshMe(); pageRedeem(); }
+      if (st && /paid|success/i.test(st)) { clearInterval(poll); toast('Withdrawal successful, money sent ✓'); await refreshMe(); pageRedeem(); }
+      else if (st && /failed/i.test(st)) { clearInterval(poll); toast('Withdrawal failed, your balance was refunded.', 'error'); await refreshMe(); pageRedeem(); }
       else if (tries >= 15) { clearInterval(poll); await refreshMe(); pageRedeem(); }
     }, 3000);
   }
@@ -1373,7 +1498,8 @@ async function pageRedeem() {
     const m = getWdMethod();
     if (!m) return toast('Choose a payout method', 'error');
     const amount = Number((document.getElementById('rAmt') || {}).value || 0);
-    // One idempotency key per submit — prevents duplicate payouts on retry/double-click.
+    if (!(amount > 0)) return toast('Enter a valid amount to withdraw', 'error');
+    // One idempotency key per submit, prevents duplicate payouts on retry/double-click.
     const idempotencyKey = 'wd' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
     const body = { method: m, idempotencyKey, amount, currency: m === 'M-Pesa' ? 'KES' : 'USD' };
 
@@ -1411,7 +1537,7 @@ function pageSettings() {
 }
 const sPanel = () => document.getElementById('settingsPanel');
 
-// Profile page — opened from the top-right avatar. Personal details + the Danger Zone.
+// Profile page, opened from the top-right avatar. Personal details + the Danger Zone.
 function pageProfile() {
   const p = ME.profile || {};
   view().innerHTML = `
@@ -1539,7 +1665,7 @@ function setNotifications() {
       ME.notifications = (res.data && res.data.notifications) || next;
       toast((res.data && res.data.message) || 'Notification preferences saved.');
     } catch (_) {
-      toast('Could not save preferences — changes reverted.', 'error');
+      toast('Could not save preferences, changes reverted.', 'error');
     }
   });
 }
@@ -1607,7 +1733,7 @@ function setPayment() {
     <form id="payForm" style="margin-top:14px"><div id="payFields"><p class="p-sub">Select a method above to add its details.</p></div>
       <button class="btn btn-primary" type="submit">Save payment method</button>
     </form>
-    <p class="p-sub" style="margin-top:10px">🔒 For your security we only store a masked reference — full card numbers, CVC and secret keys are never saved.</p>
+    <p class="p-sub" style="margin-top:10px">🔒 For your security we only store a masked reference, full card numbers, CVC and secret keys are never saved.</p>
   </div>`;
 
   const payFields = sPanel().querySelector('#payFields');
@@ -1670,12 +1796,17 @@ function pageSupport() {
       <div class="panel"><h3>Other ways to reach us</h3>
         <p class="p-sub">Email: <a href="mailto:support@gweno.app">support@gweno.app</a></p>
         <p class="p-sub">We usually reply within 24 hours on business days.</p>
-        <p class="p-sub">Signed in as <b>${esc(ME.email)}</b> — we'll reply to this address.</p>
+        <p class="p-sub">Signed in as <b>${esc(ME.email)}</b>, we'll reply to this address.</p>
       </div>
     </div>`;
   document.getElementById('f').addEventListener('submit', async (e) => {
     e.preventDefault();
-    const { ok, data } = await api('/api/support', { subject: document.getElementById('subject').value, message: document.getElementById('message').value });
+    const subject = document.getElementById('subject').value.trim();
+    const message = document.getElementById('message').value.trim();
+    if (!subject || !message) return toast('Please enter a subject and a message', 'error');
+    if (subject.length > 150) return toast('Subject is too long (max 150 characters)', 'error');
+    if (message.length > 4000) return toast('Message is too long (max 4000 characters)', 'error');
+    const { ok, data } = await api('/api/support', { subject, message });
     if (ok) { toast(data.message); document.getElementById('f').reset(); } else toast(data.error, 'error');
   });
 }

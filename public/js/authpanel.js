@@ -3,22 +3,7 @@
   const root = document.getElementById('auth-root');
   if (!root) return;
 
-  // Client-side validators (mirror the server). Clear messages, no malformed submits.
-  const validEmail = (e) => {
-    const s = String(e || '').trim();
-    if (!s || s.length > 254 || /\s/.test(s) || s.includes('..')) return false;
-    const at = s.lastIndexOf('@'); if (at < 1) return false;
-    const local = s.slice(0, at), domain = s.slice(at + 1);
-    if (local.length > 64 || local.startsWith('.') || local.endsWith('.')) return false;
-    if (!/^[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+$/.test(local)) return false;
-    if (domain.startsWith('.') || domain.endsWith('.') || domain.startsWith('-')) return false;
-    return /^[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,24}$/.test(domain);
-  };
-  const passwordIssue = (pw) => {
-    if (typeof pw !== 'string' || pw.length < 8) return 'Password must be at least 8 characters.';
-    if (!/[a-zA-Z]/.test(pw) || !/[0-9]/.test(pw)) return 'Password must include a letter and a number.';
-    return null;
-  };
+  // validEmail + passwordIssue come from auth.js (shared with forgot/reset pages).
   const usernameIssue = (u) => (/^[a-zA-Z0-9]{6,10}$/.test(u || '') ? null : 'Username must be 6–10 letters or numbers.');
 
   const socialRow = () => `<div class="ap-socials">${['google', 'facebook']
@@ -40,6 +25,7 @@
           <input name="username" type="text" placeholder="Username (6–10 letters/numbers)" autocomplete="username" minlength="6" maxlength="10" />
           <div class="pw-wrap"><input name="password" type="password" placeholder="Password" autocomplete="new-password" id="suPassword" /><button type="button" class="pw-toggle" data-pwtoggle="suPassword" aria-label="Show password"></button></div>
           <div class="pw-wrap"><input name="confirm" type="password" placeholder="Confirm password" autocomplete="new-password" id="suConfirm" /><button type="button" class="pw-toggle" data-pwtoggle="suConfirm" aria-label="Show password"></button></div>
+          <div id="suCaptcha" class="ap-captcha"></div>
           <button class="ap-btn" type="submit" id="suBtn">Sign Up</button>
           <p class="ap-switch">Already have an account? <a data-goto="signin">Sign in</a></p>
         </form>
@@ -55,6 +41,7 @@
           <div class="pw-wrap"><input name="password" type="password" placeholder="Password" autocomplete="current-password" id="siPassword" /><button type="button" class="pw-toggle" data-pwtoggle="siPassword" aria-label="Show password"></button></div>
           <a class="ap-forgot" href="/forgot.html">Forgot your password?</a>
           <button class="ap-btn" type="submit" id="siBtn">Sign In</button>
+          <button class="ap-link-btn" type="button" id="magicBtn">Email me a sign-in link instead</button>
           <p class="ap-switch">No account? <a data-goto="signup">Sign up</a></p>
         </form>
       </div>
@@ -111,6 +98,7 @@
       google_unavailable: 'Google sign-in is not available yet.',
       facebook_unavailable: 'Facebook sign-in is not available yet.',
       apple_unavailable: 'Apple sign-in is not available yet.',
+      magic_invalid: 'That sign-in link is invalid or has expired. Please request a new one.',
     };
     showMsg(document.getElementById('msgIn'), map[oerr] || 'Sign-in could not be completed. Please try again.', 'error');
   }
@@ -129,9 +117,44 @@
     else { showMsg(msgIn, data.error || 'Could not sign in.', 'error'); siBtn.disabled = false; }
   });
 
+  // ---- Passwordless sign-in: email a one-time magic link ----
+  const magicBtn = document.getElementById('magicBtn');
+  magicBtn.addEventListener('click', async () => {
+    clearMsg(msgIn);
+    if (!validEmail(formIn.email.value)) return showMsg(msgIn, "Enter your email above and we'll send you a sign-in link.", 'error');
+    magicBtn.disabled = true;
+    const { ok, data } = await api('/api/auth/magic/start', { email: formIn.email.value.trim() });
+    showMsg(msgIn, data.message || data.error || 'If that email is registered, a sign-in link is on its way.', ok ? 'ok' : 'error');
+    magicBtn.disabled = false;
+  });
+
   const formUp = document.getElementById('formUp');
   const msgUp = document.getElementById('msgUp');
   const suBtn = document.getElementById('suBtn');
+
+  // ---- CAPTCHA (Cloudflare Turnstile), renders only if configured on the server ----
+  let captchaToken = '';
+  (async () => {
+    let cfg = {};
+    try { cfg = await (await fetch('/api/config')).json(); } catch (_) {}
+    if (!cfg.turnstileSiteKey) return; // not configured -> no widget; signup still works
+    formUp.dataset.captcha = '1';
+    window.__gwenoCfLoad = () => {
+      try {
+        window.turnstile.render('#suCaptcha', {
+          sitekey: cfg.turnstileSiteKey, theme: 'auto',
+          callback: (t) => { captchaToken = t; },
+          'expired-callback': () => { captchaToken = ''; },
+          'error-callback': () => { captchaToken = ''; },
+        });
+      } catch (_) {}
+    };
+    const sc = document.createElement('script');
+    sc.src = 'https://challenges.cloudflare.com/turnstile/v0/api.js?onload=__gwenoCfLoad&render=explicit';
+    sc.async = true; sc.defer = true;
+    document.head.appendChild(sc);
+  })();
+
   formUp.addEventListener('submit', async (e) => {
     e.preventDefault();
     clearMsg(msgUp);
@@ -143,10 +166,16 @@
     const uErr = usernameIssue(formUp.username.value.trim()); if (uErr) return fail(uErr);
     const pErr = passwordIssue(formUp.password.value); if (pErr) return fail(pErr);
     if (formUp.password.value !== formUp.confirm.value) return fail('Passwords do not match.');
+    if (formUp.dataset.captcha === '1') {
+      const token = captchaToken || (window.turnstile && window.turnstile.getResponse ? window.turnstile.getResponse() : '');
+      if (!token) return fail('Please complete the "I\'m not a robot" check and try again.');
+      captchaToken = token;
+    }
     suBtn.disabled = true;
     const { ok, data } = await api('/api/signup', {
       name: formUp.name.value, email: formUp.email.value, username: formUp.username.value,
       phone: formUp.phone.value, country: formUp.country.value, password: formUp.password.value,
+      captcha: captchaToken,
       ref: new URLSearchParams(location.search).get('ref') || '', deviceId: await getDeviceId(),
     });
     if (ok) routeAfterAuth(data.user);

@@ -48,6 +48,20 @@ async function sendPasswordReset(to, link) {
   });
 }
 
+async function sendMagicLink(to, link) {
+  return send({
+    to,
+    subject: 'Your Gweno sign-in link',
+    text: `Here is your secure sign-in link for Gweno (valid for 15 minutes):\n${link}\n\nIf you didn't request this, you can safely ignore this email — no one can sign in without the link.`,
+    html: `<div style="font-family:system-ui,-apple-system,sans-serif;max-width:520px;margin:auto;color:#241d3a">
+      <h2 style="color:#7c3aed;margin:0 0 12px">Sign in to Gweno</h2>
+      <p>Tap the button below to sign in securely. No password needed.</p>
+      <p style="margin:20px 0"><a href="${link}" style="display:inline-block;background:#7c3aed;color:#fff;padding:12px 22px;border-radius:10px;text-decoration:none;font-weight:600">Sign in to Gweno</a></p>
+      <p style="color:#6f6890;font-size:13px">This link is valid for 15 minutes and can be used once. If you didn't request it, you can safely ignore this email.</p>
+    </div>`,
+  });
+}
+
 async function sendSupport({ fromEmail, subject, message }) {
   return send({
     to: CFG.supportTo,
@@ -57,4 +71,4 @@ async function sendSupport({ fromEmail, subject, message }) {
   });
 }
 
-module.exports = { configured, send, sendPasswordReset, sendSupport, CFG };
+module.exports = { configured, send, sendPasswordReset, sendMagicLink, sendSupport, CFG };

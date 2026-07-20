@@ -3,8 +3,8 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Gweno — Post a task, get it done</title>
-  <link rel="stylesheet" href="/css/styles.css?v=3" />
+  <title>Gweno, Post a task, get it done</title>
+  <link rel="stylesheet" href="/css/styles.css?v=7" />
   <script async src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=ca-pub-4355414519050737" crossorigin="anonymous"></script>
 </head>
 <body>
@@ -53,7 +53,7 @@
   <!-- WHY CHOOSE US -->
   <section class="section">
     <h2>Why people choose Gweno</h2>
-    <p class="sub">A few things this website does really well — and why it's worth signing up.</p>
+    <p class="sub">A few things this website does really well, and why it's worth signing up.</p>
     <div class="grid-3">
       <div class="card-feat">
         <div class="ico"><svg viewBox="0 0 24 24"><path d="M12 3l7 3v6c0 4.5-3 7.6-7 9-4-1.4-7-4.5-7-9V6z"/><path d="M9 12l2 2 4-4"/></svg></div>
@@ -63,7 +63,7 @@
       <div class="card-feat">
         <div class="ico"><svg viewBox="0 0 24 24"><path d="M13 2L4 14h6l-1 8 9-12h-6z"/></svg></div>
         <h3>Fast to get going</h3>
-        <p>Sign up with Google, Facebook or Apple — or a simple email and password — and you're ready in under a minute.</p>
+        <p>Sign up with Google, Facebook or Apple, or a simple email and password, and you're ready in under a minute.</p>
       </div>
       <div class="card-feat">
         <div class="ico"><svg viewBox="0 0 24 24"><path d="M20 12v9H4v-9M2 7h20v5H2zM12 22V7M12 7S9.5 2 7 3.5 9 7 12 7zM12 7s2.5-5 5-3.5S15 7 12 7z"/></svg></div>
@@ -73,7 +73,7 @@
       <div class="card-feat">
         <div class="ico"><svg viewBox="0 0 24 24"><circle cx="9" cy="8" r="3"/><path d="M3 20c0-3.3 2.7-5 6-5s6 1.7 6 5"/><path d="M16 6a3 3 0 0 1 0 6M21.5 20c0-2.6-1.6-4.2-3.6-4.7"/></svg></div>
         <h3>A real community</h3>
-        <p>Every task connects the person who posted it with someone ready to do it — and ratings keep everyone honest.</p>
+        <p>Every task connects the person who posted it with someone ready to do it, and ratings keep everyone honest.</p>
       </div>
       <div class="card-feat">
         <div class="ico"><svg viewBox="0 0 24 24"><rect x="2" y="4" width="14" height="10" rx="2"/><path d="M2 18h14"/><rect x="17" y="9" width="5" height="11" rx="1"/></svg></div>
@@ -120,13 +120,27 @@
   <div id="site-footer"></div>
   <script src="/js/footer.js"></script>
   <script>
-    // Live social-proof numbers.
-    fetch('/api/public/stats').then((r) => r.json()).then((s) => {
-      document.querySelectorAll('[data-k]').forEach((el) => {
-        const v = s[el.dataset.k];
-        el.textContent = (typeof v === 'number' ? v.toLocaleString() : '0');
-      });
-    }).catch(() => {});
+    // Live social-proof numbers: count up on load, then refresh periodically so they move.
+    (function () {
+      const els = {};
+      document.querySelectorAll('[data-k]').forEach((el) => { els[el.dataset.k] = el; el._cur = 0; });
+      function animateTo(el, to) {
+        const from = el._cur || 0, dur = 900, t0 = performance.now();
+        (function step(t) {
+          const p = Math.min(1, (t - t0) / dur);
+          const eased = 0.5 - Math.cos(Math.PI * p) / 2;
+          el.textContent = Math.round(from + (to - from) * eased).toLocaleString();
+          if (p < 1) requestAnimationFrame(step); else el._cur = to;
+        })(t0);
+      }
+      function load() {
+        fetch('/api/public/stats').then((r) => r.json()).then((s) => {
+          Object.keys(els).forEach((k) => { if (typeof s[k] === 'number') animateTo(els[k], s[k]); });
+        }).catch(() => {});
+      }
+      load();
+      setInterval(load, 45000);
+    })();
   </script>
 </body>
 </html>

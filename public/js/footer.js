@@ -1,4 +1,4 @@
-/* Shared site footer — mounted into <div id="site-footer"></div>. */
+/* Shared site footer, mounted into <div id="site-footer"></div>. */
 (function () {
   const mount = document.getElementById('site-footer');
   if (!mount) return;
@@ -14,6 +14,7 @@
           <a href="/contact.html" title="Facebook" aria-label="Facebook"><svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M22 12a10 10 0 1 0-11.6 9.9v-7H7.9V12h2.5V9.8c0-2.5 1.5-3.9 3.8-3.9 1.1 0 2.2.2 2.2.2v2.5h-1.2c-1.2 0-1.6.8-1.6 1.6V12h2.7l-.4 2.9h-2.3v7A10 10 0 0 0 22 12z"/></svg></a>
           <a href="/contact.html" title="Instagram" aria-label="Instagram"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="5"/><circle cx="12" cy="12" r="4"/><circle cx="17.5" cy="6.5" r="1"/></svg></a>
           <a href="/contact.html" title="LinkedIn" aria-label="LinkedIn"><svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M6.94 5a2 2 0 1 1-4 0 2 2 0 0 1 4 0zM3 8.5h3.8V21H3zM9 8.5h3.6v1.7h.05c.5-.9 1.7-1.9 3.5-1.9 3.7 0 4.4 2.4 4.4 5.5V21h-3.8v-5.4c0-1.3 0-3-1.8-3s-2.1 1.4-2.1 2.9V21H9z"/></svg></a>
+          <a href="https://www.tiktok.com/@gweno.com" target="_blank" rel="noopener noreferrer" title="TikTok" aria-label="TikTok"><svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M16.6 5.82a4.28 4.28 0 0 1-1.05-2.82h-3.1v12.4a2.53 2.53 0 1 1-2.53-2.53c.2 0 .39.02.57.06V9.77a5.63 5.63 0 0 0-.57-.03 5.62 5.62 0 1 0 5.62 5.62V9.01a7.34 7.34 0 0 0 4.3 1.38V7.29a4.28 4.28 0 0 1-3.24-1.47z"/></svg></a>
         </div>
       </div>
 

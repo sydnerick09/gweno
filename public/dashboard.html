@@ -16,7 +16,7 @@
   <main class="dash">
     <div class="dash-card">
       <h2 id="hello">Welcome 👋</h2>
-      <p class="auth-sub">You're signed in. This page is protected — it only loads with a valid, unexpired session.</p>
+      <p class="auth-sub">You're signed in. This page is protected, it only loads with a valid, unexpired session.</p>
 
       <div class="wallet">
         <div>
@@ -61,7 +61,7 @@
       document.getElementById('referral').textContent = p.referral || '—';
       document.getElementById('since').textContent = new Date(user.createdAt).toLocaleString();
 
-      // Live countdown to session expiry — proof that sessions don't last forever.
+      // Live countdown to session expiry, proof that sessions don't last forever.
       const cd = document.getElementById('countdown');
       function tick() {
         const ms = sessionExpiresAt - Date.now();

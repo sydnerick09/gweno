@@ -17,7 +17,25 @@ function showMsg(el, text, type) {
 }
 function clearMsg(el) { el.className = 'msg'; el.textContent = ''; }
 
-/* #5 — a per-browser device fingerprint used to enforce one account per device.
+/* Shared client-side validators (mirror the server) so every auth form gives the
+   same clear, instant feedback before a request is sent. */
+function validEmail(e) {
+  const s = String(e || '').trim();
+  if (!s || s.length > 254 || /\s/.test(s) || s.includes('..')) return false;
+  const at = s.lastIndexOf('@'); if (at < 1) return false;
+  const local = s.slice(0, at), domain = s.slice(at + 1);
+  if (local.length > 64 || local.startsWith('.') || local.endsWith('.')) return false;
+  if (!/^[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+$/.test(local)) return false;
+  if (domain.startsWith('.') || domain.endsWith('.') || domain.startsWith('-')) return false;
+  return /^[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,24}$/.test(domain);
+}
+function passwordIssue(pw) {
+  if (typeof pw !== 'string' || pw.length < 8) return 'Password must be at least 8 characters.';
+  if (!/[a-zA-Z]/.test(pw) || !/[0-9]/.test(pw)) return 'Password must include a letter and a number.';
+  return null;
+}
+
+/* #5, a per-browser device fingerprint used to enforce one account per device.
    Tries FingerprintJS (open-source), falls back to a local signal hash offline. */
 let _deviceIdPromise = null;
 function getDeviceId() {

@@ -14,6 +14,7 @@ const DB_FILE = path.join(DATA_DIR, 'store.json');
 
 const EMPTY = {
   users: [], sessions: [], resetTokens: [], attempts: {}, resetRequests: {},
+  magicTokens: [], magicRequests: {},
   submissions: [], campaigns: [], redemptions: [], support: [], deposits: [], devices: [],
   adminSessions: [], investments: [], investmentRates: {},
 };

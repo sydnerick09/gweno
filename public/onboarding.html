@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <script>try{document.documentElement.dataset.theme=localStorage.getItem('theme')||'light'}catch(e){}</script>
-  <title>Complete your profile — Gweno</title>
+  <title>Complete your profile, Gweno</title>
   <link rel="stylesheet" href="/css/styles.css" />
   <script async src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=ca-pub-4355414519050737" crossorigin="anonymous"></script>
 </head>
@@ -122,9 +122,9 @@
       if (!form.ageRange.value || !form.education.value || !form.about.value.trim() || !form.referral.value) {
         return showMsg(msg, 'Please answer all the questions before continuing.', 'error');
       }
-      // Age gate — under-18s cannot open an account.
+      // Age gate, under-18s cannot open an account.
       if (form.ageRange.value === 'Under 18') {
-        return showMsg(msg, 'Sorry — you must be at least 18 years old to have a Gweno account.', 'error');
+        return showMsg(msg, 'Sorry, you must be at least 18 years old to have a Gweno account.', 'error');
       }
       if (countWords(about.value) > 60) return showMsg(msg, 'Please keep your answer to a maximum of 60 words.', 'error');
       submit.disabled = true;

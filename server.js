@@ -34,6 +34,9 @@ const LOGIN_LOCK_MS = 15 * 60 * 1000;           // #1 lockout duration
 const RESET_TOKEN_TTL_MS = 30 * 60 * 1000;      // #3 reset link valid for 30 min
 const RESET_MAX_REQUESTS = 3;                    // #3 max reset emails ...
 const RESET_WINDOW_MS = 60 * 60 * 1000;         // #3 ... per email per hour
+const MAGIC_TOKEN_TTL_MS = 15 * 60 * 1000;      // passwordless sign-in link valid 15 min
+const MAGIC_MAX_REQUESTS = 4;                    // max magic links per email per window
+const MAGIC_WINDOW_MS = 15 * 60 * 1000;         // ... per email per 15 min
 const BCRYPT_ROUNDS = 12;
 const COOKIE = 'gweno_session';
 
@@ -112,12 +115,12 @@ app.use((req, res, next) => {
   // site can be verified by the AdSense crawler.
   res.setHeader('Content-Security-Policy',
     "default-src 'self'; " +
-    "script-src 'self' 'unsafe-inline' https://pagead2.googlesyndication.com https://*.googlesyndication.com https://*.googleadservices.com https://adservice.google.com https://*.google.com https://*.doubleclick.net; " +
+    "script-src 'self' 'unsafe-inline' https://challenges.cloudflare.com https://pagead2.googlesyndication.com https://*.googlesyndication.com https://*.googleadservices.com https://adservice.google.com https://*.google.com https://*.doubleclick.net; " +
     "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; " +
     "img-src 'self' data: https:; " +
-    "connect-src 'self' https://pagead2.googlesyndication.com https://*.googlesyndication.com https://*.google.com https://*.doubleclick.net; " +
+    "connect-src 'self' https://challenges.cloudflare.com https://pagead2.googlesyndication.com https://*.googlesyndication.com https://*.google.com https://*.doubleclick.net; " +
     "font-src 'self' https://fonts.gstatic.com; " +
-    "frame-src https://googleads.g.doubleclick.net https://tpc.googlesyndication.com https://*.googlesyndication.com https://*.doubleclick.net https://www.google.com; " +
+    "frame-src https://challenges.cloudflare.com https://googleads.g.doubleclick.net https://tpc.googlesyndication.com https://*.googlesyndication.com https://*.doubleclick.net https://www.google.com; " +
     "form-action 'self'; frame-ancestors 'none'; base-uri 'self'; object-src 'none'");
   if (process.env.NODE_ENV === 'production') {
     res.setHeader('Strict-Transport-Security', 'max-age=15552000; includeSubDomains');
@@ -154,10 +157,30 @@ app.use('/api', (req, res, next) => {
   next();
 });
 
+// ---- Tighter per-IP limiter for abuse-prone endpoints (auth, resets, payouts) ----
+// The global limiter (above) stops floods; this caps credential-stuffing / spam that
+// stays under 200/min. Keyed by bucket+IP so each sensitive route has its own budget.
+const strictBuckets = new Map();
+setInterval(() => { const t = now(); for (const [k, v] of strictBuckets) if (v.reset < t) strictBuckets.delete(k); }, 10 * 60 * 1000).unref();
+function rateLimit(bucket, max, windowMs) {
+  return (req, res, next) => {
+    const key = `${bucket}:${req.ip || 'unknown'}`;
+    const t = Date.now();
+    let b = strictBuckets.get(key);
+    if (!b || b.reset < t) { b = { count: 0, reset: t + windowMs }; strictBuckets.set(key, b); }
+    b.count += 1;
+    if (b.count > max) {
+      res.setHeader('Retry-After', String(Math.ceil((b.reset - t) / 1000)));
+      return res.status(429).json({ error: 'Too many attempts. Please wait a few minutes and try again.' });
+    }
+    next();
+  };
+}
+
 // ---- Same-origin only: reject cross-site API calls (server-to-server callbacks have no Origin) ----
 app.use('/api', (req, res, next) => {
   // OAuth provider callbacks and payment webhooks legitimately arrive cross-origin.
-  if (req.path.startsWith('/oauth/') || req.path.startsWith('/mpesa/')) return next();
+  if (req.path.startsWith('/oauth/') || req.path.startsWith('/mpesa/') || req.path.startsWith('/paystack/')) return next();
   const origin = req.headers.origin;
   if (origin) {
     let oHost;
@@ -252,6 +275,21 @@ function registerDevice(fp, userId) {
 }
 const userById = (id) => db.get().users.find((u) => u.id === id) || null;
 const baseUrl = (req) => `${req.protocol}://${req.get('host')}`;
+
+// Cloudflare Turnstile (bot protection). Gated on TURNSTILE_SECRET: when the key
+// isn't set the check is a no-op, so signup keeps working until keys are added.
+const turnstileEnabled = () => !!(process.env.TURNSTILE_SITE_KEY && process.env.TURNSTILE_SECRET);
+async function verifyTurnstile(token, ip) {
+  if (!process.env.TURNSTILE_SECRET) return true; // not configured -> allow
+  if (!token) return false;
+  try {
+    const body = new URLSearchParams({ secret: process.env.TURNSTILE_SECRET, response: String(token) });
+    if (ip) body.set('remoteip', ip);
+    const r = await fetch('https://challenges.cloudflare.com/turnstile/v0/siteverify', { method: 'POST', body });
+    const d = await r.json();
+    return !!d.success;
+  } catch (e) { console.error('[gweno] turnstile verify failed:', e.message); return false; }
+}
 
 function usernameProblem(username) {
   if (!/^[a-zA-Z0-9]{6,10}$/.test(username || '')) {
@@ -514,22 +552,40 @@ app.get('/api/public/activity', (req, res) => {
 });
 
 // Public, no-auth stats for the home page social-proof band.
-// Social-proof numbers shown on the landing page. Fixed (not live) so the figures
-// stay stable and presentable; tasks completed is always 60% of tasks available.
-const PUBLIC_STATS = { members: 14340, workers: 10083, tasksLive: 1470 };
+// Time-based so the figures grow steadily and wobble a little (they feel live and
+// "update over time") while staying realistic and presentable across restarts.
+const STATS_EPOCH = Date.UTC(2026, 0, 1);
+// Deterministic pseudo-random wobble in the range [-range, +range] from a seed.
+function statWobble(seed, range) {
+  const x = Math.sin(seed * 12.9898) * 43758.5453;
+  return Math.round(((x - Math.floor(x)) * 2 - 1) * range);
+}
 app.get('/api/public/stats', (req, res) => {
+  const now = Date.now();
+  const hours = Math.max(0, (now - STATS_EPOCH) / 3600000);
+  const tick = Math.floor(now / 45000); // the wobble changes roughly every 45 seconds
+  const members = 14340 + Math.floor(hours * 0.8) + statWobble(tick, 4) + 4;
+  const workers = Math.round(members * 0.70) + statWobble(tick + 7, 3);
+  const tasksLive = 1470 + (Math.floor(hours * 0.3) % 300) + statWobble(tick + 3, 10) + 10;
+  const tasksCompleted = 68420 + Math.floor(hours * 4) + statWobble(tick + 11, 6);
   res.json({
-    members: PUBLIC_STATS.members,
-    workers: PUBLIC_STATS.workers,
-    tasksLive: PUBLIC_STATS.tasksLive,
-    tasksCompleted: Math.round(PUBLIC_STATS.tasksLive * 0.6),
+    members,
+    workers,
+    tasksLive: Math.max(200, tasksLive),
+    tasksCompleted,
   });
+});
+
+// Public client config: the Turnstile site key (safe to expose) so the browser can
+// render the CAPTCHA widget. Empty when CAPTCHA isn't configured -> client skips it.
+app.get('/api/config', (req, res) => {
+  res.json({ turnstileSiteKey: process.env.TURNSTILE_SITE_KEY || '' });
 });
 
 // =============================================================================
 //  SIGN UP  (email + password)                     — guards #2 (duplicate email)
 // =============================================================================
-app.post('/api/signup', async (req, res) => {
+app.post('/api/signup', rateLimit('signup', 15, 10 * 60 * 1000), async (req, res) => {
   try {
     const name = String(req.body.name || '').trim();
     const email = normEmail(req.body.email);
@@ -538,6 +594,11 @@ app.post('/api/signup', async (req, res) => {
     const country = String(req.body.country || '').trim();
     const phone = String(req.body.phone || '').trim();
     const deviceId = String(req.body.deviceId || '').trim();
+
+    // Bot protection: verify the Turnstile token (no-op until keys are configured).
+    if (!(await verifyTurnstile(req.body.captcha, req.ip))) {
+      return res.status(400).json({ error: 'Please complete the "I\'m not a robot" check and try again.' });
+    }
 
     // #5 — block a device that has already created an account (even a deleted one).
     if (deviceId && deviceBlocked(deviceId)) {
@@ -590,7 +651,7 @@ app.post('/api/signup', async (req, res) => {
 // =============================================================================
 //  SIGN IN  (email + password)                     — guards #1 (wrong password)
 // =============================================================================
-app.post('/api/login', async (req, res) => {
+app.post('/api/login', rateLimit('login', 30, 10 * 60 * 1000), async (req, res) => {
   try {
     const email = normEmail(req.body.email);
     const password = String(req.body.password || '');
@@ -710,7 +771,7 @@ app.post('/api/oauth/apple/callback', handleOAuthCallback); // Apple posts (form
 // =============================================================================
 //  FORGOT PASSWORD  -> issue reset token           — guards #3 (reset abuse)
 // =============================================================================
-app.post('/api/forgot-password', async (req, res) => {
+app.post('/api/forgot-password', rateLimit('forgot', 10, 15 * 60 * 1000), async (req, res) => {
   const email = normEmail(req.body.email);
   const s = db.get();
 
@@ -758,7 +819,7 @@ app.post('/api/forgot-password', async (req, res) => {
 // =============================================================================
 //  RESET PASSWORD  (consume token)                 — guards #3 (reset abuse)
 // =============================================================================
-app.post('/api/reset-password', async (req, res) => {
+app.post('/api/reset-password', rateLimit('reset', 20, 15 * 60 * 1000), async (req, res) => {
   const raw = String(req.body.token || '');
   const password = req.body.password;
   const s = db.get();
@@ -783,6 +844,60 @@ app.post('/api/reset-password', async (req, res) => {
   db.save();
 
   res.json({ ok: true, message: 'Your password has been reset. You can sign in now.' });
+});
+
+// =============================================================================
+//  MAGIC LINK  (passwordless sign-in for existing accounts)
+// =============================================================================
+//  Flow: /start emails a one-time link -> /verify consumes it and opens a session.
+//  Non-enumerating (same reply whether or not the email exists) and single-use, like
+//  the reset flow. New users still sign up with the form (name/username/device).
+app.post('/api/auth/magic/start', rateLimit('magic', 8, 15 * 60 * 1000), async (req, res) => {
+  const email = normEmail(req.body.email);
+  if (!isEmail(email)) return res.status(400).json({ error: 'Please enter a valid email address.' });
+  if (!mailer.configured()) return res.status(503).json({ error: 'Email sign-in isn\'t available right now. Please use your password.' });
+
+  const s = db.get();
+  s.magicRequests = s.magicRequests || {};
+  s.magicTokens = s.magicTokens || [];
+
+  // Per-email throttle so the endpoint can't be used to spam someone's inbox.
+  const win = s.magicRequests[email];
+  let allowed = true;
+  if (win && win.windowStart > now() - MAGIC_WINDOW_MS) {
+    if (win.count >= MAGIC_MAX_REQUESTS) allowed = false; else win.count += 1;
+  } else {
+    s.magicRequests[email] = { windowStart: now(), count: 1 };
+  }
+
+  const user = findUserByEmail(email);
+  if (user && !user.suspended && allowed) {
+    s.magicTokens = s.magicTokens.filter((t) => t.userId !== user.id); // only the newest link works
+    const raw = rid(24);
+    s.magicTokens.push({
+      tokenHash: sha(raw), userId: user.id, createdAt: now(),
+      expiresAt: now() + MAGIC_TOKEN_TTL_MS, used: false,
+    });
+    const link = `${baseUrl(req)}/api/auth/magic/verify?token=${raw}`;
+    try { await mailer.sendMagicLink(user.email, link); }
+    catch (e) { console.error('[gweno] magic link email failed:', e.message); }
+  }
+  db.save();
+  res.json({ ok: true, message: 'If that email is registered, a sign-in link is on its way. Check your inbox.' });
+});
+
+app.get('/api/auth/magic/verify', async (req, res) => {
+  const raw = String(req.query.token || '');
+  const s = db.get();
+  s.magicTokens = s.magicTokens || [];
+  const rec = raw ? s.magicTokens.find((t) => t.tokenHash === sha(raw)) : null;
+  if (!rec || rec.used || rec.expiresAt <= now()) return res.redirect('/login.html?error=magic_invalid');
+  const user = s.users.find((u) => u.id === rec.userId);
+  if (!user || user.suspended) return res.redirect('/login.html?error=magic_invalid');
+  rec.used = true;                       // single-use
+  delete s.attempts[user.email];         // clear any password-lockout
+  createSession(res, user.id);           // opens the session cookie (+ db.save)
+  res.redirect(user.onboarded ? '/app.html#/dashboard' : '/onboarding.html');
 });
 
 // =============================================================================
@@ -918,7 +1033,10 @@ app.post('/api/tasks/:id/submit', requireAuth, (req, res) => {
     return res.status(429).json({ error: 'You can only do one task per day. Please come back tomorrow for another.' });
   }
   const proof = String(req.body.proof || '').trim();
-  if (task.requiresProof && !proof) return res.status(400).json({ error: 'This task needs proof before you can submit it.' });
+  // Validate the proof against the task's type (typing / email / link / survey / photo /
+  // social / data). Rejects junk like ".", "123" or random characters before review.
+  const check = tasksMod.validateProof(task, proof);
+  if (!check.ok) return res.status(400).json({ error: check.error });
   const sub = {
     id: rid(8), userId: req.user.id, taskId: task.id, reward: task.reward,
     proof, status: 'pending', createdAt: new Date().toISOString(), reviewedAt: null, reviewNote: '', dispute: null,
@@ -1324,7 +1442,7 @@ app.get('/api/redeem', requireAuth, (req, res) => {
 // PayPal & Bank are in USD. NOTHING is auto-paid — the amount is held (deducted) and the
 // request is left "Requested" for an admin to verify and release from the admin panel.
 // Rejecting a withdrawal refunds the held balance.
-app.post('/api/redeem', requireAuth, async (req, res) => {
+app.post('/api/redeem', rateLimit('redeem', 15, 10 * 60 * 1000), requireAuth, async (req, res) => {
   if (req.user.held) return res.status(403).json({ error: 'Your account is on hold, so withdrawals are paused. Please contact support.' });
   const method = String(req.body.method || '').trim();
   const rawAmount = round2(req.body.amount);
@@ -1551,7 +1669,7 @@ app.get('/api/deposits', requireAuth, (req, res) => {
   res.json({ deposits: mine, live: payments.mpesaStkConfigured(), min: DEPOSIT_MIN_KES, bank: bankDetails() });
 });
 
-app.post('/api/deposit', requireAuth, async (req, res) => {
+app.post('/api/deposit', rateLimit('deposit', 25, 10 * 60 * 1000), requireAuth, async (req, res) => {
   const amount = round2(req.body.amount);
   const phone = String(req.body.phone || '').trim();
   if (!(amount > 0)) return res.status(400).json({ error: 'Enter a valid amount.' });
@@ -1890,10 +2008,12 @@ app.post('/api/settings/avatar', requireAuth, (req, res) => {
 // =============================================================================
 //  SUPPORT  —  contact form (stored + emailed to the support inbox)
 // =============================================================================
-app.post('/api/support', requireAuth, async (req, res) => {
+app.post('/api/support', rateLimit('support', 10, 10 * 60 * 1000), requireAuth, async (req, res) => {
   const subject = String(req.body.subject || '').trim();
   const message = String(req.body.message || '').trim();
   if (!subject || !message) return res.status(400).json({ error: 'Please enter a subject and a message.' });
+  if (subject.length > 150) return res.status(400).json({ error: 'Subject is too long (max 150 characters).' });
+  if (message.length > 4000) return res.status(400).json({ error: 'Message is too long (max 4000 characters).' });
   db.get().support.push({ id: rid(8), userId: req.user.id, email: req.user.email, subject, message, createdAt: new Date().toISOString() });
   db.save();
   if (mailer.configured()) {

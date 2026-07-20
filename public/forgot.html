@@ -53,6 +53,7 @@
     form.addEventListener('submit', async (e) => {
       e.preventDefault();
       clearMsg(msg);
+      if (!validEmail(form.email.value)) return showMsg(msg, 'Please enter a valid email address.', 'error');
       submit.disabled = true;
       const { data } = await api('/api/forgot-password', { email: form.email.value });
       showMsg(msg, data.message || 'If that email is registered, a reset link has been sent.', 'ok');

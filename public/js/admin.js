@@ -1,4 +1,4 @@
-/* Gweno admin panel — standalone page, admins only. Uses /js/auth.js (api). */
+/* Gweno admin panel, standalone page, admins only. Uses /js/auth.js (api). */
 let ADMIN = null;
 let TAB = 'overview';
 
@@ -40,7 +40,7 @@ function renderLogin(notConfigured) {
       <div class="panel" style="width:100%;max-width:380px">
         <a class="brand" href="/admin.html" style="display:inline-flex;margin-bottom:10px"><span class="dot"></span> gweno <span style="font-size:13px;color:var(--muted)">· admin</span></a>
         <h3 style="margin:2px 0">Admin sign-in</h3>
-        <p class="p-sub">Private access — this is not a client account.</p>
+        <p class="p-sub">Private access, this is not a client account.</p>
         ${notConfigured ? `<p class="msg error show" style="display:block">Set ADMIN_USERNAME and ADMIN_PASSWORD in .env, then restart.</p>` : ''}
         <div class="msg" id="msg"></div>
         <form id="loginForm">
@@ -85,7 +85,7 @@ function renderShell() {
   }));
 }
 const content = () => document.getElementById('content');
-// Skeleton loader (shimmer) instead of a "Loading…" line — matches the members area.
+// Skeleton loader (shimmer) instead of a "Loading…" line, matches the members area.
 const loading = () => { content().innerHTML = `
   <div class="sk sk-line" style="width:32%;height:15px;margin-bottom:18px"></div>
   <div class="grid g4"><div class="sk sk-stat"></div><div class="sk sk-stat"></div><div class="sk sk-stat"></div><div class="sk sk-stat"></div></div>
@@ -132,7 +132,7 @@ async function tSubmissions() {
           <td>${esc(sm.user ? sm.user.username : '—')}<br><span class="p-sub">${esc(sm.user ? sm.user.email : '')}</span></td>
           <td>${esc(sm.task ? sm.task.title : sm.taskId)}</td>
           <td class="num">${usd(sm.reward)}</td>
-          <td class="p-sub" style="max-width:220px">${esc(sm.proof || '—')}${sm.dispute ? `<br><b style="color:#ffd479">Dispute:</b> ${esc(sm.dispute.message)}` : ''}</td>
+          <td class="p-sub" style="max-width:220px">${esc(sm.proof || '—')}${sm.dispute ? `<br><b style="color:var(--danger)">Dispute:</b> ${esc(sm.dispute.message)}` : ''}</td>
           <td><span class="st ${sm.status}">${sm.status}</span></td>
           <td>${sm.status !== 'approved' ? `<button class="btn btn-primary auto adm" data-id="${sm.id}" data-d="approved">Approve</button> ` : ''}${sm.status !== 'rejected' ? `<button class="btn btn-ghost auto adm" data-id="${sm.id}" data-d="rejected">Reject</button>` : ''}</td>
         </tr>`).join('') : `<tr><td colspan="6" class="p-sub">No submissions yet.</td></tr>`}</tbody>
@@ -152,7 +152,7 @@ async function tUsers() {
   const act = (a, u, label, extra) => `<button class="btn btn-ghost auto uact" data-a="${a}" data-id="${u.id}" data-email="${esc(u.email)}" data-kes="${u.balance}" data-usd="${u.usd}"${extra || ''}>${label}</button>`;
   content().innerHTML = `
     <p class="page-sub">${users.length} registered user(s). <b>Suspend</b> blocks sign-in · <b>Hold</b> pauses withdrawals · <b>Delete</b> removes the account. <a href="/api/admin/export" download>Download data export</a>.</p>
-    <p class="pill-note">🔒 Passwords are encrypted one-way and can't be shown — for a member who asks, use <b>Password</b> to set them a new one.</p>
+    <p class="pill-note">🔒 Passwords are encrypted one-way and can't be shown, for a member who asks, use <b>Password</b> to set them a new one.</p>
     <div class="panel"><table class="table">
       <thead><tr><th>Name</th><th>Email</th><th>Via</th><th class="num">KES</th><th class="num">USD</th><th>Status</th><th>Actions</th></tr></thead>
       <tbody>${users.map((u) => `<tr>
@@ -259,7 +259,7 @@ async function tInvestments() {
 
     <div class="panel">
       <h3>Interest settings</h3>
-      <p class="p-sub">Annual rate per plan (0–100%). Changes apply to <b>new</b> investments only — existing ones keep the rate they opened at.</p>
+      <p class="p-sub">Annual rate per plan (0–100%). Changes apply to <b>new</b> investments only, existing ones keep the rate they opened at.</p>
       <form id="rateForm"><div class="grid g3">
         ${plans.map((p) => `<div class="field"><label>${esc(p.name)}</label><input type="number" min="0" max="100" step="0.1" data-plan="${esc(p.id)}" value="${rates[p.id] != null ? rates[p.id] : p.rate}"></div>`).join('')}
       </div><button class="btn btn-primary" type="submit">Save changes</button></form>
@@ -293,7 +293,7 @@ async function tSupport() {
   const { data } = await apiGet('/api/admin/support');
   const t = data.tickets || [];
   content().innerHTML = `
-    <p class="page-sub">${t.length} support message(s). Tap <b>Reply</b> to email the member back.${data.emailReady === false ? ' <span class="st pending">Email not set up — replies are saved but not sent.</span>' : ''}</p>
+    <p class="page-sub">${t.length} support message(s). Tap <b>Reply</b> to email the member back.${data.emailReady === false ? ' <span class="st pending">Email not set up, replies are saved but not sent.</span>' : ''}</p>
     <div class="panel">${t.length ? t.map((x) => `
       <div style="padding:14px 0;border-bottom:1px solid var(--line)">
         <div style="display:flex;justify-content:space-between;gap:10px"><b>${esc(x.subject || '(no subject)')}</b><span class="p-sub">${new Date(x.createdAt).toLocaleString()}</span></div>
