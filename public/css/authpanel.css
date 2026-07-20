@@ -76,3 +76,12 @@
   .ap-form form { padding: 30px 22px; }
   .ap-switch { display: block; }
 }
+
+/* Copyright shown below the sign in / sign up card. */
+.ap-copy { text-align: center; color: var(--muted); font-size: 13px; margin: 16px 0 0; }
+
+/* Dark mode: --brand is near-white, so the solid button and the sliding overlay
+   need dark text/borders — otherwise they'd be white-on-white and unreadable. */
+html[data-theme="dark"] .ap-btn { color: #111827; }
+html[data-theme="dark"] .ap-overlay { color: #111827; }
+html[data-theme="dark"] .ap-btn.ghost { border-color: #111827; color: #111827; }

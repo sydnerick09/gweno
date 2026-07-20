@@ -60,7 +60,8 @@
           </div>
         </div>
       </div>
-    </div>`;
+    </div>
+    <p class="ap-copy">© ${new Date().getFullYear()} Gweno. All rights reserved.</p>`;
 
   const container = document.getElementById('apContainer');
   const setSignup = (on) => container.classList.toggle('right-active', on);

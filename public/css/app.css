@@ -8,7 +8,7 @@
 }
 /* Logo sits top-left, aligned with the nav items below it. */
 .sidebar .brand { padding: 14px 14px 10px; font-size: 22px; justify-content: flex-start; }
-.brand-logo { height: 60px; width: auto; display: block; }
+.brand-logo { height: 74px; width: auto; display: block; }
 .side-nav { flex: 1; overflow-y: auto; padding: 8px; display: flex; flex-direction: column; gap: 2px; }
 .nav-item {
   display: flex; align-items: center; gap: 12px; padding: 11px 14px; border-radius: var(--radius);

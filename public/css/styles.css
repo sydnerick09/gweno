@@ -67,9 +67,14 @@ html[data-theme="dark"] .avatar-sm,
 html[data-theme="dark"] .task-row .t-ico,
 html[data-theme="dark"] .tab.active,
 html[data-theme="dark"] .step .n { color: #111827; }
-/* The logo is inked in dark navy, so on the dark theme show it as a clean white silhouette. */
-html[data-theme="dark"] .brand-logo,
-html[data-theme="dark"] .brand .dot { filter: brightness(0) invert(1); }
+/* The logo is inked in dark navy. On the dark theme keep every mark visible:
+   small nav/footer marks become clean white silhouettes… */
+html[data-theme="dark"] .brand .dot,
+html[data-theme="dark"] .nav .brand img,
+html[data-theme="dark"] .footer .brand img { filter: brightness(0) invert(1); }
+/* …and the larger app-sidebar logo sits on a white chip so its real colours (and the
+   green accent) stay readable. */
+html[data-theme="dark"] .brand-logo { background: #fff; padding: 6px 10px; border-radius: 12px; }
 
 * { box-sizing: border-box; }
 
@@ -215,7 +220,10 @@ a:hover { text-decoration: underline; }
 .footer-col a { display: flex; align-items: center; gap: 9px; color: var(--text); font-size: 14.5px; padding: 6px 0; }
 .footer-col a:hover { color: var(--brand); text-decoration: none; }
 .footer-col a .fi { width: 20px; text-align: center; }
-.footer-bottom { border-top: 1px solid var(--line); padding: 18px clamp(16px, 6vw, 80px); max-width: 1100px; margin: 0 auto; display: flex; justify-content: space-between; flex-wrap: wrap; gap: 10px; color: var(--muted); font-size: 13px; }
+.footer-bottom { border-top: 1px solid var(--line); padding: 18px clamp(16px, 6vw, 80px); max-width: 1100px; margin: 0 auto; display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px; color: var(--muted); font-size: 13px; }
+/* Shared dark-mode toggle shown in the footer on every marketing page. */
+.footer-bottom .theme-toggle { display: inline-grid; place-items: center; width: 34px; height: 34px; border-radius: 999px; border: 1px solid var(--line); background: var(--card); color: var(--muted); cursor: pointer; padding: 0; transition: color var(--t-fast) var(--ease), border-color var(--t-fast) var(--ease); }
+.footer-bottom .theme-toggle:hover { color: var(--brand); border-color: var(--brand); }
 
 /* ---------- Auth as a full PAGE (no card) ---------- */
 .auth-page { min-height: calc(100vh - 82px); display: grid; grid-template-columns: 1fr 1fr; }
