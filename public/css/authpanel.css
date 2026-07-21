@@ -4,9 +4,13 @@
 
 .ap-container {
   position: relative; overflow: hidden;
-  width: 840px; max-width: 100%; min-height: 620px;
+  width: 840px; max-width: 100%; min-height: 440px;
   background: var(--card); border-radius: 18px; box-shadow: var(--shadow); border: 1px solid var(--line);
+  transition: min-height .6s ease-in-out;
 }
+/* Sign-up has more fields, so the card grows to fit it; sign-in stays compact so the
+   copyright underneath sits right below the form (no stranded empty space). */
+.ap-container.right-active { min-height: 640px; }
 
 /* Forms */
 .ap-form { position: absolute; top: 0; height: 100%; width: 50%; transition: all .6s ease-in-out; }
@@ -67,7 +71,8 @@
 .ap-switch a { color: var(--brand); cursor: pointer; font-weight: 600; }
 
 @media (max-width: 768px) {
-  .ap-container { width: 100%; min-height: 0; }
+  /* On mobile the card hugs its content (no fixed height), so the copyright is tight to it. */
+  .ap-container, .ap-container.right-active { width: 100%; min-height: 0; }
   .ap-overlay-container { display: none; }
   .ap-form { position: relative; width: 100%; opacity: 1 !important; transform: none !important; z-index: auto !important; animation: none !important; }
   .ap-form.signup { display: none; }

@@ -306,6 +306,9 @@ const NAV = [
   ['settings', 'Settings', ICON.settings],
   ['chat', 'Chat', ICON.chat],
   ['support', 'Support', ICON.support],
+  // Profile lives here for desktop (the header shortcut is gone); on mobile it's hidden
+  // from this menu because the bottom nav provides it.
+  ['profile', 'Profile', ICON.user],
 ];
 const TITLES = {
   dashboard: 'Dashboard', stats: 'Stats', earn: 'Earn', tasks: 'Tasks', submissions: 'My submissions',
@@ -317,7 +320,7 @@ function renderShell() {
   document.getElementById('app').innerHTML = `
     <div class="shell">
       <aside class="sidebar" id="sidebar">
-        <a class="brand" href="#/dashboard"><span class="brand-mark" aria-hidden="true"></span><span class="brand-word">Gweno</span></a>
+        <a class="brand" href="#/dashboard">Gweno</a>
         <nav class="side-nav">
           ${NAV.map(([k, label, ico]) => `<a class="nav-item" data-route="${k}" href="#/${k}"><span class="ni">${ico}</span> ${label}</a>`).join('')}
         </nav>
@@ -381,8 +384,7 @@ function updateTopbar() {
   document.getElementById('topRight').innerHTML = `
     <button class="theme-toggle" id="themeBtn" title="Toggle dark mode" aria-label="Toggle dark mode">${currentTheme() === 'dark' ? THEME_ICONS.sun : THEME_ICONS.moon}</button>
     <span class="chip usd">${ICON.money} ${usd(t.usd)}</span>
-    <span class="chip kes">${ICON.coins} ${kes(t.kes)}</span>
-    <a href="#/profile" class="avatar-link" title="Profile">${avatarHTML(ME, 'avatar-sm')}</a>`;
+    <span class="chip kes">${ICON.coins} ${kes(t.kes)}</span>`;
   const tb = document.getElementById('themeBtn');
   if (tb) tb.addEventListener('click', toggleTheme);
 }
@@ -1627,20 +1629,20 @@ function waRow(label, value, locked) {
 
 function pageProfile() {
   const p = ME.profile || {};
-  const displayName = ME.name || ME.username || 'Your profile';
+  const primary = ME.username ? '@' + ME.username : (ME.name || 'Your profile');
+  const secondary = [ME.name, ME.email].filter(Boolean).join(' · ');
   view().innerHTML = `
     <div class="wa-profile">
+      <div class="wa-actionbar">
+        <button class="btn btn-ghost auto wa-edit" id="waEdit"><span class="bico">${ICON.edit}</span> Edit</button>
+        <button class="wa-act" id="waSearch" title="Search" aria-label="Search profile">${ICON.search}</button>
+        <button class="wa-act" id="waQr" title="Referral QR code" aria-label="Show referral QR code">${ICON.qr}</button>
+      </div>
+
       <div class="panel wa-head">
         <div class="wa-avatar">${avatarHTML(ME, 'wa-ava')}</div>
-        <div class="wa-id">
-          <h2 class="wa-name">${esc(displayName)}</h2>
-          <p class="wa-sub">${ME.username ? '@' + esc(ME.username) : ''}${ME.email ? `<span class="wa-dot">·</span>${esc(ME.email)}` : ''}</p>
-        </div>
-        <div class="wa-actions">
-          <button class="wa-act" id="waEdit" title="Edit profile" aria-label="Edit profile">${ICON.edit}</button>
-          <button class="wa-act" id="waSearch" title="Search" aria-label="Search profile">${ICON.search}</button>
-          <button class="wa-act" id="waQr" title="Referral QR code" aria-label="Show referral QR code">${ICON.qr}</button>
-        </div>
+        <h2 class="wa-name">${esc(primary)}</h2>
+        ${secondary ? `<p class="wa-sub">${esc(secondary)}</p>` : ''}
       </div>
 
       <div class="panel wa-list">
