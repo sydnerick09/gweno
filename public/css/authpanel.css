@@ -77,8 +77,8 @@
   .ap-switch { display: block; }
 }
 
-/* Copyright shown below the sign in / sign up card. */
-.ap-copy { text-align: center; color: var(--muted); font-size: 13px; margin: 16px 0 0; }
+/* Copyright shown just beneath the sign in / sign up card (not at the page bottom). */
+.ap-copy { text-align: center; color: var(--muted); font-size: 13px; margin: 14px 0 0; }
 
 /* Dark mode: --brand is near-white, so the solid button and the sliding overlay
    need dark text/borders — otherwise they'd be white-on-white and unreadable. */

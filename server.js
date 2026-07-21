@@ -556,18 +556,18 @@ app.get('/api/public/activity', (req, res) => {
 // grows at the same daily rate from its own baseline, the ratios (and therefore the
 // logical relationships: earning ≤ joined, completed ≤ available) are always preserved,
 // and the numbers only ever increase.
+// Joined members start at 120 and grow 20% per day (compounding). The other figures are
+// derived from that single number so the relationships always hold:
+//   Tasks available = 47% of joined members;  Earning members = 60% of tasks available.
 const STATS_EPOCH = Date.UTC(2026, 6, 20); // day 1
-const STATS_BASE = { members: 100, workers: 73, tasksLive: 100, tasksCompleted: 77 };
+const STATS_JOINED_BASE = 120;
 const STATS_DAILY_GROWTH = 1.2; // +20% per day, compounding
 app.get('/api/public/stats', (req, res) => {
   const dayIndex = Math.max(0, Math.floor((Date.now() - STATS_EPOCH) / 86400000));
-  const factor = Math.pow(STATS_DAILY_GROWTH, dayIndex);
-  res.json({
-    members: Math.round(STATS_BASE.members * factor),
-    workers: Math.round(STATS_BASE.workers * factor),
-    tasksLive: Math.round(STATS_BASE.tasksLive * factor),
-    tasksCompleted: Math.round(STATS_BASE.tasksCompleted * factor),
-  });
+  const members = Math.round(STATS_JOINED_BASE * Math.pow(STATS_DAILY_GROWTH, dayIndex));
+  const tasksLive = Math.round(members * 0.47);
+  const workers = Math.round(tasksLive * 0.60);
+  res.json({ members, tasksLive, workers });
 });
 
 // Public client config: the Turnstile site key (safe to expose) so the browser can
@@ -1906,11 +1906,10 @@ app.post('/api/settings/profile', requireAuth, (req, res) => {
   const u = req.user; const b = req.body;
   const name = String(b.name || '').trim();
   if (name) u.name = name;
+  // Country, gender and date of birth are locked after registration (admin-only); they are
+  // preserved from the existing profile and never overwritten by a user request here.
   u.profile = Object.assign({}, u.profile, {
-    gender: String(b.gender ?? u.profile.gender ?? '').trim(),
-    country: String(b.country ?? u.profile.country ?? '').trim(),
     phone: String(b.phone ?? u.profile.phone ?? '').trim(),
-    dob: String(b.dob ?? u.profile.dob ?? '').trim(),
     postalCode: String(b.postalCode ?? u.profile.postalCode ?? '').trim(),
     state: String(b.state ?? u.profile.state ?? '').trim(),
   });

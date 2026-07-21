@@ -8,7 +8,10 @@
 }
 /* Logo sits top-left, aligned with the nav items below it. */
 .sidebar .brand { padding: 14px 14px 10px; font-size: 22px; justify-content: flex-start; }
-.brand-logo { height: 74px; width: auto; display: block; }
+/* Compact circular brand mark + wordmark in the dashboard header. */
+.sidebar .brand { gap: 10px; }
+.brand-mark { width: 36px; height: 36px; flex: 0 0 auto; border-radius: 50%; border: 1px solid var(--line); background: #fff url('/img/logo-icon.svg') center / 64% no-repeat; }
+.brand-word { font-family: var(--font-display); font-weight: 800; font-size: 20px; letter-spacing: .5px; color: var(--text); }
 .side-nav { flex: 1; overflow-y: auto; padding: 8px; display: flex; flex-direction: column; gap: 2px; }
 .nav-item {
   display: flex; align-items: center; gap: 12px; padding: 11px 14px; border-radius: var(--radius);
@@ -225,6 +228,31 @@
 .danger-zone { border-color: rgba(225,29,72,.45); background: rgba(225,29,72,.035); }
 .danger-zone h3 { color: var(--danger); }
 
+/* ---------- Profile (WhatsApp-style) ---------- */
+.wa-profile { max-width: 640px; }
+.wa-head { display: flex; align-items: center; gap: 16px; }
+.wa-ava { width: 72px; height: 72px; flex: 0 0 auto; border-radius: 50%; object-fit: cover; border: 1px solid var(--line); background: var(--brand); color: #fff; display: grid; place-items: center; font-weight: 800; font-size: 26px; }
+.wa-id { flex: 1; min-width: 0; }
+.wa-name { margin: 0; font-size: 22px; line-height: 1.2; }
+.wa-sub { margin: 5px 0 0; color: var(--muted); font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.wa-sub .wa-dot { margin: 0 6px; }
+.wa-actions { display: flex; gap: 8px; flex: 0 0 auto; }
+.wa-act { width: 40px; height: 40px; border-radius: 50%; border: 1px solid var(--line); background: var(--card); color: var(--muted); cursor: pointer; display: grid; place-items: center; padding: 0; transition: color var(--t-fast) var(--ease), border-color var(--t-fast) var(--ease); }
+.wa-act:hover { color: var(--brand); border-color: var(--brand); }
+.wa-act svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.wa-list { padding-top: 6px; padding-bottom: 6px; }
+.wa-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 12px 2px; border-bottom: 1px solid var(--line); }
+.wa-row:last-child { border-bottom: none; }
+.wa-row-l { color: var(--muted); font-size: 13px; flex: 0 0 auto; }
+.wa-row-v { font-weight: 600; text-align: right; min-width: 0; word-break: break-word; display: inline-flex; align-items: center; gap: 6px; }
+.wa-empty { color: var(--muted); font-weight: 400; }
+.wa-lock { color: var(--muted); }
+.wa-lock svg { width: 14px; height: 14px; }
+@media (max-width: 480px) {
+  .wa-head { flex-wrap: wrap; }
+  .wa-actions { width: 100%; justify-content: flex-start; }
+}
+
 /* Mobile nav drawer scrim: dims the page and captures taps to close the menu. */
 .nav-scrim { position: fixed; inset: 0; background: rgba(15,23,42,.45); z-index: 55; opacity: 0; visibility: hidden; transition: opacity var(--t-nav) var(--ease), visibility var(--t-nav) var(--ease); }
 .nav-scrim.show { opacity: 1; visibility: visible; }
@@ -239,17 +267,15 @@
     position: fixed; left: 8px; right: 8px; bottom: calc(8px + env(safe-area-inset-bottom, 0px)); height: 62px; z-index: 45;
     background: var(--card); border: 1px solid var(--line); border-radius: 18px;
     box-shadow: 0 8px 26px rgba(16,24,40,.16);
-    overflow-x: auto; overflow-y: hidden; -webkit-overflow-scrolling: touch;
-    scroll-snap-type: x proximity; padding: 0 4px; scrollbar-width: none;
+    padding: 0 4px;
     /* Smooth slide for the auto-hide-on-scroll behaviour. */
     transition: transform var(--t-nav) var(--ease);
     will-change: transform;
   }
   /* Slid fully out of view (translate past the safe-area) when scrolling down. */
   .bottom-nav.bn-hidden { transform: translateY(calc(100% + 24px + env(safe-area-inset-bottom, 0px))); }
-  .bottom-nav::-webkit-scrollbar { display: none; }
   .bn-item {
-    flex: 0 0 auto; min-width: 66px; scroll-snap-align: center;
+    flex: 1 1 0; min-width: 0;
     display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px;
     text-decoration: none; color: var(--muted); font-size: 11px; font-weight: 600;
   }

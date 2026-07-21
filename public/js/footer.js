@@ -9,7 +9,7 @@
   <footer class="footer">
     <div class="footer-inner">
       <div class="footer-brand">
-        <a class="brand" href="/"><img src="/img/logo.png" alt="Gweno" onerror="this.onerror=null;this.src='/img/logo.svg'" style="height:32px;width:auto;vertical-align:middle;margin-right:8px"> gweno</a>
+        <a class="brand" href="/">Gweno</a>
         <p>Complete quick tasks and surveys, earn real rewards, and cash out to M‑Pesa. Simple, secure, and built for people who get things done.</p>
         <div class="socials-row" aria-label="Find us on social media">
           <a href="/contact.html" title="X" aria-label="X"><svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M18.9 2H22l-7 8 8.2 12h-6.4l-5-6.6L5.9 22H2.7l7.5-8.6L2.3 2h6.6l4.5 6.1L18.9 2z"/></svg></a>

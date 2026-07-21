@@ -49,6 +49,9 @@ const ICON = {
   edit: '<svg viewBox="0 0 24 24"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4z"/></svg>',
   clipboard: '<svg viewBox="0 0 24 24"><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><rect x="8" y="2" width="8" height="4" rx="1" ry="1"/><path d="M9 12h6M9 16h4"/></svg>',
   userplus: '<svg viewBox="0 0 24 24"><path d="M16 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="8.5" cy="7" r="4"/><path d="M20 8v6M23 11h-6"/></svg>',
+  user: '<svg viewBox="0 0 24 24"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>',
+  search: '<svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/></svg>',
+  qr: '<svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><path d="M14 14h3v3h-3zM20 14v3M17 20h4M20 20v1"/></svg>',
   clock: '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>',
   ban: '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M5.6 5.6l12.8 12.8"/></svg>',
   bank: '<svg viewBox="0 0 24 24"><path d="M3 10l9-6 9 6"/><path d="M5 10v9M19 10v9M9 10v9M15 10v9M3 21h18"/></svg>',
@@ -314,7 +317,7 @@ function renderShell() {
   document.getElementById('app').innerHTML = `
     <div class="shell">
       <aside class="sidebar" id="sidebar">
-        <a class="brand" href="#/dashboard"><img class="brand-logo" src="/img/logo.png" alt="Gweno" onerror="this.onerror=null;this.src='/img/logo.svg'"></a>
+        <a class="brand" href="#/dashboard"><span class="brand-mark" aria-hidden="true"></span><span class="brand-word">Gweno</span></a>
         <nav class="side-nav">
           ${NAV.map(([k, label, ico]) => `<a class="nav-item" data-route="${k}" href="#/${k}"><span class="ni">${ico}</span> ${label}</a>`).join('')}
         </nav>
@@ -339,9 +342,7 @@ function renderShell() {
       <a class="bn-item" data-route="tasks" href="#/tasks"><span class="bn-ico">${ICON.tasks}</span><span class="bn-lbl">Tasks</span></a>
       <a class="bn-item" data-route="redeem" href="#/redeem"><span class="bn-ico">${ICON.bank}</span><span class="bn-lbl">Redeem</span></a>
       <a class="bn-item" data-route="invest" href="#/invest"><span class="bn-ico">${ICON.invest}</span><span class="bn-lbl">Invest</span></a>
-      <a class="bn-item" data-route="invest" href="#/invest"><span class="bn-ico">${ICON.coins}</span><span class="bn-lbl">Investments</span></a>
-      <a class="bn-item" data-route="stats" href="#/stats"><span class="bn-ico">${ICON.chart}</span><span class="bn-lbl">Stats</span></a>
-      <a class="bn-item" data-route="advertise" href="#/advertise"><span class="bn-ico">${ICON.advertise}</span><span class="bn-lbl">Advertise</span></a>
+      <a class="bn-item" data-route="profile" href="#/profile"><span class="bn-ico">${ICON.user}</span><span class="bn-lbl">Profile</span></a>
     </nav>`;
 
   // ---- Mobile nav drawer (standard behaviour) ----
@@ -1615,40 +1616,58 @@ function confirmSignOut() {
   });
 }
 
-// Profile page, opened from the top-right avatar. Personal details + the Danger Zone.
+// Profile page — a clean, WhatsApp-style layout: avatar + identity header with quick
+// actions, then a read-only details list. Editing happens in a modal (pencil action).
+function waRow(label, value, locked) {
+  return `<div class="wa-row${locked ? ' locked' : ''}">
+    <div class="wa-row-l">${esc(label)}</div>
+    <div class="wa-row-v">${value ? esc(value) : '<span class="wa-empty">Not set</span>'}${locked ? ` <span class="bico wa-lock" title="Locked — contact support to change">${ICON.lock}</span>` : ''}</div>
+  </div>`;
+}
+
 function pageProfile() {
   const p = ME.profile || {};
+  const displayName = ME.name || ME.username || 'Your profile';
   view().innerHTML = `
-    <p class="page-sub">Your personal details. Account & security options are in <a href="#/settings">Settings</a>.</p>
-    <div class="panel"><h3>Profile</h3>
-    <form id="f">
-      <div class="grid g2">
-        <div class="field"><label>Full name</label><input id="name" value="${esc(ME.name)}"></div>
-        <div class="field"><label>Gender</label><select id="gender"><option value="">Select…</option>${['Male', 'Female', 'Other', 'Prefer not to say'].map((g) => `<option ${p.gender === g ? 'selected' : ''}>${g}</option>`).join('')}</select></div>
-        <div class="field"><label>Country</label><input id="country" value="${esc(p.country || '')}" placeholder="Kenya"></div>
-        <div class="field"><label>Phone number</label><input id="phone" value="${esc(p.phone || '')}" placeholder="e.g. +254 712 345 678"></div>
-        <div class="field"><label>Date of birth</label><input id="dob" type="date" value="${esc(p.dob || '')}"></div>
-        <div class="field"><label>Postal code</label><input id="postalCode" value="${esc(p.postalCode || '')}"></div>
-        <div class="field"><label>State / County</label><input id="state" value="${esc(p.state || '')}"></div>
+    <div class="wa-profile">
+      <div class="panel wa-head">
+        <div class="wa-avatar">${avatarHTML(ME, 'wa-ava')}</div>
+        <div class="wa-id">
+          <h2 class="wa-name">${esc(displayName)}</h2>
+          <p class="wa-sub">${ME.username ? '@' + esc(ME.username) : ''}${ME.email ? `<span class="wa-dot">·</span>${esc(ME.email)}` : ''}</p>
+        </div>
+        <div class="wa-actions">
+          <button class="wa-act" id="waEdit" title="Edit profile" aria-label="Edit profile">${ICON.edit}</button>
+          <button class="wa-act" id="waSearch" title="Search" aria-label="Search profile">${ICON.search}</button>
+          <button class="wa-act" id="waQr" title="Referral QR code" aria-label="Show referral QR code">${ICON.qr}</button>
+        </div>
       </div>
-      <button class="btn btn-primary" type="submit">Save profile</button>
-    </form></div>
-    <div class="panel">
-      <h3>Session</h3>
-      <p class="p-sub">Sign out of your Gweno account on this device.</p>
-      <button class="btn btn-ghost auto" id="signOutBtn"><span class="bico">${ICON.logout}</span> Sign out</button>
-    </div>
-    <div class="panel danger-zone">
-      <h3>⚠ Danger Zone</h3>
-      <p class="p-sub">Deleting your account is <b>permanent</b> and cannot be undone. It removes your profile, balances, transactions, tasks and all related records. For fraud prevention, this device will not be able to register a new account afterwards.</p>
-      <button class="btn auto" id="delAcc" style="background:var(--danger);border-color:var(--danger);color:#fff">Delete my account</button>
+
+      <div class="panel wa-list">
+        ${waRow('Full name', ME.name)}
+        ${waRow('Username', ME.username ? '@' + ME.username : '')}
+        ${waRow('Email address', ME.email)}
+        ${waRow('Phone number', p.phone)}
+        ${waRow('Postal code', p.postalCode)}
+        ${waRow('State / region', p.state)}
+        ${waRow('Country', p.country, true)}
+      </div>
+
+      <div class="panel">
+        <h3>Session</h3>
+        <p class="p-sub">Sign out of your Gweno account on this device.</p>
+        <button class="btn btn-ghost auto" id="signOutBtn"><span class="bico">${ICON.logout}</span> Sign out</button>
+      </div>
+      <div class="panel danger-zone">
+        <h3>⚠ Danger Zone</h3>
+        <p class="p-sub">Deleting your account is <b>permanent</b> and cannot be undone. It removes your profile, balances, transactions, tasks and all related records. For fraud prevention, this device will not be able to register a new account afterwards.</p>
+        <button class="btn auto" id="delAcc" style="background:var(--danger);border-color:var(--danger);color:#fff">Delete my account</button>
+      </div>
     </div>`;
-  view().querySelector('#f').addEventListener('submit', async (e) => {
-    e.preventDefault();
-    const body = ['name', 'gender', 'country', 'phone', 'dob', 'postalCode', 'state'].reduce((o, k) => (o[k] = document.getElementById(k).value, o), {});
-    const { ok, data } = await api('/api/settings/profile', body);
-    if (ok) { ME = data.user; updateTopbar(); toast(data.message); } else toast(data.error, 'error');
-  });
+
+  document.getElementById('waEdit').addEventListener('click', openProfileEdit);
+  document.getElementById('waSearch').addEventListener('click', () => toast('Profile search is coming soon.'));
+  document.getElementById('waQr').addEventListener('click', openReferralQr);
   document.getElementById('signOutBtn').addEventListener('click', confirmSignOut);
   document.getElementById('delAcc').addEventListener('click', () => {
     const bg = openModal(`
@@ -1669,6 +1688,86 @@ function pageProfile() {
       else toast(data.error || 'Could not delete account', 'error');
     });
   });
+}
+
+// Edit the user's own profile. Full name / phone / postal / state save via the profile
+// endpoint; username and email use their dedicated (validated) endpoints. Country, date
+// of birth and gender are locked after registration (admin-only) and never sent here.
+function openProfileEdit() {
+  const p = ME.profile || {};
+  const origEmail = ME.email || '';
+  const bg = openModal(`
+    <button class="close">×</button>
+    <h3>Edit profile</h3>
+    <p class="p-sub">Country, date of birth and gender are locked after registration.</p>
+    <form id="peForm">
+      <div class="grid g2">
+        <div class="field"><label>Full name</label><input id="peName" value="${esc(ME.name || '')}"></div>
+        <div class="field"><label>Username</label><input id="peUsername" value="${esc(ME.username || '')}" minlength="6" maxlength="10"></div>
+        <div class="field"><label>Email address</label><input id="peEmail" type="email" value="${esc(origEmail)}"></div>
+        <div class="field"><label>Phone number</label><input id="pePhone" value="${esc(p.phone || '')}" placeholder="e.g. +254 712 345 678"></div>
+        <div class="field"><label>Postal code</label><input id="pePostal" value="${esc(p.postalCode || '')}"></div>
+        <div class="field"><label>State / region</label><input id="peState" value="${esc(p.state || '')}"></div>
+      </div>
+      <div class="field" id="pePwField" style="display:none"><label>Current password <span class="p-sub">(required to change email)</span></label><div class="pw-wrap"><input id="pePw" type="password" autocomplete="current-password"><button type="button" class="pw-toggle" data-pwtoggle="pePw"></button></div></div>
+      <button class="btn btn-primary" type="submit">Save changes</button>
+    </form>`);
+  attachPasswordToggles(bg);
+  const emailEl = bg.querySelector('#peEmail');
+  const pwField = bg.querySelector('#pePwField');
+  emailEl.addEventListener('input', () => {
+    pwField.style.display = (emailEl.value.trim().toLowerCase() !== origEmail.toLowerCase()) ? '' : 'none';
+  });
+
+  bg.querySelector('#peForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const val = (id) => bg.querySelector(id).value.trim();
+    const name = val('#peName'), username = val('#peUsername'), email = val('#peEmail');
+    const btn = bg.querySelector('button[type="submit"]');
+    btn.disabled = true;
+    const stop = () => { btn.disabled = false; };
+
+    // 1) Basic profile fields (restricted fields are intentionally omitted).
+    const r1 = await api('/api/settings/profile', { name, phone: val('#pePhone'), postalCode: val('#pePostal'), state: val('#peState') });
+    if (!r1.ok) { stop(); return toast(r1.data.error || 'Could not save your profile.', 'error'); }
+    ME = r1.data.user;
+
+    // 2) Username, only if it changed.
+    if (username && username !== (ME.username || '')) {
+      const r2 = await api('/api/settings/username', { newUsername: username });
+      if (!r2.ok) { stop(); updateTopbar(); return toast(r2.data.error || 'Could not change username.', 'error'); }
+      ME = r2.data.user;
+    }
+
+    // 3) Email, only if it changed — requires the current password.
+    if (email && email.toLowerCase() !== origEmail.toLowerCase()) {
+      const pw = (bg.querySelector('#pePw') || {}).value || '';
+      if (!pw) { stop(); return toast('Enter your current password to change your email.', 'error'); }
+      const r3 = await api('/api/settings/email', { newEmail: email, password: pw });
+      if (!r3.ok) { stop(); updateTopbar(); return toast(r3.data.error || 'Could not change email.', 'error'); }
+      ME = r3.data.user;
+    }
+
+    bg.remove();
+    updateTopbar();
+    toast('Profile updated.');
+    pageProfile();
+  });
+}
+
+// Show the user's referral QR code + link (WhatsApp-style "QR" action).
+async function openReferralQr() {
+  const bg = openModal(`<button class="close">×</button><h3>Invite friends</h3><p class="p-sub">Loading your referral code…</p>`);
+  const { ok, data } = await apiGet('/api/referral');
+  if (!ok) { bg.querySelector('.p-sub').textContent = 'Could not load your referral code. Please try again.'; return; }
+  bg.querySelector('.modal').innerHTML = `
+    <button class="close">×</button>
+    <h3>Invite friends</h3>
+    <p class="p-sub">Share this QR code or link. You earn <b>${data.perReferralKES || 5} KES</b> for each friend who joins.</p>
+    <div class="qr" style="margin:0 auto"><img src="${esc(data.qr)}" alt="Your referral QR code"></div>
+    <div class="copybox" style="margin-top:14px"><input readonly value="${esc(data.link || '')}"><button class="btn btn-primary auto" id="qrCopy">Copy link</button></div>`;
+  const copy = bg.querySelector('#qrCopy');
+  if (copy) copy.addEventListener('click', () => copyText(data.link));
 }
 
 function setPassword() {
