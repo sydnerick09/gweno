@@ -12,7 +12,17 @@ function toast(msg, type = 'ok') {
   setTimeout(() => { t.classList.remove('show'); setTimeout(() => t.remove(), 250); }, 3000);
 }
 
-const TABS = [['overview', 'Overview'], ['submissions', 'Submissions'], ['users', 'Users'], ['investments', 'Investments'], ['deposits', 'Deposits'], ['withdrawals', 'Withdrawals'], ['support', 'Support']];
+const TABS = [['overview', 'Overview'], ['submissions', 'Submissions'], ['users', 'Users'], ['broadcast', 'Broadcast'], ['investments', 'Investments'], ['deposits', 'Deposits'], ['withdrawals', 'Withdrawals'], ['support', 'Support']];
+
+// Lightweight modal for admin forms (reuses .modal styles from app.css).
+function adminModal(html) {
+  const bg = document.createElement('div');
+  bg.className = 'modal-bg';
+  bg.innerHTML = `<div class="modal">${html}</div>`;
+  bg.addEventListener('click', (e) => { if (e.target === bg || e.target.classList.contains('close')) bg.remove(); });
+  document.body.appendChild(bg);
+  return bg;
+}
 
 // ---- theme (light/dark), shared with the members area via localStorage ----
 const THEME_ICONS = {
@@ -95,7 +105,7 @@ const loading = () => { content().innerHTML = `
   </div>`; };
 
 function route() {
-  ({ overview: tOverview, submissions: tSubmissions, users: tUsers, investments: tInvestments, deposits: tDeposits, withdrawals: tWithdrawals, support: tSupport }[TAB] || tOverview)();
+  ({ overview: tOverview, submissions: tSubmissions, users: tUsers, broadcast: tBroadcast, investments: tInvestments, deposits: tDeposits, withdrawals: tWithdrawals, support: tSupport }[TAB] || tOverview)();
 }
 
 async function tOverview() {
@@ -119,23 +129,32 @@ async function tOverview() {
     <div class="panel"><h3>Welcome, admin</h3><p class="p-sub">Use the tabs above to review submissions, inspect users, and manage deposits and withdrawals. Approving a submission credits the member's USD balance.</p></div>`;
 }
 
+// Render submitted proof: clickable when it's a link, plain (wrapped) text otherwise.
+function proofCell(p) {
+  const s = String(p == null ? '' : p).trim();
+  if (!s) return '<span class="p-sub">—</span>';
+  if (/^https?:\/\//i.test(s)) return `<a href="${esc(s)}" target="_blank" rel="noopener">${esc(s)}</a>`;
+  return esc(s);
+}
+
 async function tSubmissions() {
   loading();
   const { data } = await apiGet('/api/admin/submissions');
   const subs = data.submissions || [];
   content().innerHTML = `
-    <p class="page-sub">Approve or reject member task submissions. Approving credits the user's USD balance.</p>
+    <p class="page-sub">Every task submission and exactly what the member submitted. Approving credits the user's USD balance.</p>
     <div class="panel"><table class="table">
-      <thead><tr><th>User</th><th>Task</th><th class="num">Reward</th><th>Proof</th><th>Status</th><th>Action</th></tr></thead>
+      <thead><tr><th>User</th><th>Task</th><th class="num">Reward</th><th>What they submitted</th><th>Submitted</th><th>Status</th><th>Action</th></tr></thead>
       <tbody>${subs.length ? subs.map((sm) => `
         <tr>
           <td>${esc(sm.user ? sm.user.username : '—')}<br><span class="p-sub">${esc(sm.user ? sm.user.email : '')}</span></td>
-          <td>${esc(sm.task ? sm.task.title : sm.taskId)}</td>
+          <td>${esc(sm.task ? sm.task.title : sm.taskId)}${sm.task ? `<br><span class="p-sub">${esc(sm.task.category || '')}</span>` : ''}</td>
           <td class="num">${usd(sm.reward)}</td>
-          <td class="p-sub" style="max-width:220px">${esc(sm.proof || '—')}${sm.dispute ? `<br><b style="color:var(--danger)">Dispute:</b> ${esc(sm.dispute.message)}` : ''}</td>
+          <td class="p-sub" style="max-width:280px;word-break:break-word">${proofCell(sm.proof)}${sm.dispute ? `<br><b style="color:var(--danger)">Dispute:</b> ${esc(sm.dispute.message)}` : ''}</td>
+          <td class="p-sub">${sm.createdAt ? new Date(sm.createdAt).toLocaleString() : '—'}</td>
           <td><span class="st ${sm.status}">${sm.status}</span></td>
           <td>${sm.status !== 'approved' ? `<button class="btn btn-primary auto adm" data-id="${sm.id}" data-d="approved">Approve</button> ` : ''}${sm.status !== 'rejected' ? `<button class="btn btn-ghost auto adm" data-id="${sm.id}" data-d="rejected">Reject</button>` : ''}</td>
-        </tr>`).join('') : `<tr><td colspan="6" class="p-sub">No submissions yet.</td></tr>`}</tbody>
+        </tr>`).join('') : `<tr><td colspan="7" class="p-sub">No submissions yet.</td></tr>`}</tbody>
     </table></div>`;
   content().querySelectorAll('.adm').forEach((b) => b.addEventListener('click', async () => {
     const { ok, data: d } = await api('/api/admin/submissions/' + b.dataset.id + '/decision', { decision: b.dataset.d });
@@ -163,15 +182,89 @@ async function tUsers() {
         <td class="num">${kes(u.balance)}</td><td class="num">${usd(u.usd)}</td>
         <td>${badges(u)}</td>
         <td><div style="display:flex;gap:6px;flex-wrap:wrap">
+          <button class="btn btn-primary auto udetails" data-id="${u.id}">Edit details</button>
           ${act('suspend', u, u.suspended ? 'Unsuspend' : 'Suspend')}
           ${act('hold', u, u.held ? 'Release hold' : 'Hold')}
           ${act('balance', u, 'Balance')}
-          ${act('email', u, 'Email')}
           ${act('password', u, 'Password')}
         </div></td>
       </tr>`).join('') || `<tr><td colspan="7" class="p-sub">No users yet.</td></tr>`}</tbody>
     </table></div>`;
   content().querySelectorAll('.uact').forEach((b) => b.addEventListener('click', () => userAction(b.dataset)));
+  content().querySelectorAll('.udetails').forEach((b) => b.addEventListener('click', () => openDetailsForm(users.find((u) => u.id === b.dataset.id))));
+}
+
+// Edit a client's full details (admin can change everything, including the locked fields).
+function openDetailsForm(u) {
+  if (!u) return;
+  const bg = adminModal(`
+    <button class="close">×</button>
+    <h3>Edit client details</h3>
+    <p class="p-sub">${esc(u.email || '')}</p>
+    <form id="detForm">
+      <div class="grid g2">
+        <div class="field"><label>Full name</label><input id="dName" value="${esc(u.name || '')}"></div>
+        <div class="field"><label>Username</label><input id="dUsername" value="${esc(u.username || '')}"></div>
+        <div class="field"><label>Email</label><input id="dEmail" type="email" value="${esc(u.email || '')}"></div>
+        <div class="field"><label>Phone</label><input id="dPhone" value="${esc(u.phone || '')}"></div>
+        <div class="field"><label>Country</label><input id="dCountry" value="${esc(u.country || '')}"></div>
+        <div class="field"><label>Gender</label><input id="dGender" value="${esc(u.gender || '')}"></div>
+        <div class="field"><label>Date of birth</label><input id="dDob" type="date" value="${esc(u.dob || '')}"></div>
+        <div class="field"><label>Postal code</label><input id="dPostal" value="${esc(u.postalCode || '')}"></div>
+        <div class="field"><label>State / region</label><input id="dState" value="${esc(u.state || '')}"></div>
+      </div>
+      <button class="btn btn-primary" type="submit">Save details</button>
+    </form>`);
+  bg.querySelector('#detForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const g = (id) => bg.querySelector(id).value;
+    const { ok, data } = await api('/api/admin/users/' + u.id + '/details', {
+      name: g('#dName'), username: g('#dUsername'), email: g('#dEmail'), phone: g('#dPhone'),
+      country: g('#dCountry'), gender: g('#dGender'), dob: g('#dDob'), postalCode: g('#dPostal'), state: g('#dState'),
+    });
+    if (ok) { toast(data.message || 'Saved'); bg.remove(); tUsers(); }
+    else toast(data.error || 'Failed', 'error');
+  });
+}
+
+async function tBroadcast() {
+  loading();
+  const { data } = await apiGet('/api/admin/broadcasts');
+  const list = data.broadcasts || [];
+  content().innerHTML = `
+    <p class="page-sub">Send an announcement to every member. It appears as a dismissible banner in their dashboard.</p>
+    <div class="panel">
+      <h3>New broadcast</h3>
+      <form id="bcForm">
+        <div class="field"><label>Title <span class="p-sub">(optional)</span></label><input id="bcTitle" maxlength="120" placeholder="e.g. Scheduled maintenance"></div>
+        <div class="field"><label>Message</label><textarea id="bcMsg" rows="4" maxlength="2000" style="width:100%;border:1px solid var(--line);border-radius:10px;padding:10px;font:inherit;background:var(--bg-2);color:var(--text)" placeholder="Write your announcement…"></textarea></div>
+        <button class="btn btn-primary" type="submit">Send broadcast</button>
+      </form>
+    </div>
+    <div class="panel">
+      <h3>Sent broadcasts</h3>
+      ${list.length ? list.map((b) => `
+        <div style="padding:12px 0;border-bottom:1px solid var(--line)">
+          <div style="display:flex;justify-content:space-between;gap:10px;align-items:flex-start">
+            <div>${b.title ? `<b>${esc(b.title)}</b><br>` : ''}<span>${esc(b.message)}</span></div>
+            <button class="btn btn-ghost auto bcdel" data-id="${esc(b.id)}" style="border-color:var(--danger);color:#c0143c;padding:4px 10px;font-size:12px;flex:0 0 auto">Delete</button>
+          </div>
+          <p class="p-sub" style="margin:6px 0 0">${new Date(b.createdAt).toLocaleString()}</p>
+        </div>`).join('') : `<p class="p-sub">No broadcasts sent yet.</p>`}
+    </div>`;
+  document.getElementById('bcForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const { ok, data: d } = await api('/api/admin/broadcast', {
+      title: document.getElementById('bcTitle').value,
+      message: document.getElementById('bcMsg').value,
+    });
+    if (ok) { toast(d.message || 'Broadcast sent'); tBroadcast(); } else toast(d.error || 'Failed', 'error');
+  });
+  content().querySelectorAll('.bcdel').forEach((b) => b.addEventListener('click', async () => {
+    if (!confirm('Delete this broadcast? Members will no longer see it.')) return;
+    const r = await fetch('/api/admin/broadcasts/' + b.dataset.id, { method: 'DELETE' });
+    if (r.ok) { toast('Deleted'); tBroadcast(); } else toast('Failed', 'error');
+  }));
 }
 
 async function userAction(ds) {

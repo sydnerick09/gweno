@@ -1159,8 +1159,51 @@ app.get('/api/admin/users', requireAdminSession, (req, res) => {
     gender: (u.profile && u.profile.gender) || '',
     country: (u.profile && u.profile.country) || '',
     phone: (u.profile && u.profile.phone) || '',
+    dob: (u.profile && u.profile.dob) || '',
+    postalCode: (u.profile && u.profile.postalCode) || '',
+    state: (u.profile && u.profile.state) || '',
   })).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   res.json({ users });
+});
+
+// Edit a member's full details (admin-only). Admins may change everything, including the
+// fields that are locked for members themselves (country, gender, date of birth).
+app.post('/api/admin/users/:id/details', requireAdminSession, (req, res) => {
+  const u = userById(req.params.id);
+  if (!u) return res.status(404).json({ error: 'User not found.' });
+  ensureUserShape(u);
+  const b = req.body;
+  const name = String(b.name ?? '').trim();
+  if (name) u.name = name;
+
+  if (b.username !== undefined) {
+    const nu = String(b.username).trim();
+    if (nu && nu.toLowerCase() !== String(u.username || '').toLowerCase()) {
+      const pe = usernameProblem(nu);
+      if (pe) return res.status(400).json({ error: pe });
+      if (usernameTaken(nu, u.id)) return res.status(409).json({ error: 'That username is already taken.' });
+      u.username = nu;
+      u.usernameChangedAt = new Date().toISOString();
+    }
+  }
+  if (b.email !== undefined) {
+    const ne = normEmail(b.email);
+    if (ne && ne !== u.email) {
+      if (!isEmail(ne)) return res.status(400).json({ error: 'Enter a valid email address.' });
+      if (findUserByEmail(ne)) return res.status(409).json({ error: 'That email is already in use.' });
+      u.email = ne;
+    }
+  }
+  u.profile = Object.assign({}, u.profile, {
+    phone: String(b.phone ?? u.profile.phone ?? '').trim(),
+    country: String(b.country ?? u.profile.country ?? '').trim(),
+    gender: String(b.gender ?? u.profile.gender ?? '').trim(),
+    dob: String(b.dob ?? u.profile.dob ?? '').trim(),
+    postalCode: String(b.postalCode ?? u.profile.postalCode ?? '').trim(),
+    state: String(b.state ?? u.profile.state ?? '').trim(),
+  });
+  db.save();
+  res.json({ ok: true, message: 'Client details updated.' });
 });
 
 // Suspend / unsuspend a member (blocks sign-in and drops their active sessions).
@@ -1260,6 +1303,36 @@ app.get('/api/admin/export', requireAdminSession, (req, res) => {
   res.setHeader('Content-Disposition', `attachment; filename="gweno-export-${Date.now()}.json"`);
   res.setHeader('Content-Type', 'application/json');
   res.send(JSON.stringify(out, null, 2));
+});
+
+// ---- Broadcast announcements (admin -> all members) ----
+app.get('/api/admin/broadcasts', requireAdminSession, (req, res) => {
+  const list = (db.get().broadcasts || []).slice().sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  res.json({ broadcasts: list });
+});
+app.post('/api/admin/broadcast', requireAdminSession, (req, res) => {
+  const title = String(req.body.title || '').trim().slice(0, 120);
+  const message = String(req.body.message || '').trim().slice(0, 2000);
+  if (!message) return res.status(400).json({ error: 'Enter a message to broadcast.' });
+  const S = db.get();
+  S.broadcasts = S.broadcasts || [];
+  const bc = { id: rid(8), title, message, createdAt: new Date().toISOString() };
+  S.broadcasts.unshift(bc);
+  if (S.broadcasts.length > 100) S.broadcasts = S.broadcasts.slice(0, 100); // keep it bounded
+  db.save();
+  res.status(201).json({ ok: true, broadcast: bc, message: 'Broadcast sent to all members.' });
+});
+app.delete('/api/admin/broadcasts/:id', requireAdminSession, (req, res) => {
+  const S = db.get();
+  S.broadcasts = (S.broadcasts || []).filter((x) => x.id !== req.params.id);
+  db.save();
+  res.json({ ok: true });
+});
+
+// Members fetch active announcements (shown as a dismissible banner in the app).
+app.get('/api/broadcasts', requireAuth, (req, res) => {
+  const list = (db.get().broadcasts || []).slice().sort((a, b) => b.createdAt.localeCompare(a.createdAt)).slice(0, 20);
+  res.json({ broadcasts: list });
 });
 
 app.get('/api/admin/deposits', requireAdminSession, (req, res) => {

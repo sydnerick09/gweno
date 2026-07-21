@@ -182,7 +182,37 @@ async function boot() {
   renderShell();
   window.addEventListener('hashchange', router);
   router();
+  loadBroadcasts();
   setTimeout(() => { try { maybeStartTour(); } catch (_) {} }, 900); // first-login guided tour
+}
+
+// Announcements from the admin, shown as dismissible banners under the top bar.
+const BCAST_KEY = 'gwenoBroadcastsRead';
+const readBroadcasts = () => { try { return JSON.parse(localStorage.getItem(BCAST_KEY) || '[]'); } catch (_) { return []; } };
+async function loadBroadcasts() {
+  try {
+    const { ok, data } = await apiGet('/api/broadcasts');
+    if (!ok || !Array.isArray(data.broadcasts)) return;
+    const dismissed = readBroadcasts();
+    renderBroadcasts(data.broadcasts.filter((b) => !dismissed.includes(b.id)));
+  } catch (_) {}
+}
+function renderBroadcasts(list) {
+  const host = document.getElementById('broadcasts');
+  if (!host) return;
+  host.innerHTML = list.map((b) => `
+    <div class="bcast" data-id="${esc(b.id)}">
+      <span class="bcast-ico">${ICON.notifications}</span>
+      <div class="bcast-body">${b.title ? `<b>${esc(b.title)}</b><br>` : ''}${esc(b.message)}</div>
+      <button class="bcast-x" data-id="${esc(b.id)}" aria-label="Dismiss announcement">&times;</button>
+    </div>`).join('');
+  host.querySelectorAll('.bcast-x').forEach((btn) => btn.addEventListener('click', () => {
+    const id = btn.dataset.id;
+    const dismissed = readBroadcasts();
+    if (!dismissed.includes(id)) { dismissed.push(id); try { localStorage.setItem(BCAST_KEY, JSON.stringify(dismissed)); } catch (_) {} }
+    const el = host.querySelector(`.bcast[data-id="${id}"]`);
+    if (el) el.remove();
+  }));
 }
 
 // ===================== FIRST-LOGIN GUIDED TOUR =====================
@@ -336,6 +366,7 @@ function renderShell() {
           </div>
           <div class="top-right" id="topRight"></div>
         </header>
+        <div id="broadcasts" class="broadcasts" aria-live="polite"></div>
         <main class="view" id="view"></main>
       </div>
     </div>
