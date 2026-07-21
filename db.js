@@ -17,6 +17,7 @@ const EMPTY = {
   magicTokens: [], magicRequests: {},
   submissions: [], campaigns: [], redemptions: [], support: [], deposits: [], devices: [],
   adminSessions: [], investments: [], investmentRates: {}, broadcasts: [], emailLog: [],
+  applications: [], auditLog: [],
 };
 
 function loadFile() {

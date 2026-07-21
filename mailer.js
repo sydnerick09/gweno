@@ -98,6 +98,22 @@ gweno Team`;
   return send({ to, subject: 'Task Approved & Earnings Credited', text });
 }
 
+async function sendApplicationApproved({ to, name, task }) {
+  const text =
+`Hello ${name},
+
+Your application for ${task} has been approved.
+
+You may now log in and begin working on the task.
+
+Dashboard:
+${DASHBOARD_URL}
+
+Thank you,
+gweno Team`;
+  return send({ to, subject: 'Task Application Approved', text });
+}
+
 async function sendTaskRejected({ to, name, task }) {
   const text =
 `Hello ${name},
@@ -142,5 +158,5 @@ async function sendSupport({ fromEmail, subject, message }) {
 
 module.exports = {
   configured, send, sendPasswordReset, sendMagicLink, sendSupport, CFG,
-  sendTaskApproved, sendTaskRejected, sendTaskCorrection,
+  sendTaskApproved, sendTaskRejected, sendTaskCorrection, sendApplicationApproved,
 };

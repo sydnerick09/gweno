@@ -15,7 +15,7 @@ function toast(msg, type = 'ok') {
   setTimeout(() => { t.classList.remove('show'); setTimeout(() => t.remove(), 250); }, 3000);
 }
 
-const TABS = [['overview', 'Overview'], ['submissions', 'Submissions'], ['emails', 'Email log'], ['users', 'Users'], ['broadcast', 'Broadcast'], ['investments', 'Investments'], ['deposits', 'Deposits'], ['withdrawals', 'Withdrawals'], ['support', 'Support']];
+const TABS = [['overview', 'Overview'], ['submissions', 'Submissions'], ['applications', 'Applications'], ['emails', 'Email log'], ['audit', 'Audit log'], ['users', 'Users'], ['broadcast', 'Broadcast'], ['investments', 'Investments'], ['deposits', 'Deposits'], ['withdrawals', 'Withdrawals'], ['support', 'Support']];
 
 // Lightweight modal for admin forms (reuses .modal styles from app.css).
 function adminModal(html) {
@@ -108,7 +108,7 @@ const loading = () => { content().innerHTML = `
   </div>`; };
 
 function route() {
-  ({ overview: tOverview, submissions: tSubmissions, emails: tEmails, users: tUsers, broadcast: tBroadcast, investments: tInvestments, deposits: tDeposits, withdrawals: tWithdrawals, support: tSupport }[TAB] || tOverview)();
+  ({ overview: tOverview, submissions: tSubmissions, applications: tApplications, emails: tEmails, audit: tAudit, users: tUsers, broadcast: tBroadcast, investments: tInvestments, deposits: tDeposits, withdrawals: tWithdrawals, support: tSupport }[TAB] || tOverview)();
 }
 
 async function tOverview() {
@@ -224,6 +224,55 @@ async function tEmails() {
     if (ok) { const st = d.email ? d.email.status : '—'; toast('Resend: ' + st, st === 'Failed' ? 'error' : 'ok'); tEmails(); }
     else { b.disabled = false; toast(d.error || 'Failed', 'error'); }
   }));
+}
+
+// Task applications + proposals. Approving emails the member that they can begin working.
+async function tApplications() {
+  loading();
+  const { data } = await apiGet('/api/admin/applications');
+  const apps = data.applications || [];
+  content().innerHTML = `
+    <p class="page-sub">Task applications and the proposals members submitted. Approving emails them that they can begin working.</p>
+    <div class="panel"><table class="table">
+      <thead><tr><th>User</th><th>Task</th><th>Proposal</th><th>Status</th><th>Applied</th><th>Action</th></tr></thead>
+      <tbody>${apps.length ? apps.map((a) => `
+        <tr>
+          <td>${esc(a.user ? a.user.username : '—')}<br><span class="p-sub">${esc(a.user ? a.user.email : '')}</span></td>
+          <td>${esc(a.task ? a.task.title : a.taskId)}</td>
+          <td class="p-sub" style="max-width:300px;word-break:break-word">${esc(a.proposal || '—')}</td>
+          <td><span class="st ${a.status}">${statusLabel(a.status)}</span></td>
+          <td class="p-sub">${a.createdAt ? new Date(a.createdAt).toLocaleString() : '—'}</td>
+          <td><div style="display:flex;gap:6px;flex-wrap:wrap">
+            ${a.status !== 'approved' ? `<button class="btn btn-primary auto appd" data-id="${a.id}" data-d="approved">Approve</button>` : ''}
+            ${a.status !== 'rejected' ? `<button class="btn btn-ghost auto appd" data-id="${a.id}" data-d="rejected">Reject</button>` : ''}
+          </div></td>
+        </tr>`).join('') : `<tr><td colspan="6" class="p-sub">No applications yet.</td></tr>`}</tbody>
+    </table></div>`;
+  content().querySelectorAll('.appd').forEach((b) => b.addEventListener('click', async () => {
+    const { ok, data: d } = await api('/api/admin/applications/' + b.dataset.id + '/decision', { decision: b.dataset.d });
+    if (ok) { const em = d.email || {}; toast(`${statusLabel(b.dataset.d)} · email ${em.status || '—'}${em.status === 'Failed' ? ' — see Email log' : ''}`, em.status === 'Failed' ? 'error' : 'ok'); tApplications(); }
+    else toast(d.error || 'Failed', 'error');
+  }));
+}
+
+// Read-only admin activity log.
+async function tAudit() {
+  loading();
+  const { data } = await apiGet('/api/admin/audit');
+  const log = data.audit || [];
+  const detail = (a) => [a.taskId ? 'task ' + a.taskId : '', a.amount ? usd(a.amount) : '', a.applicationId ? 'app ' + a.applicationId : '', a.submissionId ? 'sub ' + a.submissionId : ''].filter(Boolean).join(' · ');
+  content().innerHTML = `
+    <p class="page-sub">A record of admin decisions and member applications, newest first.</p>
+    <div class="panel"><table class="table">
+      <thead><tr><th>When</th><th>Action</th><th>User</th><th>Details</th></tr></thead>
+      <tbody>${log.length ? log.map((a) => `
+        <tr>
+          <td class="p-sub">${new Date(a.createdAt).toLocaleString()}</td>
+          <td>${esc(String(a.action || '').replace(/_/g, ' '))}</td>
+          <td>${esc(a.username || a.userId || '—')}</td>
+          <td class="p-sub">${esc(detail(a) || '—')}</td>
+        </tr>`).join('') : `<tr><td colspan="4" class="p-sub">No activity logged yet.</td></tr>`}</tbody>
+    </table></div>`;
 }
 
 async function tUsers() {

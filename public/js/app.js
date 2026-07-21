@@ -345,7 +345,7 @@ const NAV = [
 ];
 const TITLES = {
   dashboard: 'Dashboard', stats: 'Stats', earn: 'Earn', tasks: 'Tasks', submissions: 'My submissions',
-  referral: 'Refer & earn', invest: 'Investments', advertise: 'Advertise', learn: 'Learn', redeem: 'Redeem',
+  referral: 'Refer & earn', applications: 'Applications', invest: 'Investments', advertise: 'Advertise', learn: 'Learn', redeem: 'Redeem',
   settings: 'Settings', chat: 'Chat', support: 'Support', admin: 'Admin review', profile: 'Profile',
 };
 
@@ -430,7 +430,7 @@ async function refreshMe() {
 
 function setActive(routeKey) {
   // Side nav groups tasks/submissions/referral under "Earn"; the bottom nav highlights the real page.
-  const sideKey = ['tasks', 'submissions', 'referral'].includes(routeKey) ? 'earn' : routeKey;
+  const sideKey = ['tasks', 'submissions', 'referral', 'applications'].includes(routeKey) ? 'earn' : routeKey;
   document.querySelectorAll('.nav-item').forEach((a) => {
     const on = a.dataset.route === sideKey;
     a.classList.toggle('active', on);
@@ -459,7 +459,8 @@ function router() {
   setActive(key);
   const map = {
     dashboard: pageDashboard, stats: pageStats, earn: pageEarn, tasks: pageTasks,
-    submissions: pageSubmissions, referral: pageReferral, invest: pageInvest, advertise: pageAdvertise,
+    submissions: pageSubmissions, referral: pageReferral, applications: pageApplications,
+    invest: pageInvest, advertise: pageAdvertise,
     learn: pageLearn, redeem: pageRedeem, settings: pageSettings, chat: pageChat,
     support: pageSupport, admin: pageAdmin, profile: pageProfile,
   };
@@ -650,6 +651,7 @@ async function pageEarn() {
       <a class="tile" href="#/tasks"><div class="ico">${ICON.edit}</div><h4>Tasks</h4><p>Complete microtasks for cash rewards.</p><span class="tag">Open →</span></a>
       <a class="tile" href="#/earn/surveys" id="surveysTile"><div class="ico">${ICON.clipboard}</div><h4>Surveys</h4><p>Answer surveys and earn in minutes.</p><span class="tag">Open →</span></a>
       <a class="tile" href="#/referral"><div class="ico">${ICON.userplus}</div><h4>Refer & earn</h4><p>5 KES per friend who joins.</p><span class="tag">Open →</span></a>
+      <a class="tile" href="#/applications"><div class="ico">${ICON.clipboard}</div><h4>Apply for tasks</h4><p>Send a proposal and get approved to work.</p><span class="tag">Open →</span></a>
       <a class="tile" href="#/submissions"><div class="ico">${ICON.submissions}</div><h4>My submissions</h4><p>Track approvals, rejections & disputes.</p><span class="tag">Open →</span></a>
       <div class="tile" style="opacity:.7"><div class="ico">${ICON.games}</div><h4>Games</h4><p>Get paid to play with our partners.</p><span class="tag">Coming soon</span></div>
       <div class="tile" style="opacity:.7"><div class="ico">${ICON.clicks}</div><h4>Paid clicks</h4><p>View partner offers for small rewards.</p><span class="tag">Coming soon</span></div>
@@ -996,6 +998,50 @@ function openDispute(id) {
     const { ok, data } = await api('/api/submissions/' + id + '/dispute', { message: bg.querySelector('#dMsg').value });
     if (ok) { toast(data.message); bg.remove(); pageSubmissions(); }
     else toast(data.error || 'Could not submit dispute', 'error');
+  });
+}
+
+// =====================================================================
+//  APPLICATIONS  (apply for a task with a proposal)
+// =====================================================================
+async function pageApplications() {
+  loading();
+  const [{ data: t }, { data: a }] = await Promise.all([apiGet('/api/tasks'), apiGet('/api/applications')]);
+  const tasks = (t.tasks || []).filter((x) => !x.locked);
+  const apps = a.applications || [];
+  view().innerHTML = `
+    <p class="page-sub">Apply for a task with a short proposal. Our team reviews applications and emails you the outcome.</p>
+    <div class="panel">
+      <h3>Apply for a task</h3>
+      <p class="p-sub">Optional — you can still start any available task directly from <a href="#/tasks">Tasks</a>.</p>
+      <form id="apForm">
+        <div class="field"><label>Task</label><select id="apTask">${tasks.length ? tasks.map((x) => `<option value="${esc(x.id)}">${esc(x.title)} · ${usd(x.reward)}</option>`).join('') : '<option value="">No tasks available right now</option>'}</select></div>
+        <div class="field"><label>Your proposal</label><textarea id="apProposal" placeholder="Briefly explain why you're a good fit for this task…"></textarea></div>
+        <button class="btn btn-primary" type="submit"${tasks.length ? '' : ' disabled'}>Submit application</button>
+      </form>
+    </div>
+    <div class="panel">
+      <h3>My applications</h3>
+      <table class="table">
+        <thead><tr><th>Task</th><th>Proposal</th><th>Status</th><th>Applied</th></tr></thead>
+        <tbody>${apps.length ? apps.map((x) => `
+          <tr>
+            <td>${esc(x.task ? x.task.title : x.taskId)}</td>
+            <td class="p-sub" style="max-width:260px;word-break:break-word">${esc(x.proposal || '—')}${x.reviewNote ? `<br><b>Note:</b> ${esc(x.reviewNote)}` : ''}</td>
+            <td><span class="st ${x.status}">${statusLabel(x.status)}</span></td>
+            <td class="p-sub">${new Date(x.createdAt).toLocaleDateString()}</td>
+          </tr>`).join('') : `<tr><td colspan="4" class="p-sub">No applications yet.</td></tr>`}</tbody>
+      </table>
+    </div>`;
+  document.getElementById('apForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const taskId = document.getElementById('apTask').value;
+    const proposal = document.getElementById('apProposal').value.trim();
+    if (!taskId) return toast('No task selected', 'error');
+    if (proposal.length < 10) return toast('Please write a short proposal (at least 10 characters).', 'error');
+    const { ok, data } = await api('/api/tasks/' + taskId + '/apply', { proposal });
+    if (ok) { toast(data.message || 'Application submitted'); pageApplications(); }
+    else toast(data.error || 'Could not apply', 'error');
   });
 }
 

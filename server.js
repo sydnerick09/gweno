@@ -1074,6 +1074,39 @@ app.get('/api/admin/submissions', requireAdminSession, (req, res) => {
 
 const usdStr = (n) => '$' + (Number(n) || 0).toFixed(2);
 
+// Append an admin-activity entry to the audit log (caller persists via db.save()).
+function audit(action, meta = {}) {
+  const S = db.get();
+  S.auditLog = S.auditLog || [];
+  S.auditLog.unshift({ id: rid(6), action, ...meta, createdAt: new Date().toISOString() });
+  if (S.auditLog.length > 1000) S.auditLog.length = 1000;
+}
+
+// Email the outcome of a task application (approved => #3 copy, rejected => rejection copy).
+async function notifyApplication(appRec, owner, task) {
+  const decision = appRec.status;
+  const rec = {
+    id: rid(6), type: 'application_' + decision, userId: appRec.userId, taskId: appRec.taskId,
+    submissionId: null, applicationId: appRec.id, amount: 0, to: (owner && owner.email) || null,
+    status: 'Failed', error: null, createdAt: new Date().toISOString(),
+  };
+  try {
+    if (!owner || !owner.email) throw new Error('User has no email on file');
+    if (!mailer.configured()) throw new Error('Email is not configured (set SMTP_* env vars)');
+    const name = owner.name || owner.username || 'there';
+    const taskName = task ? task.title : appRec.taskId;
+    if (decision === 'approved') await mailer.sendApplicationApproved({ to: owner.email, name, task: taskName });
+    else await mailer.sendTaskRejected({ to: owner.email, name, task: taskName });
+    rec.status = 'Sent';
+  } catch (e) { rec.error = e.message; }
+  const S = db.get();
+  S.emailLog = S.emailLog || [];
+  S.emailLog.unshift(rec);
+  if (S.emailLog.length > 500) S.emailLog.length = 500;
+  db.save();
+  return rec;
+}
+
 // Send the decision email, then log the attempt to the audit trail. A failed email is
 // logged (status: 'Failed') but NEVER rolls back the approval/credit — the admin can
 // resend it later from the panel.
@@ -1123,6 +1156,7 @@ app.post('/api/admin/submissions/:id/decision', requireAdminSession, async (req,
   sub.status = decision;
   sub.reviewedAt = new Date().toISOString();
   sub.reviewNote = note;
+  audit('submission_' + decision, { userId: sub.userId, taskId: sub.taskId, submissionId: sub.id, amount: decision === 'approved' ? round2(sub.reward) : 0 });
   db.save();  // commit the decision + balance BEFORE emailing (email failure never rolls back)
 
   const emailRec = await notifyDecision(sub, owner, tasksMod.byId(sub.taskId));
@@ -1142,11 +1176,84 @@ app.get('/api/admin/emails', requireAdminSession, (req, res) => {
 app.post('/api/admin/emails/:id/resend', requireAdminSession, async (req, res) => {
   const rec = (db.get().emailLog || []).find((e) => e.id === req.params.id);
   if (!rec) return res.status(404).json({ error: 'Email log entry not found.' });
+  if (rec.applicationId) {
+    const appRec = (db.get().applications || []).find((a) => a.id === rec.applicationId);
+    if (!appRec) return res.status(404).json({ error: 'Original application no longer exists.' });
+    const fresh = await notifyApplication(appRec, userById(appRec.userId), tasksMod.byId(appRec.taskId));
+    return res.json({ ok: true, email: { status: fresh.status, error: fresh.error } });
+  }
   const sub = db.get().submissions.find((x) => x.id === rec.submissionId);
   if (!sub) return res.status(404).json({ error: 'Original submission no longer exists.' });
-  const owner = userById(sub.userId);
-  const fresh = await notifyDecision(sub, owner, tasksMod.byId(sub.taskId));
+  const fresh = await notifyDecision(sub, userById(sub.userId), tasksMod.byId(sub.taskId));
   res.json({ ok: true, email: { status: fresh.status, error: fresh.error } });
+});
+
+// =============================================================================
+//  APPLICATIONS  —  apply for a task with a proposal (admin reviews)
+// =============================================================================
+app.get('/api/applications', requireAuth, (req, res) => {
+  const mine = (db.get().applications || [])
+    .filter((a) => a.userId === req.user.id)
+    .map((a) => ({ ...a, task: tasksMod.byId(a.taskId) }))
+    .sort((x, y) => String(y.createdAt).localeCompare(String(x.createdAt)));
+  res.json({ applications: mine });
+});
+
+app.post('/api/tasks/:id/apply', requireAuth, (req, res) => {
+  const task = tasksMod.byId(req.params.id);
+  if (!task) return res.status(404).json({ error: 'Task not found.' });
+  if (task.tier === 'premium' && !isPremium(req.user)) {
+    return res.status(403).json({ error: 'This is a Premium task. Subscribe to Premium to apply.' });
+  }
+  const proposal = String(req.body.proposal || '').trim();
+  if (proposal.length < 10) return res.status(400).json({ error: 'Please write a short proposal (at least 10 characters).' });
+  const S = db.get();
+  S.applications = S.applications || [];
+  if (S.applications.some((a) => a.userId === req.user.id && a.taskId === task.id && a.status !== 'rejected')) {
+    return res.status(409).json({ error: 'You already have an application for this task.' });
+  }
+  const appRec = {
+    id: rid(6), userId: req.user.id, taskId: task.id, proposal,
+    status: 'pending', createdAt: new Date().toISOString(), reviewedAt: null, reviewNote: '',
+  };
+  S.applications.unshift(appRec);
+  audit('application_created', { userId: req.user.id, taskId: task.id, applicationId: appRec.id });
+  db.save();
+  res.status(201).json({ application: appRec, message: 'Application submitted for review. We\'ll email you the outcome.' });
+});
+
+app.get('/api/admin/applications', requireAdminSession, (req, res) => {
+  const all = (db.get().applications || [])
+    .map((a) => {
+      const u = userById(a.userId);
+      return { ...a, task: tasksMod.byId(a.taskId), user: u ? { username: u.username, email: u.email } : null };
+    })
+    .sort((x, y) => String(y.createdAt).localeCompare(String(x.createdAt)));
+  res.json({ applications: all });
+});
+
+app.post('/api/admin/applications/:id/decision', requireAdminSession, async (req, res) => {
+  const appRec = (db.get().applications || []).find((a) => a.id === req.params.id);
+  if (!appRec) return res.status(404).json({ error: 'Application not found.' });
+  const decision = String(req.body.decision || '');
+  const note = String(req.body.note || '').trim();
+  if (!['approved', 'rejected'].includes(decision)) return res.status(400).json({ error: 'Invalid decision.' });
+  appRec.status = decision;
+  appRec.reviewedAt = new Date().toISOString();
+  appRec.reviewNote = note;
+  audit('application_' + decision, { userId: appRec.userId, taskId: appRec.taskId, applicationId: appRec.id });
+  db.save();
+  const emailRec = await notifyApplication(appRec, userById(appRec.userId), tasksMod.byId(appRec.taskId));
+  res.json({ ok: true, application: appRec, email: { status: emailRec.status, error: emailRec.error } });
+});
+
+// Admin audit log (read-only).
+app.get('/api/admin/audit', requireAdminSession, (req, res) => {
+  const log = (db.get().auditLog || []).map((a) => {
+    const u = a.userId ? userById(a.userId) : null;
+    return { ...a, username: u ? u.username : null };
+  });
+  res.json({ audit: log });
 });
 
 // ---- Admin sign-in (separate credentials + own cookie; not a client account) ----
