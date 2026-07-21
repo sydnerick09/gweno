@@ -16,7 +16,7 @@ const EMPTY = {
   users: [], sessions: [], resetTokens: [], attempts: {}, resetRequests: {},
   magicTokens: [], magicRequests: {},
   submissions: [], campaigns: [], redemptions: [], support: [], deposits: [], devices: [],
-  adminSessions: [], investments: [], investmentRates: {}, broadcasts: [],
+  adminSessions: [], investments: [], investmentRates: {}, broadcasts: [], emailLog: [],
 };
 
 function loadFile() {

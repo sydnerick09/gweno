@@ -983,7 +983,7 @@ app.get('/api/tasks', requireAuth, (req, res) => {
   const premium = isPremium(req.user);
   const mine = mySubmissions(req.user.id);
   // Hide tasks that are pending or approved; rejected ones can be retried.
-  const done = new Set(mine.filter((x) => x.status !== 'rejected').map((x) => x.taskId));
+  const done = new Set(mine.filter((x) => x.status !== 'rejected' && x.status !== 'correction').map((x) => x.taskId));
   const available = TASKS.filter((t) => !done.has(t.id)).map((t) => ({ ...t, locked: t.tier === 'premium' && !premium }));
   const accessible = available.filter((t) => !t.locked);
   const pending = mine.filter((x) => x.status === 'pending').reduce((a, x) => a + x.reward, 0);
@@ -1018,7 +1018,7 @@ app.post('/api/tasks/:id/submit', requireAuth, (req, res) => {
     return res.status(403).json({ error: 'This is a Premium task. Subscribe to Premium to work on it.' });
   }
   const S = db.get();
-  if (mySubmissions(req.user.id).some((x) => x.taskId === task.id && x.status !== 'rejected')) {
+  if (mySubmissions(req.user.id).some((x) => x.taskId === task.id && x.status !== 'rejected' && x.status !== 'correction')) {
     return res.status(409).json({ error: 'You have already submitted this task.' });
   }
   // One task per day: block if the user already started a task today.
@@ -1072,26 +1072,81 @@ app.get('/api/admin/submissions', requireAdminSession, (req, res) => {
   res.json({ submissions: all });
 });
 
-app.post('/api/admin/submissions/:id/decision', requireAdminSession, (req, res) => {
+const usdStr = (n) => '$' + (Number(n) || 0).toFixed(2);
+
+// Send the decision email, then log the attempt to the audit trail. A failed email is
+// logged (status: 'Failed') but NEVER rolls back the approval/credit — the admin can
+// resend it later from the panel.
+async function notifyDecision(sub, owner, task) {
+  const decision = sub.status;
+  const rec = {
+    id: rid(6), type: decision, userId: sub.userId, taskId: sub.taskId, submissionId: sub.id,
+    amount: decision === 'approved' ? round2(sub.reward) : 0,
+    to: (owner && owner.email) || null, status: 'Failed', error: null,
+    createdAt: new Date().toISOString(),
+  };
+  try {
+    if (!owner || !owner.email) throw new Error('User has no email on file');
+    if (!mailer.configured()) throw new Error('Email is not configured (set SMTP_* env vars)');
+    const name = owner.name || owner.username || 'there';
+    const taskName = task ? task.title : sub.taskId;
+    if (decision === 'approved') await mailer.sendTaskApproved({ to: owner.email, name, task: taskName, amount: usdStr(sub.reward), balance: usdStr(owner.usd) });
+    else if (decision === 'rejected') await mailer.sendTaskRejected({ to: owner.email, name, task: taskName });
+    else if (decision === 'correction') await mailer.sendTaskCorrection({ to: owner.email, name, task: taskName, reason: sub.reviewNote });
+    rec.status = 'Sent';
+  } catch (e) { rec.error = e.message; }
+  const S = db.get();
+  S.emailLog = S.emailLog || [];
+  S.emailLog.unshift(rec);
+  if (S.emailLog.length > 500) S.emailLog.length = 500;
+  db.save();
+  return rec;
+}
+
+app.post('/api/admin/submissions/:id/decision', requireAdminSession, async (req, res) => {
   const sub = db.get().submissions.find((x) => x.id === req.params.id);
   if (!sub) return res.status(404).json({ error: 'Submission not found.' });
   const decision = String(req.body.decision || '');
   const note = String(req.body.note || '').trim();
-  if (!['approved', 'rejected'].includes(decision)) return res.status(400).json({ error: 'Invalid decision.' });
+  if (!['approved', 'rejected', 'correction'].includes(decision)) return res.status(400).json({ error: 'Invalid decision.' });
+  if (decision === 'correction' && !note) return res.status(400).json({ error: 'A reason for correction is required.' });
 
   const owner = userById(sub.userId);
   if (owner) ensureUserShape(owner);
-  if (decision === 'approved' && sub.status !== 'approved' && owner) {
-    owner.usd = round2((owner.usd || 0) + sub.reward);       // credit on approval
+  const wasApproved = sub.status === 'approved';
+  if (decision === 'approved' && !wasApproved && owner) {
+    owner.usd = round2((owner.usd || 0) + sub.reward);              // credit on approval
   }
-  if (decision === 'rejected' && sub.status === 'approved' && owner) {
-    owner.usd = round2(Math.max(0, (owner.usd || 0) - sub.reward)); // reverse if un-approved
+  if (decision !== 'approved' && wasApproved && owner) {
+    owner.usd = round2(Math.max(0, (owner.usd || 0) - sub.reward)); // reverse a prior approval
   }
   sub.status = decision;
   sub.reviewedAt = new Date().toISOString();
   sub.reviewNote = note;
-  db.save();
-  res.json({ ok: true, submission: sub });
+  db.save();  // commit the decision + balance BEFORE emailing (email failure never rolls back)
+
+  const emailRec = await notifyDecision(sub, owner, tasksMod.byId(sub.taskId));
+  res.json({ ok: true, submission: sub, email: { status: emailRec.status, error: emailRec.error } });
+});
+
+// Audit log of outgoing decision emails (with resend).
+app.get('/api/admin/emails', requireAdminSession, (req, res) => {
+  const log = (db.get().emailLog || []).map((e) => {
+    const u = userById(e.userId);
+    const t = tasksMod.byId(e.taskId);
+    return { ...e, username: u ? u.username : null, taskTitle: t ? t.title : e.taskId };
+  });
+  res.json({ emails: log });
+});
+
+app.post('/api/admin/emails/:id/resend', requireAdminSession, async (req, res) => {
+  const rec = (db.get().emailLog || []).find((e) => e.id === req.params.id);
+  if (!rec) return res.status(404).json({ error: 'Email log entry not found.' });
+  const sub = db.get().submissions.find((x) => x.id === rec.submissionId);
+  if (!sub) return res.status(404).json({ error: 'Original submission no longer exists.' });
+  const owner = userById(sub.userId);
+  const fresh = await notifyDecision(sub, owner, tasksMod.byId(sub.taskId));
+  res.json({ ok: true, email: { status: fresh.status, error: fresh.error } });
 });
 
 // ---- Admin sign-in (separate credentials + own cookie; not a client account) ----

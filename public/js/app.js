@@ -16,6 +16,9 @@ function toggleTheme() { setTheme(currentTheme() === 'dark' ? 'light' : 'dark');
 // ---------- tiny helpers ----------
 const usd = (n) => '$' + (Number(n) || 0).toFixed(2);
 const kes = (n) => Math.round(Number(n) || 0).toLocaleString() + ' KES';
+// Professional, user-facing status names used consistently across the app.
+const STATUS_LABEL = { pending: 'Pending Review', approved: 'Approved', rejected: 'Rejected', correction: 'Correction Required', completed: 'Completed' };
+const statusLabel = (s) => STATUS_LABEL[s] || s;
 
 // Combine the KES wallet (bonuses/referrals/deposits) and USD wallet (task earnings)
 // into a single total, expressed in both currencies using the live FX rate.
@@ -969,9 +972,9 @@ async function pageSubmissions() {
             <tr>
               <td>${esc(s.task ? s.task.title : s.taskId)}</td>
               <td class="num">${usd(s.reward)}</td>
-              <td><span class="st ${s.status}">${s.status}</span>${s.dispute ? ' <span class="st pending">dispute open</span>' : ''}</td>
+              <td><span class="st ${s.status}">${statusLabel(s.status)}</span>${s.dispute ? ' <span class="st pending">dispute open</span>' : ''}${(s.status === 'correction' || s.status === 'rejected') && s.reviewNote ? `<br><span class="p-sub">${esc(s.reviewNote)}</span>` : ''}</td>
               <td class="p-sub">${new Date(s.createdAt).toLocaleDateString()}</td>
-              <td>${s.status === 'rejected' && !s.dispute ? `<button class="btn btn-ghost auto dispute" data-id="${s.id}">Dispute</button>` : ''}</td>
+              <td>${s.status === 'correction' ? `<a class="btn btn-primary auto" href="#/tasks">Redo task</a>` : s.status === 'rejected' && !s.dispute ? `<button class="btn btn-ghost auto dispute" data-id="${s.id}">Dispute</button>` : ''}</td>
             </tr>`).join('') : `<tr><td colspan="5" class="p-sub">No submissions yet. <a href="#/tasks">Start a task →</a></td></tr>`}
         </tbody>
       </table>

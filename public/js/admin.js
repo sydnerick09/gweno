@@ -5,6 +5,9 @@ let TAB = 'overview';
 const usd = (n) => '$' + (Number(n) || 0).toFixed(2);
 const kes = (n) => Math.round(Number(n) || 0).toLocaleString() + ' KES';
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+// Professional, user-facing status names used consistently across the app.
+const STATUS_LABEL = { pending: 'Pending Review', approved: 'Approved', rejected: 'Rejected', correction: 'Correction Required', completed: 'Completed' };
+const statusLabel = (s) => STATUS_LABEL[s] || s;
 async function apiGet(p) { const r = await fetch(p); let d = {}; try { d = await r.json(); } catch (_) {} return { ok: r.ok, status: r.status, data: d }; }
 function toast(msg, type = 'ok') {
   const t = document.createElement('div'); t.className = 'toast ' + type; t.textContent = msg;
@@ -12,7 +15,7 @@ function toast(msg, type = 'ok') {
   setTimeout(() => { t.classList.remove('show'); setTimeout(() => t.remove(), 250); }, 3000);
 }
 
-const TABS = [['overview', 'Overview'], ['submissions', 'Submissions'], ['users', 'Users'], ['broadcast', 'Broadcast'], ['investments', 'Investments'], ['deposits', 'Deposits'], ['withdrawals', 'Withdrawals'], ['support', 'Support']];
+const TABS = [['overview', 'Overview'], ['submissions', 'Submissions'], ['emails', 'Email log'], ['users', 'Users'], ['broadcast', 'Broadcast'], ['investments', 'Investments'], ['deposits', 'Deposits'], ['withdrawals', 'Withdrawals'], ['support', 'Support']];
 
 // Lightweight modal for admin forms (reuses .modal styles from app.css).
 function adminModal(html) {
@@ -105,7 +108,7 @@ const loading = () => { content().innerHTML = `
   </div>`; };
 
 function route() {
-  ({ overview: tOverview, submissions: tSubmissions, users: tUsers, broadcast: tBroadcast, investments: tInvestments, deposits: tDeposits, withdrawals: tWithdrawals, support: tSupport }[TAB] || tOverview)();
+  ({ overview: tOverview, submissions: tSubmissions, emails: tEmails, users: tUsers, broadcast: tBroadcast, investments: tInvestments, deposits: tDeposits, withdrawals: tWithdrawals, support: tSupport }[TAB] || tOverview)();
 }
 
 async function tOverview() {
@@ -152,13 +155,74 @@ async function tSubmissions() {
           <td class="num">${usd(sm.reward)}</td>
           <td class="p-sub" style="max-width:280px;word-break:break-word">${proofCell(sm.proof)}${sm.dispute ? `<br><b style="color:var(--danger)">Dispute:</b> ${esc(sm.dispute.message)}` : ''}</td>
           <td class="p-sub">${sm.createdAt ? new Date(sm.createdAt).toLocaleString() : '—'}</td>
-          <td><span class="st ${sm.status}">${sm.status}</span></td>
-          <td>${sm.status !== 'approved' ? `<button class="btn btn-primary auto adm" data-id="${sm.id}" data-d="approved">Approve</button> ` : ''}${sm.status !== 'rejected' ? `<button class="btn btn-ghost auto adm" data-id="${sm.id}" data-d="rejected">Reject</button>` : ''}</td>
+          <td><span class="st ${sm.status}">${statusLabel(sm.status)}</span>${(sm.status === 'correction' || sm.status === 'rejected') && sm.reviewNote ? `<br><span class="p-sub">${esc(sm.reviewNote)}</span>` : ''}</td>
+          <td><div style="display:flex;gap:6px;flex-wrap:wrap">
+            ${sm.status !== 'approved' ? `<button class="btn btn-primary auto adm-approve" data-id="${sm.id}">Approve</button>` : ''}
+            ${sm.status !== 'correction' ? `<button class="btn btn-ghost auto adm-correct" data-id="${sm.id}">Correction</button>` : ''}
+            ${sm.status !== 'rejected' ? `<button class="btn btn-ghost auto adm-reject" data-id="${sm.id}">Reject</button>` : ''}
+          </div></td>
         </tr>`).join('') : `<tr><td colspan="7" class="p-sub">No submissions yet.</td></tr>`}</tbody>
     </table></div>`;
-  content().querySelectorAll('.adm').forEach((b) => b.addEventListener('click', async () => {
-    const { ok, data: d } = await api('/api/admin/submissions/' + b.dataset.id + '/decision', { decision: b.dataset.d });
-    if (ok) { toast('Marked ' + b.dataset.d); tSubmissions(); } else toast(d.error || 'Failed', 'error');
+  content().querySelectorAll('.adm-approve').forEach((b) => b.addEventListener('click', () => decideSubmission(b.dataset.id, 'approved')));
+  content().querySelectorAll('.adm-reject').forEach((b) => b.addEventListener('click', () => decideSubmission(b.dataset.id, 'rejected')));
+  content().querySelectorAll('.adm-correct').forEach((b) => b.addEventListener('click', () => openCorrection(b.dataset.id)));
+}
+
+// Approve / reject / request-correction. Surfaces whether the decision email sent.
+async function decideSubmission(id, decision, note) {
+  const { ok, data: d } = await api('/api/admin/submissions/' + id + '/decision', { decision, note: note || '' });
+  if (!ok) return toast(d.error || 'Failed', 'error');
+  const em = d.email || {};
+  const failed = em.status === 'Failed';
+  toast(`${statusLabel(decision)} · email ${em.status || '—'}${failed ? ' — resend from Email log' : ''}`, failed ? 'error' : 'ok');
+  tSubmissions();
+}
+
+// The "Reason for Correction" is composed by the admin and emailed to the member.
+function openCorrection(id) {
+  const bg = adminModal(`
+    <button class="close">×</button>
+    <h3>Request correction</h3>
+    <p class="p-sub">The member receives an email with this reason and can then resubmit the task.</p>
+    <form id="corrForm">
+      <div class="field"><label>Reason for correction</label><textarea id="corrReason" rows="4" style="width:100%;border:1px solid var(--line);border-radius:10px;padding:10px;font:inherit;background:var(--bg-2);color:var(--text)" placeholder="Explain exactly what needs fixing…"></textarea></div>
+      <button class="btn btn-primary" type="submit">Send correction request</button>
+    </form>`);
+  bg.querySelector('#corrForm').addEventListener('submit', (e) => {
+    e.preventDefault();
+    const reason = bg.querySelector('#corrReason').value.trim();
+    if (!reason) return toast('Please enter a reason for correction', 'error');
+    bg.remove();
+    decideSubmission(id, 'correction', reason);
+  });
+}
+
+// Audit log of automatic decision emails, with manual resend.
+async function tEmails() {
+  loading();
+  const { data } = await apiGet('/api/admin/emails');
+  const list = data.emails || [];
+  content().innerHTML = `
+    <p class="page-sub">Every automatic decision email (approval, rejection, correction), with delivery status. Resend any that failed.</p>
+    <div class="panel"><table class="table">
+      <thead><tr><th>When</th><th>Type</th><th>User</th><th>Task</th><th class="num">Amount</th><th>To</th><th>Status</th><th>Action</th></tr></thead>
+      <tbody>${list.length ? list.map((e) => `
+        <tr>
+          <td class="p-sub">${new Date(e.createdAt).toLocaleString()}</td>
+          <td>${statusLabel(e.type)}</td>
+          <td>${esc(e.username || e.userId || '—')}</td>
+          <td>${esc(e.taskTitle || e.taskId || '—')}</td>
+          <td class="num">${e.amount ? usd(e.amount) : '—'}</td>
+          <td class="p-sub">${esc(e.to || '—')}</td>
+          <td><span class="st ${e.status === 'Sent' ? 'approved' : 'rejected'}">${esc(e.status)}</span>${e.error ? `<br><span class="p-sub">${esc(e.error)}</span>` : ''}</td>
+          <td><button class="btn btn-ghost auto eresend" data-id="${esc(e.id)}">Resend</button></td>
+        </tr>`).join('') : `<tr><td colspan="8" class="p-sub">No decision emails yet.</td></tr>`}</tbody>
+    </table></div>`;
+  content().querySelectorAll('.eresend').forEach((b) => b.addEventListener('click', async () => {
+    b.disabled = true;
+    const { ok, data: d } = await api('/api/admin/emails/' + b.dataset.id + '/resend', {});
+    if (ok) { const st = d.email ? d.email.status : '—'; toast('Resend: ' + st, st === 'Failed' ? 'error' : 'ok'); tEmails(); }
+    else { b.disabled = false; toast(d.error || 'Failed', 'error'); }
   }));
 }
 

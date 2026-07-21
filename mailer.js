@@ -62,6 +62,75 @@ async function sendMagicLink(to, link) {
   });
 }
 
+const DASHBOARD_URL = process.env.APP_URL || 'https://gweno.vercel.app';
+
+// ---- Task-decision notifications (sent by the admin approve/reject/correction flow) ----
+async function sendTaskApproved({ to, name, task, amount, balance }) {
+  const text =
+`Hello ${name},
+
+We are pleased to inform you that your submission for ${task} has been reviewed and approved.
+
+Your submission has been received successfully, and the task earnings have been credited to your account balance.
+
+Amount Credited: ${amount}
+Updated Balance: ${balance}
+
+You can now log in to your dashboard to view your updated balance and continue working on additional tasks.
+
+Dashboard:
+${DASHBOARD_URL}
+
+Withdrawal Reminder
+When requesting a withdrawal, please ensure that you enter the correct payment details and account credentials. Incorrect or incomplete withdrawal information may result in delayed or unsuccessful transactions.
+
+Before submitting a withdrawal request, please verify:
+- Account holder name
+- Phone number or payment account
+- Selected payment method
+- Any other required withdrawal details
+
+We are unable to guarantee successful withdrawals if incorrect information is provided.
+
+Thank you for being part of gweno.
+
+gweno Team`;
+  return send({ to, subject: 'Task Approved & Earnings Credited', text });
+}
+
+async function sendTaskRejected({ to, name, task }) {
+  const text =
+`Hello ${name},
+
+Unfortunately, your application for ${task} was not approved at this time.
+
+You are welcome to apply for other available tasks.
+
+Thank you for your interest.
+
+gweno Team`;
+  return send({ to, subject: 'Task Application Update', text });
+}
+
+async function sendTaskCorrection({ to, name, task, reason }) {
+  const text =
+`Hello ${name},
+
+Your submission for ${task} needs a correction before it can be approved.
+
+Reason for Correction:
+${reason || 'Please review your submission and provide the requested details.'}
+
+Please review the reason above, make the necessary changes, and resubmit the task from your dashboard.
+
+Dashboard:
+${DASHBOARD_URL}
+
+Thank you,
+gweno Team`;
+  return send({ to, subject: 'Task Correction Required', text });
+}
+
 async function sendSupport({ fromEmail, subject, message }) {
   return send({
     to: CFG.supportTo,
@@ -71,4 +140,7 @@ async function sendSupport({ fromEmail, subject, message }) {
   });
 }
 
-module.exports = { configured, send, sendPasswordReset, sendMagicLink, sendSupport, CFG };
+module.exports = {
+  configured, send, sendPasswordReset, sendMagicLink, sendSupport, CFG,
+  sendTaskApproved, sendTaskRejected, sendTaskCorrection,
+};
