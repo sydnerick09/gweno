@@ -3,6 +3,7 @@
 let ME = null;
 let FX = 129; // KES per USD; overwritten from /api/me
 let PAGE_POLL = null; // stop() for the current page's smart poller (see data.js)
+let LEADERBOARD_PERIOD = 'weekly'; // remembered leaderboard tab
 
 // ---------- theme (light/dark) ----------
 const THEME_ICONS = {
@@ -93,6 +94,12 @@ const ICON = {
   lock: '<svg viewBox="0 0 24 24"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>',
   api: '<svg viewBox="0 0 24 24"><path d="M4 17l6-6-6-6"/><path d="M12 19h8"/></svg>',
   code: '<svg viewBox="0 0 24 24"><path d="M16 18l6-6-6-6"/><path d="M8 6l-6 6 6 6"/></svg>',
+  // ---- Gamification icons ----
+  trophy: '<svg viewBox="0 0 24 24"><path d="M8 21h8M12 17v4M7 4h10v5a5 5 0 0 1-10 0z"/><path d="M7 4H4v2a3 3 0 0 0 3 3M17 4h3v2a3 3 0 0 1-3 3"/></svg>',
+  award: '<svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="6"/><path d="M8.2 13.9L7 22l5-3 5 3-1.2-8.1"/></svg>',
+  star: '<svg viewBox="0 0 24 24"><path d="M12 2l3.1 6.3 6.9 1-5 4.9 1.2 6.8L12 17.8 5.8 21l1.2-6.8-5-4.9 6.9-1z"/></svg>',
+  flame: '<svg viewBox="0 0 24 24"><path d="M12 2s5 4 5 9a5 5 0 0 1-10 0c0-1.5.6-2.8 1.3-3.8C9 8 9 6.5 9 6.5S12 8 12 5c0-1.2 0-3-.0-3z"/></svg>',
+  bell: '<svg viewBox="0 0 24 24"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>',
 };
 
 // Brand logos for the payment-method picker (approximate, self-contained SVGs/wordmarks).
@@ -186,6 +193,7 @@ async function boot() {
   window.addEventListener('hashchange', router);
   router();
   loadBroadcasts();
+  setTimeout(() => { try { notifyGameEvents(); } catch (_) {} }, 1200); // level-up / badge toasts
   setTimeout(() => { try { maybeStartTour(); } catch (_) {} }, 900); // first-login guided tour
 }
 
@@ -332,6 +340,8 @@ const NAV = [
   ['dashboard', 'Dashboard', ICON.home],
   ['stats', 'Stats', ICON.chart],
   ['earn', 'Earn', ICON.money],
+  ['rewards', 'Rewards', ICON.trophy],
+  ['leaderboard', 'Leaderboard', ICON.award],
   ['invest', 'Investments', ICON.invest],
   ['advertise', 'Advertise', ICON.advertise],
   ['learn', 'Learn', ICON.learn],
@@ -346,6 +356,7 @@ const NAV = [
 const TITLES = {
   dashboard: 'Dashboard', stats: 'Stats', earn: 'Earn', tasks: 'Tasks', submissions: 'My submissions',
   referral: 'Refer & earn', applications: 'Applications', invest: 'Investments', advertise: 'Advertise', learn: 'Learn', redeem: 'Redeem',
+  rewards: 'Rewards', leaderboard: 'Leaderboard',
   settings: 'Settings', chat: 'Chat', support: 'Support', admin: 'Admin review', profile: 'Profile',
 };
 
@@ -373,14 +384,7 @@ function renderShell() {
         <main class="view" id="view"></main>
       </div>
     </div>
-    <div class="nav-scrim" id="navScrim" aria-hidden="true"></div>
-    <nav class="bottom-nav" id="bottomNav" aria-label="Primary">
-      <a class="bn-item" data-route="dashboard" href="#/dashboard"><span class="bn-ico">${ICON.home}</span><span class="bn-lbl">Dashboard</span></a>
-      <a class="bn-item" data-route="tasks" href="#/tasks"><span class="bn-ico">${ICON.tasks}</span><span class="bn-lbl">Tasks</span></a>
-      <a class="bn-item" data-route="redeem" href="#/redeem"><span class="bn-ico">${ICON.bank}</span><span class="bn-lbl">Redeem</span></a>
-      <a class="bn-item" data-route="invest" href="#/invest"><span class="bn-ico">${ICON.invest}</span><span class="bn-lbl">Invest</span></a>
-      <a class="bn-item" data-route="profile" href="#/profile"><span class="bn-ico">${ICON.user}</span><span class="bn-lbl">Profile</span></a>
-    </nav>`;
+    <div class="nav-scrim" id="navScrim" aria-hidden="true"></div>`;
 
   // ---- Mobile nav drawer (standard behaviour) ----
   const sidebarEl = () => document.getElementById('sidebar');
@@ -397,19 +401,6 @@ function renderShell() {
   scrimEl().addEventListener('click', () => setMenu(false));
   document.addEventListener('keydown', (e) => { if (e.key === 'Escape') setMenu(false); });
 
-  // ---- Auto-hide bottom nav: slide out on scroll-down, back in on scroll-up ----
-  let lastY = window.scrollY || 0, ticking = false;
-  function onScroll() {
-    const bn = document.getElementById('bottomNav');
-    const y = window.scrollY || 0;
-    if (bn) {
-      if (y > lastY + 6 && y > 90) bn.classList.add('bn-hidden');      // scrolling down past a small threshold
-      else if (y < lastY - 6) bn.classList.remove('bn-hidden');        // any upward scroll reveals it
-    }
-    lastY = y; ticking = false;
-  }
-  window.addEventListener('scroll', () => { if (!ticking) { requestAnimationFrame(onScroll); ticking = true; } }, { passive: true });
-
   updateTopbar();
 }
 
@@ -418,7 +409,8 @@ function updateTopbar() {
   document.getElementById('topRight').innerHTML = `
     <button class="theme-toggle" id="themeBtn" title="Toggle dark mode" aria-label="Toggle dark mode">${currentTheme() === 'dark' ? THEME_ICONS.sun : THEME_ICONS.moon}</button>
     <span class="chip usd">${ICON.money} ${usd(t.usd)}</span>
-    <span class="chip kes">${ICON.coins} ${kes(t.kes)}</span>`;
+    <span class="chip kes">${ICON.coins} ${kes(t.kes)}</span>
+    <a href="#/profile" class="avatar-link" title="Profile" aria-label="Profile">${avatarHTML(ME, 'avatar-sm')}</a>`;
   const tb = document.getElementById('themeBtn');
   if (tb) tb.addEventListener('click', toggleTheme);
 }
@@ -429,24 +421,13 @@ async function refreshMe() {
 }
 
 function setActive(routeKey) {
-  // Side nav groups tasks/submissions/referral under "Earn"; the bottom nav highlights the real page.
+  // Side nav groups tasks/submissions/referral under "Earn".
   const sideKey = ['tasks', 'submissions', 'referral', 'applications'].includes(routeKey) ? 'earn' : routeKey;
   document.querySelectorAll('.nav-item').forEach((a) => {
     const on = a.dataset.route === sideKey;
     a.classList.toggle('active', on);
     if (on) a.setAttribute('aria-current', 'page'); else a.removeAttribute('aria-current');
   });
-  document.querySelectorAll('.bottom-nav [data-route]').forEach((a) => {
-    const on = a.dataset.route === routeKey;
-    a.classList.toggle('active', on);
-    if (on) a.setAttribute('aria-current', 'page'); else a.removeAttribute('aria-current');
-  });
-  // Keep the active item visible in the horizontally scrollable bottom bar.
-  const bn = document.querySelector('.bottom-nav');
-  const active = document.querySelector('.bottom-nav [data-route].active');
-  if (bn && active && bn.scrollWidth > bn.clientWidth) {
-    bn.scrollTo({ left: active.offsetLeft - bn.clientWidth / 2 + active.clientWidth / 2, behavior: 'smooth' });
-  }
 }
 
 // ---------- router ----------
@@ -463,6 +444,7 @@ function router() {
     invest: pageInvest, advertise: pageAdvertise,
     learn: pageLearn, redeem: pageRedeem, settings: pageSettings, chat: pageChat,
     support: pageSupport, admin: pageAdmin, profile: pageProfile,
+    rewards: pageRewards, leaderboard: pageLeaderboard,
   };
   (map[key] || pageDashboard)();
   window.scrollTo(0, 0);
@@ -501,6 +483,7 @@ async function pageDashboard() {
   const skv = (w) => `<span class="sk sk-line" style="display:inline-block;width:${w};height:22px;vertical-align:middle"></span>`;
   view().innerHTML = `
     <p class="page-sub">Welcome back, <b>${esc(ME.username || ME.name)}</b>. Here's your activity.</p>
+    ${gameStripHTML()}
 
     <div class="grid g4">
       <div class="stat brand balance-card" id="balCard" title="Hold to switch currency">
@@ -1469,7 +1452,7 @@ async function pageRedeem() {
   const bank = dep.data.bank || null; // receiving bank account for manual bank-transfer deposits
   const statusClass = (s) => (s && /(paid|success)/i.test(s) ? 'approved' : s === 'Failed' ? 'rejected' : 'pending');
   const savedPhone = (ME.profile && ME.profile.phone) || '';
-  const minUSD = (data.min && data.min.USD) || 0.5;
+  const minUSD = (data.min && data.min.USD) || 1.5;
 
   // Coming back from a card / Paystack checkout redirect (?deposited / ?depfail).
   const rq = new URLSearchParams(location.hash.split('?')[1] || '');
@@ -1648,10 +1631,13 @@ async function pageRedeem() {
 
     if (m === 'Bank account') {
       const g = (id) => (document.getElementById(id) || {}).value || '';
+      const bankSel = document.getElementById('bkBankCode');
+      const bankName = (bankSel && bankSel.selectedOptions[0] && bankSel.value) ? bankSel.selectedOptions[0].text : '';
       const bankCode = g('bkBankCode'), accountNumber = g('bkAcct').trim(), accountName = g('bkName').trim();
       if (bankLive) { if (!bankCode || !accountNumber) return toast('Choose your bank and enter your account number', 'error'); }
       else if (!accountNumber) return toast('Enter your account details', 'error');
-      Object.assign(body, { bankCode, accountNumber, accountName, destination: `${accountName ? accountName + ' · ' : ''}${accountNumber}` });
+      const dest = [accountName, bankName, accountNumber].filter(Boolean).join(' · ');
+      Object.assign(body, { bankCode, bankName, accountNumber, accountName, destination: dest });
     } else {
       const destEl = document.getElementById('rDest');
       body.destination = destEl ? destEl.value : '';
@@ -1717,6 +1703,7 @@ function pageProfile() {
         <button class="btn btn-ghost auto wa-edit" id="waEdit"><span class="bico">${ICON.edit}</span> Edit</button>
         <button class="wa-act" id="waSearch" title="Search" aria-label="Search profile">${ICON.search}</button>
         <button class="wa-act" id="waQr" title="Referral QR code" aria-label="Show referral QR code">${ICON.qr}</button>
+        <a class="wa-act" href="https://www.tiktok.com/@gweno.com" target="_blank" rel="noopener noreferrer" title="Review us on TikTok" aria-label="Review us on TikTok">${ICON.star}</a>
       </div>
 
       <div class="panel wa-head">
@@ -2075,6 +2062,138 @@ function pageSupport() {
     if (ok) { toast(data.message); document.getElementById('f').reset(); } else toast(data.error, 'error');
   });
 }
+
+// =====================================================================
+//  GAMIFICATION  —  Rewards, Leaderboard, verification, level-up toasts
+// =====================================================================
+const VERIF = {
+  blue:    { label: 'Verified',         color: '#2196f3' },
+  gold:    { label: 'Gold Verified',    color: '#f59e0b' },
+  diamond: { label: 'Diamond Verified', color: '#22d3ee' },
+};
+// A small verification check-mark chip. `size` = 'sm' for inline next to a name.
+function verifBadge(tier, size) {
+  const v = VERIF[tier]; if (!v) return '';
+  const check = `<svg viewBox="0 0 24 24" width="14" height="14" style="vertical-align:-2px"><path fill="${v.color}" d="M12 2l2.4 1.8 3-.2 1 2.8 2.5 1.6-.9 2.9.9 2.9-2.5 1.6-1 2.8-3-.2L12 22l-2.4-1.8-3 .2-1-2.8L3.1 16l.9-2.9L3.1 10l2.5-1.6 1-2.8 3 .2z"/><path fill="#fff" d="M10.6 14.6l-2.2-2.2-1.1 1.1 3.3 3.3 5.6-5.6-1.1-1.1z"/></svg>`;
+  if (size === 'sm') return `<span title="${v.label}">${check}</span>`;
+  return `<span class="verif-chip" style="border-color:${v.color}55"><span>${check}</span> ${v.label}</span>`;
+}
+
+// Compact gamification strip for the dashboard (uses ME.game — no extra fetch).
+function gameStripHTML() {
+  const g = ME.game; if (!g) return '';
+  return `<a href="#/rewards" class="panel game-strip" style="text-decoration:none;color:inherit;display:block">
+    <div class="gs-top">
+      <div class="gs-level">${ICON.trophy} <b>${esc(g.level)}</b> ${verifBadge(g.verification, 'sm')}</div>
+      <div class="gs-xp">${g.xp.toLocaleString()} XP</div>
+    </div>
+    <div class="xp-bar"><i style="width:${g.pct}%"></i></div>
+    <div class="gs-meta">
+      <span>${ICON.flame} ${g.streak} day${g.streak === 1 ? '' : 's'}</span>
+      <span>${ICON.coins} ${g.coins.toLocaleString()} coins</span>
+      <span>${ICON.award} ${g.badges} badge${g.badges === 1 ? '' : 's'}</span>
+    </div>
+  </a>`;
+}
+
+async function pageRewards() {
+  loading();
+  const { ok, data } = await apiGet('/api/gamification');
+  if (!ok) { view().innerHTML = `<div class="panel">Could not load rewards. Please try again.</div>`; return; }
+  const lv = data.level;
+  const badge = (b) => `<div class="badge-card ${b.earned ? 'earned' : 'locked'}" title="${esc(b.desc)}">
+    <div class="bc-ico">${b.icon}</div><div class="bc-name">${esc(b.name)}</div>
+    <div class="bc-desc">${esc(b.desc)}</div></div>`;
+  const stat = (label, val) => `<div class="stat"><div class="label">${label}</div><div class="value">${val}</div></div>`;
+  view().innerHTML = `
+    <p class="page-sub">Level up by completing tasks, surveys, investments and referrals — every action earns XP.</p>
+
+    <div class="panel level-hero">
+      <div class="lh-left">
+        <div class="lh-level">${ICON.trophy} <span>${esc(lv.name)}</span> ${verifBadge(data.verification)}</div>
+        <div class="lh-sub">Rank #${data.rank} of ${data.totalUsers} · ${data.xp.toLocaleString()} XP</div>
+        <div class="xp-bar big"><i style="width:${lv.pct}%"></i></div>
+        <div class="lh-next">${lv.next ? `${lv.toNext.toLocaleString()} XP to <b>${esc(lv.next)}</b>` : 'Max level reached — you are a Legend! 🌟'}</div>
+      </div>
+    </div>
+
+    <div class="grid g4">
+      ${stat('🔥 Streak', `${data.streak.current} day${data.streak.current === 1 ? '' : 's'}`)}
+      ${stat('🪙 Coins', data.coins.toLocaleString())}
+      ${stat('⭐ Reputation', data.reputation.toLocaleString())}
+      ${stat('🏅 Badges', `${data.badgesEarned}/${data.badgesTotal}`)}
+    </div>
+
+    <div class="panel">
+      <h3>Redeem coins</h3>
+      <p class="p-sub">Spend your reward coins on platform benefits.</p>
+      <div class="redeem-row">
+        <div><b>Premium access</b><div class="p-sub" style="margin:0">Unlock premium tasks & perks</div></div>
+        <button class="btn btn-primary auto" id="redeemPremium" ${data.coins < 1000 ? 'disabled' : ''}>1,000 🪙 → Premium</button>
+      </div>
+    </div>
+
+    <div class="panel">
+      <h3>Achievements</h3>
+      <p class="p-sub">${data.badgesEarned} of ${data.badgesTotal} unlocked.</p>
+      <div class="badge-grid">${data.badges.map(badge).join('')}</div>
+    </div>
+
+    <div class="panel">
+      <h3>Your stats</h3>
+      <div class="grid g3" style="margin-top:8px">
+        ${stat('Tasks', data.stats.tasks)}${stat('Surveys', data.stats.surveys)}${stat('Investments', data.stats.investments)}
+        ${stat('Referrals', data.stats.referrals)}${stat('Withdrawals', data.stats.withdrawals)}${stat('Earned', usd(data.stats.earnedUSD))}
+      </div>
+    </div>
+
+    ${data.events && data.events.length ? `<div class="panel"><h3>Recent activity</h3>
+      <div class="feed">${data.events.map((e) => `<div class="feed-row"><span class="fr-ico">${e.icon}</span><span>${esc(e.text)}</span></div>`).join('')}</div></div>` : ''}`;
+
+  const rp = document.getElementById('redeemPremium');
+  if (rp) rp.addEventListener('click', async () => {
+    rp.disabled = true;
+    const { ok: o, data: d } = await api('/api/coins/redeem', { item: 'premium' });
+    if (o) { toast(d.message); await refreshMe(); pageRewards(); } else { toast(d.error || 'Could not redeem', 'error'); rp.disabled = false; }
+  });
+  markGameEventsRead();
+}
+
+async function pageLeaderboard() {
+  loading();
+  let period = LEADERBOARD_PERIOD || 'weekly';
+  async function load() {
+    const { ok, data } = await apiGet('/api/leaderboard?period=' + period);
+    const tabs = ['weekly', 'monthly', 'all'].map((p) => `<button class="tab ${p === period ? 'active' : ''}" data-p="${p}">${p === 'all' ? 'All time' : p[0].toUpperCase() + p.slice(1)}</button>`).join('');
+    const rows = (ok && data.top || []);
+    const medal = (r) => r === 1 ? '🥇' : r === 2 ? '🥈' : r === 3 ? '🥉' : `<span class="lb-rank">${r}</span>`;
+    view().innerHTML = `
+      <p class="page-sub">Compete with other members. Rankings are by XP earned in the period.</p>
+      <div class="tabs">${tabs}</div>
+      <div class="panel">
+        ${rows.length ? `<div class="lb">${rows.map((u) => `
+          <div class="lb-row ${u.me ? 'me' : ''}">
+            <div class="lb-pos">${medal(u.rank)}</div>
+            <div class="lb-av">${avatarHTML(u, 'avatar-sm')}</div>
+            <div class="lb-name">${esc(u.name)} ${verifBadge(u.verification, 'sm')}<div class="lb-lvl">${esc(u.level)}</div></div>
+            <div class="lb-xp">${u.xp.toLocaleString()} XP</div>
+          </div>`).join('')}</div>` : `<p class="p-sub" style="text-align:center;padding:20px">No ranked activity yet. Complete tasks to get on the board!</p>`}
+      </div>`;
+    view().querySelectorAll('.tab').forEach((b) => b.addEventListener('click', () => { period = b.dataset.p; LEADERBOARD_PERIOD = period; load(); }));
+  }
+  await load();
+}
+
+// Show toasts for new level-ups / badges / rewards, then mark them read so they
+// aren't shown twice. Called after login and after reward-earning actions.
+async function notifyGameEvents() {
+  const { ok, data } = await apiGet('/api/notifications');
+  if (!ok || !data.events) return;
+  const fresh = data.events.filter((e) => !e.read && ['levelup', 'badge', 'reward'].includes(e.type));
+  fresh.slice(0, 3).forEach((e, i) => setTimeout(() => toast(`${e.icon} ${e.text}`), i * 900));
+  if (fresh.length) markGameEventsRead();
+}
+async function markGameEventsRead() { try { await api('/api/notifications/read', {}); } catch (_) {} }
 
 // Admin lives on its own page now, outside the member dashboard.
 function pageAdmin() { location.href = '/admin.html'; }
