@@ -363,16 +363,25 @@ function validateProof(task, raw) {
   }
 }
 
-const BASIC_MAX_USD = 0.5;
+// Required subscription tier is derived AUTOMATICALLY from the reward (spec):
+//   reward <= $1.00   -> basic
+//   $1.01 - $2.00     -> premium
+//   $2.01 - $7.00     -> premiumpro
+function tierForReward(reward) {
+  const r = Number(reward) || 0;
+  if (r <= 1.00) return 'basic';
+  if (r <= 2.00) return 'premium';
+  return 'premiumpro';
+}
+
 const TASKS = RAW.map((t, i) => {
-  const isBasic = t.tier === 'basic';
-  const reward = isBasic ? Math.min(t.reward, BASIC_MAX_USD) : t.reward;
+  const reward = Math.min(Math.max(Number(t.reward) || 0, 0.01), 7.00); // clamp to $0.01–$7.00
   return {
     id: 'T' + String(i + 1).padStart(3, '0'),
     title: t.title,
     category: t.category,
     reward,                               // USD
-    tier: t.tier,
+    tier: tierForReward(reward),          // basic | premium | premiumpro
     proofType: t.proofType || 'text',
     requiresProof: true,
     // validation params surfaced to the client for instant feedback:
@@ -392,4 +401,5 @@ module.exports = {
   TASKS,
   byId: (id) => TASKS.find((t) => t.id === id) || null,
   validateProof,
+  tierForReward,
 };

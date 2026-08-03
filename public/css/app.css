@@ -137,7 +137,20 @@
 .task-card.locked .tc-reward { color: var(--muted); }
 .tier-badge { font-size: 11px; font-weight: 700; padding: 3px 9px; border-radius: 999px; border: 1px solid transparent; }
 .tier-badge.basic { background: var(--bg-2); color: var(--muted); border-color: var(--line); }
-.tier-badge.premium { background: #f3f4f6; color: #374151; border-color: #e5e7eb; }
+.tier-badge.premium { background: #fdf3d6; color: #b45309; border-color: #f3d894; }
+.tier-badge.premiumpro { background: #f3e8ff; color: #7c3aed; border-color: #e2cffb; }
+
+/* Subscription plan cards */
+.plan-cards { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-top: 14px; }
+.plan-mini { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 14px; text-align: left; }
+.plan-mini.current { border-color: var(--brand); box-shadow: 0 0 0 2px rgba(15,118,110,.18); }
+.plan-mini .pm-name { font-weight: 800; font-size: 15px; }
+.plan-mini .pm-price { font-size: 20px; font-weight: 800; margin: 4px 0; }
+.plan-mini .pm-price span { font-size: 12px; font-weight: 500; color: var(--muted); }
+.plan-mini .pm-earn { color: var(--muted); font-size: 13px; margin-bottom: 10px; }
+.plan-opt { cursor: pointer; width: 100%; transition: border-color .12s, box-shadow .12s; }
+.plan-opt.selected { border-color: var(--brand); box-shadow: 0 0 0 2px rgba(15,118,110,.22); background: var(--green-pale); }
+@media (max-width: 560px) { .plan-cards { grid-template-columns: 1fr; } }
 
 /* Premium upgrade banner */
 .panel.upgrade { background: var(--bg-2); border-color: var(--line); }
@@ -263,34 +276,6 @@
 .nav-scrim.show { opacity: 1; visibility: visible; }
 @media (min-width: 901px) { .nav-scrim { display: none; } }
 
-/* Bottom navigation bar (mobile): a horizontally scrollable row of quick links.
-   All destinations also remain in the hamburger menu, so nothing is unreachable. */
-.bottom-nav { display: none; }
-@media (max-width: 900px) {
-  .bottom-nav {
-    display: flex; align-items: stretch;
-    position: fixed; left: 8px; right: 8px; bottom: calc(8px + env(safe-area-inset-bottom, 0px)); height: 62px; z-index: 45;
-    background: var(--card); border: 1px solid var(--line); border-radius: 18px;
-    box-shadow: 0 8px 26px rgba(16,24,40,.16);
-    padding: 0 4px;
-    /* Smooth slide for the auto-hide-on-scroll behaviour. */
-    transition: transform var(--t-nav) var(--ease);
-    will-change: transform;
-  }
-  /* Slid fully out of view (translate past the safe-area) when scrolling down. */
-  .bottom-nav.bn-hidden { transform: translateY(calc(100% + 24px + env(safe-area-inset-bottom, 0px))); }
-  .bn-item {
-    flex: 1 1 0; min-width: 0;
-    display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px;
-    text-decoration: none; color: var(--muted); font-size: 11px; font-weight: 600;
-  }
-  .bn-item.active { color: var(--brand); }
-  .bn-ico svg { fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; display: block; width: 22px; height: 22px; }
-  .bn-lbl { white-space: nowrap; }
-  /* Reserve space for the bar even while it's hidden, so nothing shifts on show/hide. */
-  .content .view { padding-bottom: calc(92px + env(safe-area-inset-bottom, 0px)); }
-}
-
 /* Settings sub-nav (tabs) */
 .tabs { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 18px; }
 .tab { padding: 8px 14px; border-radius: 999px; border: 1px solid var(--line); background: var(--card); cursor: pointer; font-size: 14px; color: var(--text); transition: background var(--t-fast) var(--ease), border-color var(--t-fast) var(--ease), color var(--t-fast) var(--ease); }
@@ -323,14 +308,12 @@
 
 @media (max-width: 900px) {
   .g4, .g3, .g2, .tiles { grid-template-columns: 1fr 1fr; }
-  /* Drawer sits ABOVE the bottom nav (z-index 45) so the Sign out button is always reachable. */
+  /* Sidebar becomes a slide-in drawer (above the page scrim) opened by the hamburger. */
   .sidebar { position: fixed; z-index: 60; transform: translateX(-100%); transition: transform var(--t-nav) var(--ease); }
   .sidebar.open { transform: none; }
-  /* Extra room at the bottom of the drawer so Sign out clears the bottom bar / home indicator. */
+  /* Extra room at the bottom of the drawer so Sign out clears the home indicator. */
   .side-foot { padding-bottom: calc(14px + env(safe-area-inset-bottom, 0px)); }
   .hamburger { display: inline-block; }
-  /* On mobile the bottom nav provides Profile, so hide the duplicate menu item. */
-  .side-nav .nav-item[data-route="profile"] { display: none; }
 }
 @media (max-width: 560px) {
   .g3, .g2, .tiles { grid-template-columns: 1fr; }
@@ -348,3 +331,123 @@
   .admin-body .table { min-width: 640px; }
   .admin-body .tabs { overflow-x: auto; flex-wrap: nowrap; }
 }
+
+/* ============================ Gamification ============================ */
+/* XP progress bar */
+.xp-bar { height: 8px; border-radius: 999px; background: var(--bg-2); overflow: hidden; margin: 8px 0; }
+.xp-bar > i { display: block; height: 100%; width: 0; border-radius: 999px; background: var(--brand); transition: width .5s ease; }
+.xp-bar.big { height: 12px; margin: 12px 0; }
+
+/* Verification checkmark chip */
+.verif-chip { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; font-weight: 700; padding: 3px 10px; border-radius: 999px; border: 1px solid var(--line); vertical-align: middle; }
+
+/* Dashboard strip */
+.game-strip { transition: transform .06s ease, box-shadow .15s; }
+.game-strip:hover { transform: translateY(-1px); box-shadow: 0 6px 18px rgba(16,24,40,.10); }
+.gs-top { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.gs-level { display: inline-flex; align-items: center; gap: 8px; font-size: 16px; }
+.gs-level svg { width: 20px; height: 20px; fill: none; stroke: var(--brand); stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.gs-xp { font-weight: 800; color: var(--brand-2); }
+.gs-meta { display: flex; gap: 16px; flex-wrap: wrap; color: var(--muted); font-size: 13px; font-weight: 600; }
+.gs-meta span { display: inline-flex; align-items: center; gap: 6px; }
+.gs-meta svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+
+/* Rewards page level hero */
+.level-hero { background: linear-gradient(135deg, var(--brand) 0%, var(--brand-2) 100%); color: #fff; border: none; }
+.lh-level { display: inline-flex; align-items: center; gap: 10px; font-size: 26px; font-weight: 800; }
+.lh-level svg { width: 28px; height: 28px; fill: none; stroke: #fff; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.lh-level .verif-chip { background: rgba(255,255,255,.18); border-color: rgba(255,255,255,.4); color: #fff; }
+.lh-sub { opacity: .92; font-size: 14px; margin-top: 4px; }
+.level-hero .xp-bar { background: rgba(255,255,255,.28); }
+.level-hero .xp-bar > i { background: #fff; }
+.lh-next { font-size: 13px; opacity: .95; }
+
+/* Badges grid */
+.badge-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 12px; margin-top: 6px; }
+.badge-card { border: 1px solid var(--line); border-radius: var(--radius); padding: 14px; text-align: center; background: var(--card); }
+.badge-card.locked { opacity: .45; filter: grayscale(1); }
+.badge-card.earned { border-color: var(--brand); box-shadow: 0 0 0 1px var(--brand) inset; }
+.bc-ico { font-size: 30px; line-height: 1; }
+.bc-name { font-weight: 700; font-size: 14px; margin-top: 6px; }
+.bc-desc { color: var(--muted); font-size: 12px; margin-top: 2px; }
+
+/* Coins redeem row */
+.redeem-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+
+/* Activity feed */
+.feed-row { display: flex; align-items: center; gap: 10px; padding: 9px 0; border-bottom: 1px solid var(--line); font-size: 14px; }
+.feed-row:last-child { border-bottom: none; }
+.fr-ico { font-size: 18px; }
+
+/* Leaderboard */
+.lb-row { display: flex; align-items: center; gap: 12px; padding: 12px 0; border-bottom: 1px solid var(--line); }
+.lb-row:last-child { border-bottom: none; }
+.lb-row.me { background: var(--green-pale); border-radius: 10px; padding-left: 10px; padding-right: 10px; }
+.lb-pos { width: 34px; text-align: center; font-size: 20px; font-weight: 800; }
+.lb-pos .lb-rank { font-size: 15px; color: var(--muted); }
+.lb-av { flex: 0 0 auto; }
+.lb-name { flex: 1; min-width: 0; font-weight: 700; }
+.lb-lvl { font-weight: 500; font-size: 12px; color: var(--muted); }
+.lb-xp { font-weight: 800; color: var(--brand-2); white-space: nowrap; }
+
+/* ===================== Gamification ===================== */
+/* XP progress bar */
+.xp-bar { height: 8px; border-radius: 999px; background: var(--bg-2); overflow: hidden; border: 1px solid var(--line); }
+.xp-bar.big { height: 12px; }
+.xp-bar > i { display: block; height: 100%; border-radius: 999px; background: linear-gradient(90deg, var(--brand), var(--brand-2)); transition: width .5s var(--ease, ease); }
+
+/* Verification chip / inline check */
+.verif-chip { display: inline-flex; align-items: center; gap: 5px; padding: 3px 10px; border-radius: 999px; border: 1px solid var(--line); font-size: 12px; font-weight: 700; color: var(--text); }
+.verif-chip svg { width: 14px; height: 14px; }
+
+/* Dashboard gamification strip */
+.game-strip { transition: transform .08s var(--ease, ease), box-shadow .15s; }
+.game-strip:hover { transform: translateY(-1px); box-shadow: 0 6px 18px rgba(16,24,40,.10); }
+.game-strip svg { width: 17px; height: 17px; vertical-align: -3px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.gs-top { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
+.gs-level { font-size: 16px; display: inline-flex; align-items: center; gap: 6px; }
+.gs-level svg { stroke: var(--brand); }
+.gs-xp { font-weight: 800; color: var(--brand-2); }
+.gs-meta { display: flex; gap: 16px; flex-wrap: wrap; margin-top: 10px; color: var(--muted); font-size: 13px; font-weight: 600; }
+.gs-meta svg { stroke: var(--muted); }
+
+/* Level hero card (Rewards page) */
+.level-hero { background: linear-gradient(135deg, var(--brand), var(--brand-2)); border: none; color: #fff; }
+.level-hero .lh-level { font-size: 26px; font-weight: 800; display: flex; align-items: center; gap: 8px; }
+.level-hero .lh-level svg { width: 26px; height: 26px; fill: none; stroke: #fff; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.level-hero .verif-chip { background: rgba(255,255,255,.18); border-color: rgba(255,255,255,.4); color: #fff; }
+.level-hero .lh-sub { opacity: .92; margin: 6px 0 14px; font-weight: 600; }
+.level-hero .xp-bar { background: rgba(255,255,255,.25); border-color: rgba(255,255,255,.3); }
+.level-hero .xp-bar > i { background: #fff; }
+.level-hero .lh-next { margin-top: 10px; font-size: 14px; opacity: .95; }
+
+/* Coin redeem row */
+.redeem-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; padding: 12px; border: 1px solid var(--line); border-radius: var(--radius, 10px); background: var(--bg-2); }
+
+/* Badges grid */
+.badge-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 12px; margin-top: 8px; }
+.badge-card { text-align: center; padding: 16px 10px; border: 1px solid var(--line); border-radius: var(--radius, 10px); background: var(--card); transition: transform .08s, border-color .15s; }
+.badge-card.earned { border-color: var(--brand); box-shadow: 0 2px 10px rgba(33,150,243,.12); }
+.badge-card.locked { opacity: .5; filter: grayscale(1); }
+.badge-card:hover { transform: translateY(-2px); }
+.bc-ico { font-size: 30px; line-height: 1; }
+.bc-name { font-weight: 700; font-size: 13px; margin-top: 6px; }
+.bc-desc { color: var(--muted); font-size: 11px; margin-top: 3px; line-height: 1.35; }
+
+/* Activity feed */
+.feed { display: flex; flex-direction: column; }
+.feed-row { display: flex; align-items: center; gap: 10px; padding: 9px 0; border-bottom: 1px solid var(--line); font-size: 14px; }
+.feed-row:last-child { border-bottom: none; }
+.feed-row .fr-ico { font-size: 17px; width: 24px; text-align: center; }
+
+/* Leaderboard */
+.lb { display: flex; flex-direction: column; }
+.lb-row { display: flex; align-items: center; gap: 12px; padding: 11px 8px; border-bottom: 1px solid var(--line); border-radius: 8px; }
+.lb-row:last-child { border-bottom: none; }
+.lb-row.me { background: var(--green-pale); border: 1px solid var(--brand); }
+.lb-pos { width: 32px; text-align: center; font-size: 20px; }
+.lb-pos .lb-rank { font-size: 14px; font-weight: 800; color: var(--muted); }
+.lb-name { flex: 1; min-width: 0; font-weight: 700; font-size: 14px; }
+.lb-name .lb-lvl { font-weight: 500; font-size: 12px; color: var(--muted); }
+.lb-xp { font-weight: 800; color: var(--brand-2); white-space: nowrap; }
+@media (max-width: 560px) { .badge-grid { grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); } }

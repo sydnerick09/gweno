@@ -22,6 +22,7 @@ const { currencyFor } = require('./currencies');
 const payments = require('./payments');
 const mailer = require('./mailer');
 const oauth = require('./oauth');
+const gamify = require('./gamify');
 const { TASKS } = tasksMod;
 
 const app = express();
@@ -73,11 +74,19 @@ function investMethodConfigured(method) {
 }
 const investMethodsInfo = () => INVEST_METHODS.map((key) => ({ key, configured: investMethodConfigured(key) }));
 const USERNAME_COOLDOWN_MS = 30 * 24 * 60 * 60 * 1000;   // username changeable once / 30 days
-const MIN_REDEEM = { KES: 39, USD: 0.3 };        // minimum cash-out: $0.30 (M-Pesa ≈ 39 KES)
+const MIN_REDEEM = { KES: 194, USD: 1.5 };       // minimum cash-out: $1.50 (M-Pesa ≈ 194 KES)
 const DEPOSIT_MIN_KES = 10;                              // DEPOSITS via M-Pesa STK Push (KES)
 const FX_KES_PER_USD = Number(process.env.FX_KES_PER_USD) || 129; // conversion rate (configurable)
-const SUBSCRIPTION_USD = 10;                            // Premium unlocks $1–$4 tasks
 const SUBSCRIPTION_DAYS = 30;
+// Three subscription tiers. A member can work on any task whose required tier rank
+// is <= their plan rank (higher plans unlock the lower bands too).
+const PLANS = [
+  { id: 'basic', name: 'Basic', priceKES: 200, rank: 1, minUSD: 0, maxUSD: 1.00 },
+  { id: 'premium', name: 'Premium', priceKES: 500, rank: 2, minUSD: 1.00, maxUSD: 2.00 },
+  { id: 'premiumpro', name: 'Premium Pro', priceKES: 1000, rank: 3, minUSD: 2.00, maxUSD: 7.00 },
+];
+const PLAN_BY_ID = Object.fromEntries(PLANS.map((p) => [p.id, p]));
+const TASKS_PER_DAY = 2;                                 // a member can do 2 tasks per day
 const ADMIN_EMAIL = (process.env.ADMIN_EMAIL || '').trim().toLowerCase();
 const SURVEY_DONE = 'surveysDone';
 
@@ -204,9 +213,12 @@ const ON_VERCEL = !!process.env.VERCEL;
 // a just-created session. With Supabase's transaction pooler the reload is cheap.
 app.use(async (req, res, next) => {
   try { await dbReady; } catch (_) {}
-  if (ON_VERCEL && req.path.startsWith('/api')) {
-    if (db.reload) { try { await db.reload(); } catch (_) {} }
-    if (db.flush) {
+  if (req.path.startsWith('/api')) {
+    if (ON_VERCEL && db.reload) { try { await db.reload(); } catch (_) {} }
+    // One-time gamification backfill for accounts created before the system existed.
+    // Runs on fresh state, is flag-guarded, and replays awards idempotently.
+    try { backfillGamification(); } catch (e) { console.error('[gweno] gamify backfill:', e.message); }
+    if (ON_VERCEL && db.flush) {
       for (const name of ['json', 'redirect']) {
         const orig = res[name].bind(res);
         res[name] = (...args) => { db.flush().finally(() => orig(...args)); return res; };
@@ -229,6 +241,48 @@ app.use(async (req, res, next) => {
   S.investments = S.investments || []; // member investments
   S.investmentRates = S.investmentRates || {}; // admin per-plan interest-rate overrides
 })();
+
+// One-time backfill: award XP/badges/levels for activity that happened before the
+// gamification system launched. Every award reuses the SAME idempotency key the live
+// hooks use (task:<id>, survey:<id>, invest:<id>, referral:<userId>, redeem:<id>), so
+// this is safe to run repeatedly — already-awarded events are skipped. A persisted
+// flag stops it from re-scanning on every request once it has completed.
+function backfillGamification() {
+  const s = db.get();
+  if (!s || !Array.isArray(s.users) || s.gamifyBackfillDone) return;
+  const byId = new Map(s.users.map((u) => [u.id, u]));
+  let awards = 0;
+  const give = (u, type, key, opts) => { if (!u) return; ensureUserShape(u); if (gamify.award(u, type, key, opts)) awards += 1; };
+
+  for (const sub of (s.submissions || [])) {
+    if (sub.status === 'approved') give(byId.get(sub.userId), 'task', `task:${sub.id}`, { earnedUSD: round2(sub.reward || 0) });
+  }
+  for (const u of s.users) {
+    ensureUserShape(u);
+    for (const sid of (u[SURVEY_DONE] || [])) {
+      const survey = surveysMod.byId(sid);
+      give(u, 'survey', `survey:${sid}`, { earnedUSD: round2((survey || {}).reward || 0) });
+    }
+    if (u.onboarded && gamify.markProfileComplete(u)) awards += 1;
+  }
+  for (const inv of (s.investments || [])) {
+    if (inv.status === 'active' || inv.status === 'completed') give(byId.get(inv.userId), 'invest', `invest:${inv.id}`);
+  }
+  for (const nu of s.users) {
+    if (nu.referredBy && nu.referralCredited) give(byId.get(nu.referredBy), 'referral', `referral:${nu.id}`);
+  }
+  for (const rec of (s.redemptions || [])) {
+    give(byId.get(rec.userId), 'withdraw', `redeem:${rec.id}`);
+  }
+
+  // These are historical replays — clear the event feed so members aren't flooded
+  // with dozens of stale "task approved" / level-up toasts on their next visit.
+  for (const u of s.users) { if (u.game && Array.isArray(u.game.events)) u.game.events = []; }
+
+  s.gamifyBackfillDone = true;
+  db.save();
+  console.log(`[gweno] gamification backfill complete: ${awards} awards across ${s.users.length} user(s).`);
+}
 
 // ---- Helpers ----------------------------------------------------------------
 const now = () => Date.now();
@@ -258,8 +312,22 @@ function passwordProblem(pw) {
 
 const round2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
 const newRefCode = () => crypto.randomBytes(5).toString('hex'); // 10-char single-use code
-const isPremium = (u) => !!(u && u.premium && u.premium.active && (!u.premium.expires || new Date(u.premium.expires).getTime() > now()));
-const grantPremium = (u) => { const iso = new Date().toISOString(); u.premium = { active: true, since: iso, expires: new Date(now() + SUBSCRIPTION_DAYS * 86400000).toISOString() }; };
+// The member's active plan object (or null if none / expired).
+function activePlan(u) {
+  if (!u || !u.plan || !u.plan.id) return null;
+  if (u.plan.expires && new Date(u.plan.expires).getTime() <= now()) return null;
+  return PLAN_BY_ID[u.plan.id] || null;
+}
+const userRank = (u) => { const p = activePlan(u); return p ? p.rank : 0; };
+// A task is accessible if the member's plan rank >= the task's required-tier rank.
+function canAccessTask(u, task) {
+  const need = PLAN_BY_ID[task.tier] ? PLAN_BY_ID[task.tier].rank : 99;
+  return userRank(u) >= need;
+}
+const grantPlan = (u, id) => { const iso = new Date().toISOString(); u.plan = { id, since: iso, expires: new Date(now() + SUBSCRIPTION_DAYS * 86400000).toISOString() }; };
+// Back-compat: some code still calls isPremium — now "has any active paid plan".
+const isPremium = (u) => userRank(u) > 0;
+const grantPremium = (u) => grantPlan(u, 'premium');
 
 // #5 — one account per device. A used fingerprint stays a tombstone even after
 // the account is deleted, so the same device can't register again.
@@ -330,9 +398,14 @@ function ensureUserShape(u) {
   if (u.usernameChangedAt === undefined) u.usernameChangedAt = null;
   if (!u[SURVEY_DONE]) u[SURVEY_DONE] = [];
   if (!u.premium) u.premium = { active: false, since: null, expires: null };
+  // Subscription plan (basic | premium | premiumpro). Migrate legacy premium flag.
+  if (u.plan === undefined) {
+    u.plan = (u.premium && u.premium.active) ? { id: 'premium', since: u.premium.since, expires: u.premium.expires } : null;
+  }
   if (!u.tour) u.tour = { done: false, skips: 0, lastSkipAt: null }; // first-login guided tour
   if (u.suspended === undefined) u.suspended = false; // admin: blocks sign-in
   if (u.held === undefined) u.held = false;           // admin: pauses withdrawals
+  gamify.ensureGameShape(u);                           // XP / level / badges / streak / coins
   return u;
 }
 
@@ -360,6 +433,9 @@ function payReferralOnOnboarding(newUser) {
   owner.balance = round2((owner.balance || 0) + REF_BONUS_KES);
   owner.referralEarningsKES = round2((owner.referralEarningsKES || 0) + REF_BONUS_KES);
   owner.referralCount = (owner.referralCount || 0) + 1;
+  gamify.award(owner, 'referral', `referral:${newUser.id}`, {   // XP once per referred user
+    event: { text: 'Referral bonus earned 🤝', icon: '🤝' },
+  });
   newUser.referralCredited = true;
 }
 
@@ -373,7 +449,12 @@ function publicUser(u) {
     notifications: u.notifications, payment: { method: u.payment.method || '', details: u.payment.details || '' },
     avatar: u.avatar || null, isAdmin: !!u.isAdmin, usernameChangedAt: u.usernameChangedAt || null,
     premium: { active: isPremium(u), expires: u.premium.expires || null },
+    plan: (() => { const p = activePlan(u); return p ? { id: p.id, name: p.name, rank: p.rank, maxUSD: p.maxUSD, expires: u.plan && u.plan.expires } : null; })(),
     tour: u.tour || { done: false, skips: 0, lastSkipAt: null },
+    game: (() => { const g = u.game, lv = gamify.level(g.xp);
+      return { xp: g.xp, coins: g.coins, level: lv.name, levelIdx: lv.idx, pct: lv.pct,
+        streak: g.streak.count, verification: g.verification, badges: g.badges.length,
+        unread: (g.events || []).filter((e) => !e.read).length }; })(),
   };
 }
 
@@ -680,6 +761,8 @@ app.post('/api/login', rateLimit('login', 30, 10 * 60 * 1000), async (req, res) 
 
     // Success: clear the failed-attempt record and start a fresh, expiring session.
     delete s.attempts[email];
+    ensureUserShape(user);
+    gamify.touchStreak(user);       // daily login streak + bonus XP/coins (idempotent per day)
     db.save();
     createSession(res, user.id);
     res.json({ user: publicUser(user) });
@@ -927,6 +1010,7 @@ app.post('/api/onboarding', requireAuth, (req, res) => {
   user.profile = Object.assign({}, user.profile, { ageRange, education, about, referral });
   user.balance = (user.balance || 0) + bonus;
   user.onboarded = true;
+  gamify.markProfileComplete(user); // one-time XP for finishing the welcome profile
   payReferralOnOnboarding(user); // pay the referrer their 5 KES now that questions are answered
   db.save();
 
@@ -936,6 +1020,65 @@ app.post('/api/onboarding', requireAuth, (req, res) => {
 // ---- Session-backed endpoints ----------------------------------------------
 app.get('/api/me', requireAuth, (req, res) => {
   res.json({ user: publicUser(req.user), sessionExpiresAt: req.session.expiresAt, fx: FX_KES_PER_USD });
+});
+
+// =============================================================================
+//  GAMIFICATION  —  XP / levels / badges / streaks / coins / leaderboard
+// =============================================================================
+app.get('/api/gamification', requireAuth, (req, res) => {
+  const me = req.user;
+  const sum = gamify.summary(me);
+  // Overall rank = position by total XP across all (non-suspended) users.
+  const users = db.get().users.filter((u) => !u.suspended);
+  const myXp = (me.game && me.game.xp) || 0;
+  const rank = users.filter((u) => ((u.game && u.game.xp) || 0) > myXp).length + 1;
+  res.json({ ...sum, rank, totalUsers: users.length, events: (me.game.events || []).slice(0, 20) });
+});
+
+app.get('/api/leaderboard', requireAuth, (req, res) => {
+  const period = String(req.query.period || 'weekly');
+  const days = period === 'monthly' ? 30 : period === 'all' ? 3650 : 7;
+  const rows = db.get().users
+    .filter((u) => !u.suspended)
+    .map((u) => { gamify.ensureGameShape(u);
+      const xp = period === 'all' ? u.game.xp : gamify.periodXP(u.game, days);
+      return { id: u.id, name: u.username || u.name || 'User', avatar: u.avatar || null,
+        level: gamify.level(u.game.xp).name, verification: u.game.verification, xp }; })
+    .filter((r) => r.xp > 0)
+    .sort((a, b) => b.xp - a.xp)
+    .slice(0, 50)
+    .map((r, i) => ({ rank: i + 1, ...r, me: r.id === req.user.id }));
+  res.json({ period, top: rows });
+});
+
+app.get('/api/notifications', requireAuth, (req, res) => {
+  gamify.ensureGameShape(req.user);
+  const events = req.user.game.events || [];
+  res.json({ events: events.slice(0, 30), unread: events.filter((e) => !e.read).length });
+});
+
+app.post('/api/notifications/read', requireAuth, (req, res) => {
+  gamify.ensureGameShape(req.user);
+  (req.user.game.events || []).forEach((e) => { e.read = true; });
+  db.save();
+  res.json({ ok: true });
+});
+
+// Redeem reward coins for a platform benefit (premium access). Server-validated:
+// the coin balance is checked and deducted here, never trusted from the client.
+const COINS_PREMIUM_COST = 1000;
+app.post('/api/coins/redeem', requireAuth, (req, res) => {
+  const item = String(req.body.item || 'premium');
+  gamify.ensureGameShape(req.user);
+  if (item !== 'premium') return res.status(400).json({ error: 'Unknown reward.' });
+  if ((req.user.game.coins || 0) < COINS_PREMIUM_COST) {
+    return res.status(400).json({ error: `You need ${COINS_PREMIUM_COST} coins for this reward.` });
+  }
+  req.user.game.coins -= COINS_PREMIUM_COST;
+  grantPremium(req.user);
+  gamify.pushEvent(req.user, 'reward', `Redeemed ${COINS_PREMIUM_COST} coins for Premium 🎁`, '🎁');
+  db.save();
+  res.json({ ok: true, coins: req.user.game.coins, message: 'Premium unlocked with your coins! 🎉' });
 });
 
 app.post('/api/logout', (req, res) => {
@@ -980,26 +1123,32 @@ function mySubmissions(userId) {
 }
 
 app.get('/api/tasks', requireAuth, (req, res) => {
-  const premium = isPremium(req.user);
+  const plan = activePlan(req.user);
   const mine = mySubmissions(req.user.id);
   // Hide tasks that are pending or approved; rejected ones can be retried.
   const done = new Set(mine.filter((x) => x.status !== 'rejected' && x.status !== 'correction').map((x) => x.taskId));
-  const available = TASKS.filter((t) => !done.has(t.id)).map((t) => ({ ...t, locked: t.tier === 'premium' && !premium }));
+  // Held accounts don't receive new tasks until an admin restores them.
+  const available = (req.user.held ? [] : TASKS.filter((t) => !done.has(t.id))).map((t) => ({
+    ...t,
+    requiredPlan: PLAN_BY_ID[t.tier] ? PLAN_BY_ID[t.tier].name : t.tier,
+    locked: !canAccessTask(req.user, t),
+  }));
   const accessible = available.filter((t) => !t.locked);
   const pending = mine.filter((x) => x.status === 'pending').reduce((a, x) => a + x.reward, 0);
   const approved = mine.filter((x) => x.status === 'approved').reduce((a, x) => a + x.reward, 0);
   res.json({
-    premium,
+    premium: userRank(req.user) > 0,
+    plan: plan ? { id: plan.id, name: plan.name, rank: plan.rank, maxUSD: plan.maxUSD, expires: req.user.plan && req.user.plan.expires } : null,
+    plans: PLANS.map((p) => ({ id: p.id, name: p.name, priceKES: p.priceKES, minUSD: p.minUSD, maxUSD: p.maxUSD, rank: p.rank })),
     totalAvailable: accessible.length,
     moneyAvailableUSD: round2(accessible.reduce((a, t) => a + t.reward, 0)),
-    premiumMoneyUSD: round2(available.filter((t) => t.tier === 'premium').reduce((a, t) => a + t.reward, 0)),
+    lockedMoneyUSD: round2(available.filter((t) => t.locked).reduce((a, t) => a + t.reward, 0)),
+    tasksPerDay: TASKS_PER_DAY,
     pendingUSD: round2(pending),
     approvedUSD: round2(approved),
     balanceUSD: round2(req.user.usd),
-    subscription: {
-      priceUSD: SUBSCRIPTION_USD, priceKES: Math.round(SUBSCRIPTION_USD * FX_KES_PER_USD),
-      live: payments.mpesaStkConfigured(), expires: req.user.premium.expires || null,
-    },
+    live: payments.mpesaStkConfigured(),
+    held: !!req.user.held,
     tasks: available,
   });
 });
@@ -1008,23 +1157,27 @@ app.get('/api/tasks/:id', requireAuth, (req, res) => {
   const task = tasksMod.byId(req.params.id);
   if (!task) return res.status(404).json({ error: 'Task not found.' });
   const sub = mySubmissions(req.user.id).find((x) => x.taskId === task.id && x.status !== 'rejected');
-  res.json({ task, submission: sub || null });
+  const requiredPlan = PLAN_BY_ID[task.tier] ? PLAN_BY_ID[task.tier].name : task.tier;
+  res.json({ task: { ...task, requiredPlan, locked: !canAccessTask(req.user, task) }, submission: sub || null });
 });
 
 app.post('/api/tasks/:id/submit', requireAuth, (req, res) => {
   const task = tasksMod.byId(req.params.id);
   if (!task) return res.status(404).json({ error: 'Task not found.' });
-  if (task.tier === 'premium' && !isPremium(req.user)) {
-    return res.status(403).json({ error: 'This is a Premium task. Subscribe to Premium to work on it.' });
+  if (req.user.held) return res.status(403).json({ error: 'Your account is on hold. Task submissions are paused until an admin restores your account.' });
+  // Plan gate — enforced server-side so it can't be bypassed by editing the request.
+  if (!canAccessTask(req.user, task)) {
+    return res.status(403).json({ error: 'Upgrade your subscription to access higher-paying tasks.' });
   }
   const S = db.get();
   if (mySubmissions(req.user.id).some((x) => x.taskId === task.id && x.status !== 'rejected' && x.status !== 'correction')) {
     return res.status(409).json({ error: 'You have already submitted this task.' });
   }
-  // One task per day: block if the user already started a task today.
+  // Daily limit: a member can do TASKS_PER_DAY tasks per day.
   const todayUTC = new Date().toISOString().slice(0, 10);
-  if (mySubmissions(req.user.id).some((x) => String(x.createdAt).slice(0, 10) === todayUTC)) {
-    return res.status(429).json({ error: 'You can only do one task per day. Please come back tomorrow for another.' });
+  const todayCount = mySubmissions(req.user.id).filter((x) => String(x.createdAt).slice(0, 10) === todayUTC).length;
+  if (todayCount >= TASKS_PER_DAY) {
+    return res.status(429).json({ error: `You can only do ${TASKS_PER_DAY} tasks per day. Please come back tomorrow.` });
   }
   const proof = String(req.body.proof || '').trim();
   // Validate the proof against the task's type (typing / email / link / survey / photo /
@@ -1149,6 +1302,10 @@ app.post('/api/admin/submissions/:id/decision', requireAdminSession, async (req,
   const wasApproved = sub.status === 'approved';
   if (decision === 'approved' && !wasApproved && owner) {
     owner.usd = round2((owner.usd || 0) + sub.reward);              // credit on approval
+    gamify.award(owner, 'task', `task:${sub.id}`, {                 // XP once per submission
+      earnedUSD: round2(sub.reward),
+      event: { text: `Task approved (+$${round2(sub.reward).toFixed(2)})`, icon: '✅' },
+    });
   }
   if (decision !== 'approved' && wasApproved && owner) {
     owner.usd = round2(Math.max(0, (owner.usd || 0) - sub.reward)); // reverse a prior approval
@@ -1202,8 +1359,8 @@ app.get('/api/applications', requireAuth, (req, res) => {
 app.post('/api/tasks/:id/apply', requireAuth, (req, res) => {
   const task = tasksMod.byId(req.params.id);
   if (!task) return res.status(404).json({ error: 'Task not found.' });
-  if (task.tier === 'premium' && !isPremium(req.user)) {
-    return res.status(403).json({ error: 'This is a Premium task. Subscribe to Premium to apply.' });
+  if (!canAccessTask(req.user, task)) {
+    return res.status(403).json({ error: 'Upgrade your subscription to access higher-paying tasks.' });
   }
   const proposal = String(req.body.proposal || '').trim();
   if (proposal.length < 10) return res.status(400).json({ error: 'Please write a short proposal (at least 10 characters).' });
@@ -1310,21 +1467,33 @@ app.get('/api/admin/overview', requireAdminSession, (req, res) => {
 });
 
 app.get('/api/admin/users', requireAdminSession, (req, res) => {
-  const users = db.get().users.map((u) => ({
-    id: u.id, name: u.name, username: u.username, email: u.email, isAdmin: !!u.isAdmin,
-    balance: round2(u.balance || 0), usd: round2(u.usd || 0), onboarded: !!u.onboarded,
-    referralCount: u.referralCount || 0, createdAt: u.createdAt,
-    providers: u.providers || [],                       // how they joined (email / google / facebook / apple)
-    suspended: !!u.suspended,
-    held: !!u.held,
-    hasPassword: !!u.passwordHash,                       // whether a password is set (never the value)
-    gender: (u.profile && u.profile.gender) || '',
-    country: (u.profile && u.profile.country) || '',
-    phone: (u.profile && u.profile.phone) || '',
-    dob: (u.profile && u.profile.dob) || '',
-    postalCode: (u.profile && u.profile.postalCode) || '',
-    state: (u.profile && u.profile.state) || '',
-  })).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  const S = db.get();
+  const subsByUser = {};
+  S.submissions.forEach((x) => { (subsByUser[x.userId] = subsByUser[x.userId] || []).push(x); });
+  const users = S.users.map((u) => {
+    const mine = subsByUser[u.id] || [];
+    const plan = activePlan(u);
+    return {
+      id: u.id, name: u.name, username: u.username, email: u.email, isAdmin: !!u.isAdmin,
+      balance: round2(u.balance || 0), usd: round2(u.usd || 0), onboarded: !!u.onboarded,
+      referralCount: u.referralCount || 0, createdAt: u.createdAt,
+      providers: u.providers || [],                       // how they joined (email / google / facebook / apple)
+      suspended: !!u.suspended,
+      held: !!u.held,
+      status: u.suspended ? 'Suspended' : (u.held ? 'On hold' : 'Active'),
+      plan: plan ? plan.name : 'Free',                    // current plan (or Free)
+      totalEarningsUSD: round2(mine.filter((x) => x.status === 'approved').reduce((a, x) => a + (x.reward || 0), 0)),
+      completedTasks: mine.filter((x) => x.status === 'approved').length,
+      pendingTasks: mine.filter((x) => x.status === 'pending').length,
+      hasPassword: !!u.passwordHash,                      // whether a password is set (never the value)
+      gender: (u.profile && u.profile.gender) || '',
+      country: (u.profile && u.profile.country) || '',
+      phone: (u.profile && u.profile.phone) || '',
+      dob: (u.profile && u.profile.dob) || '',
+      postalCode: (u.profile && u.profile.postalCode) || '',
+      state: (u.profile && u.profile.state) || '',
+    };
+  }).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   res.json({ users });
 });
 
@@ -1406,6 +1575,35 @@ app.post('/api/admin/users/:id/balance', requireAdminSession, (req, res) => {
   }
   db.save();
   res.json({ ok: true, balance: round2(u.balance), usd: round2(u.usd) });
+});
+
+// Admin: adjust a member's gamification (XP, coins, badge, verification).
+app.post('/api/admin/users/:id/gamify', requireAdminSession, (req, res) => {
+  const u = userById(req.params.id);
+  if (!u) return res.status(404).json({ error: 'User not found.' });
+  ensureUserShape(u);
+  const g = u.game;
+  if (req.body.addXp !== undefined) { const n = Number(req.body.addXp); if (Number.isFinite(n)) { g.xp = Math.max(0, g.xp + n); g.xpLog.push({ ts: now(), amount: n }); } }
+  if (req.body.setXp !== undefined) { const n = Number(req.body.setXp); if (Number.isFinite(n) && n >= 0) g.xp = Math.round(n); }
+  if (req.body.addCoins !== undefined) { const n = Number(req.body.addCoins); if (Number.isFinite(n)) g.coins = Math.max(0, g.coins + n); }
+  if (req.body.grantBadge && !g.badges.includes(req.body.grantBadge)) g.badges.push(String(req.body.grantBadge));
+  if (req.body.revokeBadge) g.badges = g.badges.filter((b) => b !== req.body.revokeBadge);
+  if (req.body.verification !== undefined) g.verification = req.body.verification || null; // 'blue'|'gold'|'diamond'|null
+  gamify.checkBadges(u);
+  g.verification = g.verification || gamify.verificationTier(g);
+  audit('gamify_adjust', { userId: u.id, by: 'admin' });
+  db.save();
+  res.json({ ok: true, game: gamify.summary(u) });
+});
+
+// Admin: gamification leaderboard (all-time XP) with each member's level/badges.
+app.get('/api/admin/leaderboard', requireAdminSession, (req, res) => {
+  const rows = db.get().users.map((u) => { gamify.ensureGameShape(u);
+    return { id: u.id, name: u.username || u.name, email: u.email, xp: u.game.xp, coins: u.game.coins,
+      level: gamify.level(u.game.xp).name, badges: u.game.badges.length, streak: u.game.streak.best,
+      verification: u.game.verification, reputation: gamify.reputation(u.game) };
+  }).sort((a, b) => b.xp - a.xp);
+  res.json({ rows });
 });
 
 // Change a member's email address.
@@ -1528,6 +1726,7 @@ app.post('/api/admin/redemptions/:id/mark', requireAdminSession, async (req, res
     const u = userById(rec.userId); // refund the held USD on rejection
     if (u) { ensureUserShape(u); u.usd = round2(u.usd + heldUSD); }
     rec.status = 'Failed'; rec.reviewedAt = new Date().toISOString();
+    rec.reason = String(req.body.reason || '').trim() || rec.reason || '';  // rejection reason (shown to the member)
     db.save();
     return res.json({ ok: true, redemption: rec });
   }
@@ -1549,6 +1748,34 @@ app.post('/api/admin/redemptions/:id/mark', requireAdminSession, async (req, res
   rec.status = status; rec.reviewedAt = new Date().toISOString();
   db.save();
   res.json({ ok: true, redemption: rec });
+});
+
+// M-Pesa STK diagnostics — surfaces the exact Daraja error without exposing secrets.
+app.get('/api/admin/mpesa/diagnose', requireAdminSession, async (req, res) => {
+  const c = payments.CFG;
+  const oauth = await payments.mpesaOAuthTest();
+  res.json({
+    env: c.env,
+    stkConfigured: payments.mpesaStkConfigured(),
+    present: { consumerKey: !!c.key, consumerSecret: !!c.secret, stkShortcode: !!c.stkShortcode, passkey: !!c.passkey },
+    stkShortcode: c.stkShortcode || null,      // shortcode is not secret
+    callbackUrl: stkCallbackUrl(req),
+    publicUrl: process.env.PUBLIC_URL || null,
+    oauth,
+  });
+});
+
+// Send a real KES 1 STK push to the admin's own phone and return the exact result.
+app.post('/api/admin/mpesa/test-stk', requireAdminSession, async (req, res) => {
+  const phone = String(req.body.phone || '').trim();
+  if (!/^(?:254|0)\d{9}$/.test(phone.replace(/\s+/g, ''))) return res.status(400).json({ error: 'Enter a valid Safaricom number (e.g. 0712345678).' });
+  if (!payments.mpesaStkConfigured()) return res.status(503).json({ error: 'STK is not configured (missing consumer key/secret/STK shortcode/passkey).' });
+  try {
+    const r = await payments.mpesaStkPush({ phone, amount: 1, accountRef: 'GwenoTest', description: 'STK test', callbackUrl: stkCallbackUrl(req) });
+    res.json({ ok: true, message: 'STK push sent — check that phone for the M-Pesa PIN prompt.', detail: r });
+  } catch (e) {
+    res.status(502).json({ error: String(e.message || e) });
+  }
 });
 
 app.get('/api/admin/support', requireAdminSession, (req, res) => {
@@ -1686,6 +1913,11 @@ app.post('/api/redeem', rateLimit('redeem', 15, 10 * 60 * 1000), requireAuth, as
     if (existing) return res.json({ ok: true, redemption: existing, duplicate: true, message: 'Withdrawal already submitted.' });
   }
 
+  // One withdrawal at a time: block a new request while an earlier one is still in progress.
+  if (db.get().redemptions.some((r) => r.userId === req.user.id && /request|process/i.test(r.status))) {
+    return res.status(409).json({ error: 'You already have a withdrawal being processed. Please wait until it is completed before requesting another.' });
+  }
+
   if (!WITHDRAW_METHODS.includes(method)) return res.status(400).json({ error: 'Choose a payout method.' });
   if (!(rawAmount > 0)) return res.status(400).json({ error: 'Enter a valid amount.' });
 
@@ -1712,84 +1944,45 @@ app.post('/api/redeem', rateLimit('redeem', 15, 10 * 60 * 1000), requireAuth, as
 
   if (amountUSD > combinedUSD(req.user)) return res.status(400).json({ error: 'Amount exceeds your available balance.' });
 
-  // Which methods are REAL, automated Paystack payouts.
-  const isBankReal = method === 'Bank account' && paystackLive && bankCode && accountNumber;
-  const isMpesaReal = method === 'M-Pesa' && paystackLive;
-
-  // Hold the funds (in USD) first, then attempt the payout; refund on any failure.
+  // ALL withdrawals are handled MANUALLY by an admin. Hold (deduct) the funds now and
+  // record the request as "Requested"; an admin verifies it, pays it out by hand, and
+  // marks it Paid — or rejects it, which refunds the held balance.
   deductCombined(req.user, 'USD', amountUSD);
   const reference = 'wd_' + (idemKey ? idemKey.replace(/[^A-Za-z0-9_]/g, '') : rid(10));
+
+  // Capture full payout details so the admin knows exactly where to send the money.
+  let recipient = null;
+  if (method === 'M-Pesa') {
+    destination = payments.normalizePhone(destination);
+    recipient = { type: 'mobile_money', provider: 'MPESA', phone: destination };
+  } else if (method === 'PayPal') {
+    recipient = { type: 'paypal', email: destination };
+  } else if (method === 'Bank account') {
+    let name = String(req.body.accountName || '').trim();
+    // Optional: confirm the real account-holder name via Paystack (read-only lookup).
+    try { if (bankCode && accountNumber && investPay.paystackConfigured()) { const rr = await investPay.paystackResolveAccount(accountNumber, bankCode); if (rr.accountName) name = rr.accountName; } } catch (_) {}
+    if (!name) name = req.user.name || '';
+    const bankName = String(req.body.bankName || '').trim();
+    recipient = { type: 'bank', name, bankCode: bankCode || null, bankName: bankName || null, accountNumber: accountNumber || null };
+    if (!destination) destination = [name, bankName, accountNumber].filter(Boolean).join(' · ');
+  }
+
   const rec = {
     id: rid(8), userId: req.user.id, idempotencyKey: idemKey || null,
     amount: rawAmount, currency, amountUSD, method, destination, reference,
     status: 'Requested', createdAt: new Date().toISOString(), resultAt: null,
-    provider: null, recipient: null, error: null,
+    provider: null, recipient, error: null,
   };
   db.get().redemptions.push(rec);
+  gamify.award(req.user, 'withdraw', `redeem:${rec.id}`, {        // XP once per withdrawal
+    event: { text: 'Withdrawal requested 💸', icon: '💸' },
+  });
   db.save();
   console.log(`[gweno] withdrawal ${rec.id} user=${req.user.id} ${method} $${amountUSD} ref=${reference}`);
 
-  const refund = () => { ensureUserShape(req.user); req.user.usd = round2(req.user.usd + amountUSD); };
-
-  if (isBankReal || isMpesaReal) {
-    const payoutCurrency = (process.env.PAYSTACK_CURRENCY || 'KES').toUpperCase();
-    const amountLocal = payoutCurrency === 'KES' ? Math.round(amountUSD * FX_KES_PER_USD) : round2(amountUSD);
-    try {
-      let transferArgs, destLabel;
-      if (isMpesaReal) {
-        const phone = payments.normalizePhone(destination); // 2547XXXXXXXX
-        rec.recipient = { type: 'mobile_money', provider: 'MPESA', phone };
-        rec.destination = phone;
-        destLabel = 'your M-Pesa (' + phone + ')';
-        transferArgs = { type: 'mobile_money', name: req.user.name || 'Gweno member', accountNumber: phone, bankCode: 'MPESA', amountMajor: amountLocal, currency: payoutCurrency, reason: 'Gweno withdrawal', reference };
-      } else {
-        let name = String(req.body.accountName || '').trim();
-        try { const rr = await investPay.paystackResolveAccount(accountNumber, bankCode); if (rr.accountName) name = rr.accountName; } catch (_) {}
-        if (!name) name = req.user.name || 'Gweno member';
-        rec.recipient = { type: 'bank', name, bankCode, accountNumber };
-        rec.destination = destination || `${name} · ${accountNumber}`;
-        destLabel = name;
-        transferArgs = { type: 'nuban', name, accountNumber, bankCode, amountMajor: amountLocal, currency: payoutCurrency, reason: 'Gweno withdrawal', reference };
-      }
-
-      const t = await investPay.paystackTransfer(transferArgs);
-      // Full audit trail of the provider response.
-      rec.provider = {
-        type: 'paystack-transfer', reference: t.reference || reference,
-        transferCode: t.transferCode, transferId: t.transferId, recipientCode: t.recipientCode,
-        amountLocal, currency: payoutCurrency, providerStatus: t.status, response: t.raw || null,
-      };
-
-      if (t.status === 'otp') {
-        refund(); rec.status = 'Failed'; rec.error = 'otp_required'; rec.resultAt = new Date().toISOString();
-        db.save();
-        return res.status(503).json({ error: 'Automated payouts need OTP disabled on Paystack (Settings → Preferences → turn off "OTP for transfers"). Your balance was refunded.' });
-      }
-      // Only 'success' is final here; 'pending'/'processing' stay Processing until the webhook confirms.
-      rec.status = t.status === 'success' ? 'Paid' : 'Processing';
-      rec.resultAt = t.status === 'success' ? new Date().toISOString() : null;
-      db.save();
-      console.log(`[gweno] withdrawal ${rec.id} paystack status=${t.status}`);
-      return res.json({ ok: true, redemption: publicRedemption(rec), message: `Payout of ${amountLocal.toLocaleString()} ${payoutCurrency} sent to ${destLabel}. Tracking status…` });
-    } catch (err) {
-      const raw = String(err.message || err);
-      refund(); rec.status = 'Failed'; rec.error = raw; rec.resultAt = new Date().toISOString();
-      db.save();
-      console.error(`[gweno] withdrawal ${rec.id} FAILED: ${raw}`);
-      // Merchant/config problems (payouts not enabled, insufficient float, OTP) shouldn't
-      // be exposed to members — show a clean message, keep the real error for the admin.
-      const merchantIssue = /starter business|third party payouts|balance|otp|not enabled|permission/i.test(raw);
-      const msg = merchantIssue
-        ? 'Withdrawals are temporarily unavailable. Your balance was not affected — please try again later.'
-        : 'Payout failed: ' + raw + '. Your balance was refunded.';
-      return res.status(502).json({ error: msg });
-    }
-  }
-
-  // PayPal (or bank/M-Pesa when Paystack isn't configured) — held for admin verification.
   const shown = currency === 'KES' ? `${rawAmount.toLocaleString()} KES` : `$${rawAmount}`;
   return res.json({ ok: true, redemption: publicRedemption(rec),
-    message: `Withdrawal of ${shown} via ${method} submitted. It will be sent once we verify it (usually within 24 hours).` });
+    message: `Withdrawal of ${shown} via ${method} submitted. Our team will verify and send it, usually within 24 hours.` });
 });
 
 // A member's own view of a withdrawal (no internal provider secrets).
@@ -1798,6 +1991,7 @@ function publicRedemption(r) {
     id: r.id, amount: r.amount, currency: r.currency, amountUSD: r.amountUSD,
     method: r.method, destination: r.destination, status: r.status,
     reference: r.reference, createdAt: r.createdAt, resultAt: r.resultAt, error: r.error || null,
+    reason: r.reason || null,   // admin's reason when a withdrawal is rejected
   };
 }
 
@@ -2039,7 +2233,7 @@ function handleStkCallback(cb) {
     const u = userById(rec.userId);
     if (u) {
       ensureUserShape(u);
-      if (rec.purpose === 'subscription') grantPremium(u);
+      if (rec.purpose === 'subscription') grantPlan(u, rec.plan || 'premium');
       else u.balance = round2((u.balance || 0) + rec.amount);
     }
   } else {
@@ -2052,34 +2246,39 @@ function handleStkCallback(cb) {
 //  PREMIUM SUBSCRIPTION  —  $10 (charged in KES) via M-Pesa STK, unlocks $1–$4 tasks
 // =============================================================================
 app.get('/api/subscription', requireAuth, (req, res) => {
+  const p = activePlan(req.user);
   res.json({
-    active: isPremium(req.user),
-    expires: req.user.premium.expires || null,
-    priceUSD: SUBSCRIPTION_USD,
-    priceKES: Math.round(SUBSCRIPTION_USD * FX_KES_PER_USD),
+    active: userRank(req.user) > 0,
+    plan: p ? { id: p.id, name: p.name, rank: p.rank, maxUSD: p.maxUSD } : null,
+    expires: (req.user.plan && req.user.plan.expires) || null,
+    plans: PLANS.map((x) => ({ id: x.id, name: x.name, priceKES: x.priceKES, minUSD: x.minUSD, maxUSD: x.maxUSD, rank: x.rank })),
     live: payments.mpesaStkConfigured(),
+    cardLive: investPay.paystackConfigured(),
   });
 });
 
 app.post('/api/subscribe', requireAuth, async (req, res) => {
-  if (isPremium(req.user)) return res.status(400).json({ error: 'You already have an active Premium subscription.' });
+  const plan = PLAN_BY_ID[String(req.body.plan || '').trim()];
+  if (!plan) return res.status(400).json({ error: 'Choose a subscription plan.' });
+  const cur = activePlan(req.user);
+  if (cur && cur.id === plan.id) return res.status(400).json({ error: `You already have the ${plan.name} plan.` });
   const phone = String(req.body.phone || '').trim();
-  const amountKES = Math.round(SUBSCRIPTION_USD * FX_KES_PER_USD);
+  const amountKES = plan.priceKES;
   if (!/^(?:254|0)\d{9}$/.test(phone.replace(/\s+/g, ''))) return res.status(400).json({ error: 'Enter a valid M-Pesa phone number (e.g. 0712345678).' });
-  if (!payments.mpesaStkConfigured()) return res.status(503).json({ error: 'Premium subscription is not available yet. Please check back soon.' });
+  if (!payments.mpesaStkConfigured()) return res.status(503).json({ error: 'M-Pesa subscription is not available yet. Please check back soon.' });
 
   const reference = 'sub_' + rid(8);
   const rec = {
     id: rid(8), userId: req.user.id, amount: amountKES, currency: 'KES', reference, phone,
-    purpose: 'subscription', status: 'pending', createdAt: new Date().toISOString(), paidAt: null, provider: null, error: null,
+    purpose: 'subscription', plan: plan.id, status: 'pending', createdAt: new Date().toISOString(), paidAt: null, provider: null, error: null,
   };
   db.get().deposits.push(rec);
   db.save();
 
   try {
-    rec.provider = { type: 'mpesa-stk', ...(await payments.mpesaStkPush({ phone, amount: amountKES, accountRef: 'Gweno Premium', description: 'Premium subscription', callbackUrl: stkCallbackUrl(req) })) };
+    rec.provider = { type: 'mpesa-stk', ...(await payments.mpesaStkPush({ phone, amount: amountKES, accountRef: 'Gweno ' + plan.name, description: plan.name + ' subscription', callbackUrl: stkCallbackUrl(req) })) };
     db.save();
-    return res.json({ ok: true, reference, message: 'Payment request sent. Enter your M-Pesa PIN to activate Premium.' });
+    return res.json({ ok: true, reference, message: `Payment request sent. Enter your M-Pesa PIN to activate ${plan.name}.` });
   } catch (err) {
     rec.status = 'failed'; rec.error = String(err.message || err);
     db.save();
@@ -2090,30 +2289,34 @@ app.post('/api/subscribe', requireAuth, async (req, res) => {
 // Subscribe by card via Paystack. Premium is NOT granted here — only after the payment
 // is CONFIRMED on the return from the hosted checkout (see /api/subscribe/pay/return).
 app.post('/api/subscribe/manual', requireAuth, async (req, res) => {
-  if (isPremium(req.user)) return res.status(400).json({ error: 'You already have an active Premium subscription.' });
+  const plan = PLAN_BY_ID[String(req.body.plan || '').trim()];
+  if (!plan) return res.status(400).json({ error: 'Choose a subscription plan.' });
+  const curPlan = activePlan(req.user);
+  if (curPlan && curPlan.id === plan.id) return res.status(400).json({ error: `You already have the ${plan.name} plan.` });
   const method = String(req.body.method || '').trim();
   if (!['Card', 'Paystack'].includes(method)) return res.status(400).json({ error: 'Choose a card payment method.' });
   if (!investPay.paystackConfigured()) {
-    return res.status(503).json({ error: "Card payments for Premium aren't set up yet. Premium only unlocks after a confirmed payment." });
+    return res.status(503).json({ error: "Card payments aren't set up yet. The plan only unlocks after a confirmed payment." });
   }
+  const priceUSD = round2(plan.priceKES / FX_KES_PER_USD);
   const ref = 'sub_' + rid(10);
   const rec = {
-    id: rid(8), userId: req.user.id, amount: SUBSCRIPTION_USD, currency: 'USD', reference: ref,
-    purpose: 'subscription', method, status: 'pending', createdAt: new Date().toISOString(), paidAt: null, provider: null, error: null,
+    id: rid(8), userId: req.user.id, amount: priceUSD, currency: 'USD', reference: ref,
+    purpose: 'subscription', plan: plan.id, method, status: 'pending', createdAt: new Date().toISOString(), paidAt: null, provider: null, error: null,
   };
   db.get().deposits.push(rec);
   db.save();
   try {
     const cur = (process.env.PAYSTACK_CURRENCY || 'KES').toUpperCase();
-    const amountMajor = cur === 'KES' ? Math.round(SUBSCRIPTION_USD * FX_KES_PER_USD) : SUBSCRIPTION_USD;
+    const amountMajor = cur === 'KES' ? plan.priceKES : priceUSD;
     const returnUrl = `${appBase(req)}/api/subscribe/pay/return?ref=${ref}`;
-    const { url, providerRef } = await investPay.createCheckout(method, { amountUSD: SUBSCRIPTION_USD, amountMajor, currency: cur, email: req.user.email, ref, returnUrl });
+    const { url, providerRef } = await investPay.createCheckout(method, { amountUSD: priceUSD, amountMajor, currency: cur, email: req.user.email, ref, returnUrl });
     rec.provider = { type: 'paystack', method, providerRef, currency: cur, amountCharged: amountMajor };
     db.save();
-    return res.json({ ok: true, mode: 'redirect', url, message: 'Redirecting to pay for Premium…' });
+    return res.json({ ok: true, mode: 'redirect', url, message: `Redirecting to pay for ${plan.name}…` });
   } catch (err) {
     rec.status = 'failed'; rec.error = String(err.message || err); db.save();
-    return res.status(502).json({ error: 'Could not start Premium payment: ' + rec.error });
+    return res.status(502).json({ error: 'Could not start payment: ' + rec.error });
   }
 });
 
@@ -2126,10 +2329,10 @@ app.get('/api/subscribe/pay/return', async (req, res) => {
     if (rec.status === 'pending' && await investPay.verify(rec.provider.method, rec.provider.providerRef)) {
       rec.status = 'success'; rec.paidAt = new Date().toISOString();
       const u = userById(rec.userId);
-      if (u) { ensureUserShape(u); grantPremium(u); } // <-- only after confirmed payment
+      if (u) { ensureUserShape(u); grantPlan(u, rec.plan || 'premium'); } // <-- only after confirmed payment
       db.save();
     }
-  } catch (_) { /* leave pending; premium stays locked */ }
+  } catch (_) { /* leave pending; plan stays locked */ }
   const done = rec.status === 'success';
   res.redirect(`/app.html#/tasks?${done ? 'premium' : 'premfail'}=1`);
 });
@@ -2300,8 +2503,12 @@ app.post('/api/surveys/:id/complete', requireAuth, (req, res) => {
   }
   done.push(survey.id);
   req.user.usd = round2((req.user.usd || 0) + survey.reward);
+  const gres = gamify.award(req.user, 'survey', `survey:${survey.id}`, {
+    earnedUSD: round2(survey.reward),
+    event: { text: `Survey completed (+$${round2(survey.reward).toFixed(2)})`, icon: '🗳️' },
+  });
   db.save();
-  res.json({ ok: true, reward: survey.reward, balanceUSD: round2(req.user.usd), message: `Survey complete. You earned $${survey.reward.toFixed(2)}.` });
+  res.json({ ok: true, reward: survey.reward, balanceUSD: round2(req.user.usd), gamify: gres, message: `Survey complete. You earned $${survey.reward.toFixed(2)}.` });
 });
 
 // =============================================================================
@@ -2373,6 +2580,13 @@ function activateInvestment(inv) {
   inv.startDate = start.toISOString();
   inv.maturityDate = new Date(start.getTime() + inv.durationDays * 86400000).toISOString();
   inv.updatedAt = start.toISOString();
+  const investor = userById(inv.userId);              // XP once, when payment is confirmed
+  if (investor) {
+    ensureUserShape(investor);
+    gamify.award(investor, 'invest', `invest:${inv.id}`, {
+      event: { text: `Investment activated: ${inv.planName}`, icon: '📈' },
+    });
+  }
 }
 
 // Where the browser should be sent back to after a hosted-checkout redirect.

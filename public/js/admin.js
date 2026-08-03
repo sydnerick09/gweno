@@ -15,7 +15,7 @@ function toast(msg, type = 'ok') {
   setTimeout(() => { t.classList.remove('show'); setTimeout(() => t.remove(), 250); }, 3000);
 }
 
-const TABS = [['overview', 'Overview'], ['submissions', 'Submissions'], ['applications', 'Applications'], ['emails', 'Email log'], ['audit', 'Audit log'], ['users', 'Users'], ['broadcast', 'Broadcast'], ['investments', 'Investments'], ['deposits', 'Deposits'], ['withdrawals', 'Withdrawals'], ['support', 'Support']];
+const TABS = [['overview', 'Overview'], ['submissions', 'Submissions'], ['applications', 'Applications'], ['emails', 'Email log'], ['audit', 'Audit log'], ['users', 'Users'], ['rewards', 'Rewards'], ['broadcast', 'Broadcast'], ['investments', 'Investments'], ['deposits', 'Deposits'], ['withdrawals', 'Withdrawals'], ['support', 'Support']];
 
 // Lightweight modal for admin forms (reuses .modal styles from app.css).
 function adminModal(html) {
@@ -108,7 +108,7 @@ const loading = () => { content().innerHTML = `
   </div>`; };
 
 function route() {
-  ({ overview: tOverview, submissions: tSubmissions, applications: tApplications, emails: tEmails, audit: tAudit, users: tUsers, broadcast: tBroadcast, investments: tInvestments, deposits: tDeposits, withdrawals: tWithdrawals, support: tSupport }[TAB] || tOverview)();
+  ({ overview: tOverview, submissions: tSubmissions, applications: tApplications, emails: tEmails, audit: tAudit, users: tUsers, rewards: tRewards, broadcast: tBroadcast, investments: tInvestments, deposits: tDeposits, withdrawals: tWithdrawals, support: tSupport }[TAB] || tOverview)();
 }
 
 async function tOverview() {
@@ -286,25 +286,55 @@ async function tUsers() {
     <p class="page-sub">${users.length} registered user(s). <b>Suspend</b> blocks sign-in · <b>Hold</b> pauses withdrawals · <b>Delete</b> removes the account. <a href="/api/admin/export" download>Download data export</a>.</p>
     <p class="pill-note">🔒 Passwords are encrypted one-way and can't be shown, for a member who asks, use <b>Password</b> to set them a new one.</p>
     <div class="panel"><table class="table">
-      <thead><tr><th>Name</th><th>Email</th><th>Via</th><th class="num">KES</th><th class="num">USD</th><th>Status</th><th>Actions</th></tr></thead>
+      <thead><tr><th>Name</th><th>Email</th><th>Plan</th><th class="num">Wallet</th><th class="num">Earned</th><th class="num">Tasks</th><th>Status</th><th>Actions</th></tr></thead>
       <tbody>${users.map((u) => `<tr>
-        <td>${esc(u.name || u.username || '—')}<br><span class="p-sub">@${esc(u.username || '')}</span>
-          <div style="margin-top:6px">${act('delete', u, '🗑 Delete', ' style="border-color:var(--danger);color:#c0143c;padding:4px 10px;font-size:12px"')}</div></td>
+        <td>${esc(u.name || u.username || '—')}<br><span class="p-sub">@${esc(u.username || '')}</span></td>
         <td class="p-sub">${esc(u.email)}</td>
-        <td class="p-sub">${esc(via(u.providers))}</td>
-        <td class="num">${kes(u.balance)}</td><td class="num">${usd(u.usd)}</td>
+        <td class="p-sub">${esc(u.plan || 'Free')}</td>
+        <td class="num">${usd(u.usd)}<br><span class="p-sub">${kes(u.balance)}</span></td>
+        <td class="num">${usd(u.totalEarningsUSD)}</td>
+        <td class="num">${u.completedTasks} done<br><span class="p-sub">${u.pendingTasks} pending</span></td>
         <td>${badges(u)}</td>
         <td><div style="display:flex;gap:6px;flex-wrap:wrap">
+          <button class="btn btn-ghost auto uview" data-id="${u.id}">View</button>
           <button class="btn btn-primary auto udetails" data-id="${u.id}">Edit details</button>
-          ${act('suspend', u, u.suspended ? 'Unsuspend' : 'Suspend')}
+          ${act('suspend', u, u.suspended ? 'Reactivate' : 'Suspend')}
           ${act('hold', u, u.held ? 'Release hold' : 'Hold')}
           ${act('balance', u, 'Balance')}
-          ${act('password', u, 'Password')}
+          ${act('password', u, 'Reset password')}
+          ${act('gamify', u, 'XP / Badges')}
+          ${act('delete', u, 'Delete', ' style="border-color:var(--danger);color:#c0143c"')}
         </div></td>
-      </tr>`).join('') || `<tr><td colspan="7" class="p-sub">No users yet.</td></tr>`}</tbody>
+      </tr>`).join('') || `<tr><td colspan="8" class="p-sub">No users yet.</td></tr>`}</tbody>
     </table></div>`;
   content().querySelectorAll('.uact').forEach((b) => b.addEventListener('click', () => userAction(b.dataset)));
   content().querySelectorAll('.udetails').forEach((b) => b.addEventListener('click', () => openDetailsForm(users.find((u) => u.id === b.dataset.id))));
+  content().querySelectorAll('.uview').forEach((b) => b.addEventListener('click', () => openUserView(users.find((u) => u.id === b.dataset.id))));
+}
+
+// Read-only full profile of a member (passwords are never shown — only that they're encrypted).
+function openUserView(u) {
+  if (!u) return;
+  const row = (l, v) => `<div class="wa-row"><span class="wa-row-l">${esc(l)}</span><span class="wa-row-v">${v}</span></div>`;
+  adminModal(`
+    <button class="close">×</button>
+    <h3>${esc(u.name || u.username || 'User')}</h3>
+    <p class="p-sub">${esc(u.email || '')}</p>
+    <div class="wa-list">
+      ${row('Account ID', esc(u.id))}
+      ${row('Username', '@' + esc(u.username || ''))}
+      ${row('Phone', esc(u.phone || '—'))}
+      ${row('Current plan', esc(u.plan || 'Free'))}
+      ${row('Account status', esc(u.status || '—'))}
+      ${row('Registered', u.createdAt ? new Date(u.createdAt).toLocaleString() : '—')}
+      ${row('Wallet balance', usd(u.usd) + ' · ' + kes(u.balance))}
+      ${row('Total earnings', usd(u.totalEarningsUSD))}
+      ${row('Completed tasks', String(u.completedTasks))}
+      ${row('Pending tasks', String(u.pendingTasks))}
+      ${row('Country', esc(u.country || '—'))}
+      ${row('Password', u.hasPassword ? '*************** <span class="p-sub">Encrypted</span>' : '<span class="p-sub">Not set (social sign-in)</span>')}
+    </div>
+    <p class="p-sub" style="margin-top:12px">Full task and withdrawal history are in the <b>Submissions</b> and <b>Withdrawals</b> tabs.</p>`);
 }
 
 // Edit a client's full details (admin can change everything, including the locked fields).
@@ -337,6 +367,64 @@ function openDetailsForm(u) {
     });
     if (ok) { toast(data.message || 'Saved'); bg.remove(); tUsers(); }
     else toast(data.error || 'Failed', 'error');
+  });
+}
+
+// ---- Rewards / gamification leaderboard + gifting ----
+const BADGE_IDS = ['first_task', 'tasks_10', 'tasks_100', 'first_survey', 'surveys_25', 'investor', 'big_investor', 'first_referral', 'referral_master', 'first_withdraw', 'streak_7', 'streak_30', 'top_earner', 'level_legend'];
+
+async function tRewards() {
+  loading();
+  const { ok, data } = await apiGet('/api/admin/leaderboard');
+  const rows = (ok && data.rows) || [];
+  const vChip = (v) => v ? `<span class="st approved">${esc(v)}</span>` : '<span class="p-sub">—</span>';
+  content().innerHTML = `
+    <p class="page-sub">Gamification leaderboard — ranked by all-time XP. Use <b>🎁 Gift</b> to award XP, coins, badges or a verification tier to any member.</p>
+    <div class="panel"><table class="table">
+      <thead><tr><th>#</th><th>Member</th><th>Level</th><th class="num">XP</th><th class="num">Coins</th><th class="num">Badges</th><th class="num">Streak</th><th class="num">Rep</th><th>Verified</th><th>Actions</th></tr></thead>
+      <tbody>${rows.map((r, i) => `<tr>
+        <td>${i + 1}</td>
+        <td>${esc(r.name || '—')}<br><span class="p-sub">${esc(r.email || '')}</span></td>
+        <td>${esc(r.level)}</td>
+        <td class="num">${(r.xp || 0).toLocaleString()}</td>
+        <td class="num">${(r.coins || 0).toLocaleString()}</td>
+        <td class="num">${r.badges || 0}</td>
+        <td class="num">${r.streak || 0}</td>
+        <td class="num">${r.reputation || 0}</td>
+        <td>${vChip(r.verification)}</td>
+        <td><button class="btn btn-primary auto gift" data-id="${esc(r.id)}" data-name="${esc(r.name || r.email || '')}">🎁 Gift</button></td>
+      </tr>`).join('') || `<tr><td colspan="10" class="p-sub">No gamification activity yet.</td></tr>`}</tbody>
+    </table></div>`;
+  content().querySelectorAll('.gift').forEach((b) => b.addEventListener('click', () => openGiftModal(b.dataset.id, b.dataset.name)));
+}
+
+function openGiftModal(id, name) {
+  const bg = adminModal(`
+    <button class="close">×</button>
+    <h3>🎁 Gift rewards</h3>
+    <p class="p-sub">${esc(name || '')}</p>
+    <form id="giftForm">
+      <div class="grid g2">
+        <div class="field"><label>Add XP <span class="p-sub">(− to remove)</span></label><input id="gXp" type="number" placeholder="0"></div>
+        <div class="field"><label>Add coins <span class="p-sub">(− to remove)</span></label><input id="gCoins" type="number" placeholder="0"></div>
+      </div>
+      <div class="grid g2">
+        <div class="field"><label>Grant badge</label><select id="gBadge"><option value="">— none —</option>${BADGE_IDS.map((b) => `<option value="${b}">${b}</option>`).join('')}</select></div>
+        <div class="field"><label>Verification</label><select id="gVerif"><option value="">— leave as-is —</option><option value="blue">Blue</option><option value="gold">Gold</option><option value="diamond">Diamond</option><option value="none">Remove</option></select></div>
+      </div>
+      <button class="btn btn-primary" type="submit">Apply</button>
+    </form>`);
+  bg.querySelector('#giftForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const val = (s) => bg.querySelector(s).value;
+    const body = {};
+    if (val('#gXp').trim() !== '') body.addXp = Number(val('#gXp'));
+    if (val('#gCoins').trim() !== '') body.addCoins = Number(val('#gCoins'));
+    if (val('#gBadge')) body.grantBadge = val('#gBadge');
+    if (val('#gVerif')) body.verification = val('#gVerif') === 'none' ? null : val('#gVerif');
+    if (!Object.keys(body).length) return toast('Nothing to apply', 'error');
+    const { ok, data } = await api('/api/admin/users/' + id + '/gamify', body);
+    if (ok) { toast('Rewards gifted 🎁'); bg.remove(); tRewards(); } else toast(data.error || 'Failed', 'error');
   });
 }
 
@@ -405,6 +493,22 @@ async function userAction(ds) {
     if (!pw) return;
     const { ok, data } = await api(base + '/password', { password: pw });
     if (ok) toast('Password updated'); else toast(data.error || 'Failed', 'error');
+  } else if (ds.a === 'gamify') {
+    const xp = prompt('Add XP for ' + ds.email + ' (use a negative number to remove). Leave blank to skip:', '');
+    if (xp === null) return;
+    const coins = prompt('Add coins (negative to remove). Leave blank to skip:', '');
+    if (coins === null) return;
+    const grantBadge = prompt('Grant badge id (e.g. top_earner, investor). Leave blank to skip:', '');
+    if (grantBadge === null) return;
+    const verification = prompt('Set verification: blue / gold / diamond / none (blank = leave as-is):', '');
+    if (verification === null) return;
+    const body = {};
+    if (xp.trim() !== '') body.addXp = Number(xp);
+    if (coins.trim() !== '') body.addCoins = Number(coins);
+    if (grantBadge.trim() !== '') body.grantBadge = grantBadge.trim();
+    if (verification.trim() !== '') body.verification = verification.trim() === 'none' ? null : verification.trim();
+    const { ok, data } = await api(base + '/gamify', body);
+    if (ok) toast('Gamification updated'); else toast(data.error || 'Failed', 'error');
   } else if (ds.a === 'delete') {
     if (!confirm('Permanently delete ' + ds.email + ' and all their data? This cannot be undone.')) return;
     const r = await fetch(base, { method: 'DELETE' });
@@ -419,10 +523,35 @@ async function tDeposits() {
   const sc = (s) => (/success/i.test(s) ? 'approved' : (s === 'failed' ? 'rejected' : 'pending'));
   content().innerHTML = `
     <p class="page-sub">Wallet top-ups (M-Pesa STK &amp; other methods).</p>
+
+    <div class="panel">
+      <h3>M-Pesa STK diagnostics</h3>
+      <p class="p-sub">Check that STK Push is correctly configured, then send a KES 1 test prompt to your own phone.</p>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:12px">
+        <button class="btn btn-ghost auto" id="mpDiag">Run configuration check</button>
+        <input id="mpPhone" placeholder="Your Safaricom no. e.g. 0712345678" style="flex:1;min-width:200px;border:1px solid var(--line);border-radius:10px;padding:9px 12px;background:var(--bg-2);color:var(--text)">
+        <button class="btn btn-primary auto" id="mpTest">Send KES 1 test STK</button>
+      </div>
+      <pre id="mpOut" style="white-space:pre-wrap;background:var(--bg-2);border:1px solid var(--line);border-radius:10px;padding:12px;font-size:13px;margin:0;display:none"></pre>
+    </div>
+
     <div class="panel"><table class="table">
       <thead><tr><th>Date</th><th>User</th><th class="num">Amount</th><th>Method</th><th>Details</th><th>Status</th><th>Ref</th></tr></thead>
       <tbody>${deps.length ? deps.map((d) => `<tr><td class="p-sub">${new Date(d.createdAt).toLocaleString()}</td><td>${esc(d.user ? d.user.username : '—')}</td><td class="num">${d.currency === 'USD' ? usd(d.amount) : kes(d.amount)}</td><td>${esc(d.method || 'M-Pesa')}</td><td class="p-sub">${esc(d.phone || d.details || '—')}</td><td><span class="st ${sc(d.status)}">${esc(d.status)}${d.demo ? ' (demo)' : ''}</span></td><td class="p-sub">${esc(d.reference || '')}</td></tr>`).join('') : `<tr><td colspan="7" class="p-sub">No deposits yet.</td></tr>`}</tbody>
     </table></div>`;
+
+  const out = document.getElementById('mpOut');
+  const show = (obj, isErr) => { out.style.display = 'block'; out.style.color = isErr ? 'var(--danger)' : 'var(--text)'; out.textContent = typeof obj === 'string' ? obj : JSON.stringify(obj, null, 2); };
+  document.getElementById('mpDiag').addEventListener('click', async () => {
+    show('Checking…');
+    const { ok, data: d } = await apiGet('/api/admin/mpesa/diagnose');
+    show(d, !ok || (d.oauth && !d.oauth.ok));
+  });
+  document.getElementById('mpTest').addEventListener('click', async () => {
+    show('Sending test STK…');
+    const { ok, data: d } = await api('/api/admin/mpesa/test-stk', { phone: document.getElementById('mpPhone').value });
+    show(ok ? d : (d.error || 'Failed'), !ok);
+  });
 }
 
 async function tWithdrawals() {
@@ -431,15 +560,35 @@ async function tWithdrawals() {
   const rs = data.redemptions || [];
   const sc = (s) => (/paid/i.test(s) ? 'approved' : (s === 'Failed' ? 'rejected' : 'pending'));
   content().innerHTML = `
-    <p class="page-sub">Member withdrawals (M-Pesa, PayPal &amp; bank). Marking a payout <b>Failed</b> refunds the user's balance.</p>
+    <p class="page-sub">Member withdrawals (M-Pesa, PayPal &amp; bank) — <b>all paid manually</b>. Send the money to the destination shown, then click <b>Mark paid</b>. Marking a payout <b>Failed</b> refunds the user's balance.</p>
     <div class="panel"><table class="table">
       <thead><tr><th>Date</th><th>User</th><th class="num">Amount</th><th>To</th><th>Status</th><th>Action</th></tr></thead>
-      <tbody>${rs.length ? rs.map((r) => `<tr><td class="p-sub">${new Date(r.createdAt).toLocaleString()}</td><td>${esc(r.user ? r.user.username : '—')}</td><td class="num">${r.currency === 'KES' ? kes(r.amount) : usd(r.amount)}</td><td class="p-sub">${esc(r.destination || '—')}</td><td><span class="st ${sc(r.status)}">${esc(r.status)}</span></td><td>${!/paid/i.test(r.status) ? `<button class="btn btn-primary auto mk" data-id="${r.id}" data-s="Paid">Mark paid</button> ` : ''}${r.status !== 'Failed' ? `<button class="btn btn-ghost auto mk" data-id="${r.id}" data-s="Failed">Fail</button>` : ''}</td></tr>`).join('') : `<tr><td colspan="6" class="p-sub">No withdrawals yet.</td></tr>`}</tbody>
+      <tbody>${rs.length ? rs.map((r) => `<tr><td class="p-sub">${new Date(r.createdAt).toLocaleString()}</td><td>${esc(r.user ? r.user.username : '—')}</td><td class="num">${r.currency === 'KES' ? kes(r.amount) : usd(r.amount)}</td><td class="p-sub"><b>${esc(r.method || '')}</b><br>${esc(r.destination || '—')}</td><td><span class="st ${sc(r.status)}">${esc(r.status)}</span>${r.status === 'Failed' && r.reason ? `<br><span class="p-sub">${esc(r.reason)}</span>` : ''}</td><td>${!/paid/i.test(r.status) ? `<button class="btn btn-primary auto mk" data-id="${r.id}" data-s="Paid">Approve (paid)</button> ` : ''}${r.status !== 'Failed' ? `<button class="btn btn-ghost auto mkfail" data-id="${r.id}">Reject</button>` : ''}</td></tr>`).join('') : `<tr><td colspan="6" class="p-sub">No withdrawals yet.</td></tr>`}</tbody>
     </table></div>`;
   content().querySelectorAll('.mk').forEach((b) => b.addEventListener('click', async () => {
     const { ok, data: d } = await api('/api/admin/redemptions/' + b.dataset.id + '/mark', { status: b.dataset.s });
     if (ok) { toast('Marked ' + b.dataset.s); tWithdrawals(); } else toast(d.error || 'Failed', 'error');
   }));
+  content().querySelectorAll('.mkfail').forEach((b) => b.addEventListener('click', () => openWithdrawReject(b.dataset.id)));
+}
+
+// Reject a withdrawal with a reason; the amount is refunded to the member's wallet.
+function openWithdrawReject(id) {
+  const bg = adminModal(`
+    <button class="close">×</button>
+    <h3>Reject withdrawal</h3>
+    <p class="p-sub">The held amount is refunded to the member's wallet. The reason is recorded on the payout.</p>
+    <form id="wrForm">
+      <div class="field"><label>Reason for rejection</label><textarea id="wrReason" rows="3" style="width:100%;border:1px solid var(--line);border-radius:10px;padding:10px;font:inherit;background:var(--bg-2);color:var(--text)" placeholder="e.g. incorrect account details"></textarea></div>
+      <button class="btn btn-primary" type="submit" style="background:var(--danger);border-color:var(--danger)">Reject &amp; refund</button>
+    </form>`);
+  bg.querySelector('#wrForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const reason = bg.querySelector('#wrReason').value.trim();
+    if (!reason) return toast('Please enter a rejection reason', 'error');
+    const { ok, data: d } = await api('/api/admin/redemptions/' + id + '/mark', { status: 'Failed', reason });
+    if (ok) { toast('Withdrawal rejected & refunded'); bg.remove(); tWithdrawals(); } else toast(d.error || 'Failed', 'error');
+  });
 }
 
 async function tInvestments() {

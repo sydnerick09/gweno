@@ -20,7 +20,9 @@ const CFG = {
   timeoutUrl: process.env.MPESA_TIMEOUT_URL,
   commandId: process.env.MPESA_COMMAND_ID || 'BusinessPayment',
   // STK Push (deposits)
-  stkShortcode: process.env.MPESA_STK_SHORTCODE,
+  stkShortcode: process.env.MPESA_STK_SHORTCODE,          // BusinessShortCode (paybill, or Buy Goods store/HO number)
+  stkTill: process.env.MPESA_STK_TILL,                    // Buy Goods only: PartyB (the till). Defaults to the shortcode for paybills.
+  stkTransactionType: process.env.MPESA_STK_TRANSACTION_TYPE || 'CustomerPayBillOnline', // or CustomerBuyGoodsOnline
   passkey: process.env.MPESA_PASSKEY,
   stkCallbackUrl: process.env.MPESA_STK_CALLBACK_URL,
 };
@@ -69,16 +71,17 @@ async function mpesaStkPush({ phone, amount, accountRef = 'Gweno', description =
   if (!cbUrl) throw new Error('M-Pesa STK callback URL is not configured.');
   const t = await token();
   const ts = stkTimestamp();
-  const sc = CFG.stkShortcode;
+  const sc = CFG.stkShortcode;                 // BusinessShortCode (paybill, or Buy Goods store/HO)
+  const partyB = CFG.stkTill || sc;            // PartyB: the till for Buy Goods; same as sc for a paybill
   const password = Buffer.from(sc + CFG.passkey + ts).toString('base64');
   const body = {
     BusinessShortCode: sc,
     Password: password,
     Timestamp: ts,
-    TransactionType: 'CustomerPayBillOnline',
+    TransactionType: CFG.stkTransactionType,   // CustomerPayBillOnline or CustomerBuyGoodsOnline
     Amount: Math.round(amount),
     PartyA: normalizePhone(phone),
-    PartyB: sc,
+    PartyB: partyB,
     PhoneNumber: normalizePhone(phone),
     CallBackURL: cbUrl,
     AccountReference: accountRef,
@@ -128,4 +131,11 @@ async function mpesaB2C({ phone, amount, remarks = 'Gweno payout', resultUrl, ti
   };
 }
 
-module.exports = { mpesaConfigured, mpesaStkConfigured, mpesaStkPush, mpesaB2C, normalizePhone, CFG };
+// Diagnostics: attempt an OAuth token so the admin can see whether the credentials
+// and environment (sandbox vs production) are correct — without exposing any secret.
+async function mpesaOAuthTest() {
+  try { const t = await token(); return { ok: true, tokenPreview: t ? t.slice(0, 6) + '…' : null }; }
+  catch (e) { return { ok: false, error: String(e.message || e) }; }
+}
+
+module.exports = { mpesaConfigured, mpesaStkConfigured, mpesaStkPush, mpesaB2C, mpesaOAuthTest, normalizePhone, CFG };

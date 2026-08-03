@@ -716,44 +716,47 @@ async function pageTasks() {
 
   const { data } = await apiGet('/api/tasks');
   const all = data.tasks || [];
-  const sub = data.subscription || {};
+  const plan = data.plan;                 // current plan {id,name,rank,maxUSD} or null
+  const plans = data.plans || [];
+  const perDay = data.tasksPerDay || 2;
   const filtered = all.filter((t) =>
     (TASK_STATE.tier === 'all' || t.tier === TASK_STATE.tier) &&
     (!TASK_STATE.search || t.title.toLowerCase().includes(TASK_STATE.search.toLowerCase())));
 
-  const banner = data.premium ? `
-    <div class="panel premium-active">
-      <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px">
-        <div><h3 style="margin:0">★ Premium active</h3><p class="p-sub" style="margin:2px 0 0">You can work on all premium tasks, up to $4 each${sub.expires ? ` · renews ${new Date(sub.expires).toLocaleDateString()}` : ''}.</p></div>
-        <span class="st approved">Premium</span>
+  const planCard = (p) => {
+    const isCur = plan && plan.id === p.id;
+    const earn = p.minUSD > 0 ? `${usd(p.minUSD)}–${usd(p.maxUSD)}` : `up to ${usd(p.maxUSD)}`;
+    return `<div class="plan-mini ${isCur ? 'current' : ''}">
+      <div class="pm-name">${esc(p.name)}</div>
+      <div class="pm-price">${kes(p.priceKES)} <span>/mo</span></div>
+      <div class="pm-earn">Earn ${earn} per task</div>
+      ${isCur ? '<span class="st approved">Current plan</span>' : `<button class="btn btn-ghost auto pick-plan" data-plan="${p.id}">Get ${esc(p.name)}</button>`}
+    </div>`;
+  };
+
+  const banner = `
+    <div class="panel ${plan ? 'premium-active' : 'upgrade'}">
+      <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:12px">
+        <div><h3 style="margin:0">${plan ? '★ ' + esc(plan.name) + ' plan' : 'Subscribe to start earning'}</h3>
+          <p class="p-sub" style="margin:4px 0 0">${plan ? `You can work on tasks up to <b>${usd(plan.maxUSD)}</b> each. Upgrade to unlock higher-paying tasks.` : 'Pick a plan below — higher plans unlock higher-paying tasks.'}</p></div>
+        <button class="btn btn-primary auto" id="subBtn">${plan ? 'Change plan' : 'Subscribe'}</button>
       </div>
-    </div>` : `
-    <div class="panel upgrade">
-      <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:14px">
-        <div>
-          <h3 style="margin:0">★ Unlock Premium tasks</h3>
-          <p class="p-sub" style="margin:4px 0 0">Earn <b>up to $4</b> per task, ${usd(data.premiumMoneyUSD)} waiting. The 4 free basic tasks stay free.</p>
-        </div>
-        <div style="text-align:right">
-          <div style="font-size:22px;font-weight:800">$${sub.priceUSD} <span class="p-sub" style="font-size:13px">≈ ${kes(sub.priceKES)}/mo</span></div>
-          <button class="btn btn-primary auto" id="subBtn" style="margin-top:6px">★ Subscribe</button>
-        </div>
-      </div>
+      <div class="plan-cards">${plans.map(planCard).join('')}</div>
     </div>`;
 
   view().innerHTML = `
-    <p class="page-sub">Complete a task, submit your proof, and get paid once it's approved. You can do <b>one task per day</b>.</p>
+    <p class="page-sub">Bid on a task, do the work, and get paid once the admin approves it. You can do <b>${perDay} tasks per day</b>.</p>
     <div class="grid g4">
-      <div class="stat"><div class="label">Tasks available${data.premium ? '' : ' (basic)'}</div><div class="value">${data.totalAvailable}</div></div>
+      <div class="stat"><div class="label">Tasks available</div><div class="value">${data.totalAvailable}</div></div>
       <div class="stat brand"><div class="label">Money available to earn</div><div class="value">${usd(data.moneyAvailableUSD)}</div></div>
       <div class="stat"><div class="label">Pending earnings</div><div class="value">${usd(data.pendingUSD)}</div></div>
-      <div class="stat"><div class="label">Approve rate</div><div class="value">N/A</div></div>
+      <div class="stat"><div class="label">Your plan</div><div class="value" style="font-size:18px">${plan ? esc(plan.name) : 'None'}</div></div>
     </div>
 
     ${banner}
 
     <div class="tabs" style="margin-top:4px">
-      ${[['all', 'All'], ['basic', 'Basic'], ['premium', 'Premium']].map(([k, l]) => `<button class="tab ${TASK_STATE.tier === k ? 'active' : ''}" data-tier="${k}">${l}</button>`).join('')}
+      ${[['all', 'All'], ['basic', 'Basic'], ['premium', 'Premium'], ['premiumpro', 'Premium Pro']].map(([k, l]) => `<button class="tab ${TASK_STATE.tier === k ? 'active' : ''}" data-tier="${k}">${l}</button>`).join('')}
       <input id="fSearch" value="${esc(TASK_STATE.search)}" placeholder="Search tasks…" class="tab-search">
     </div>
 
@@ -762,24 +765,28 @@ async function pageTasks() {
         <div class="task-card ${t.locked ? 'locked' : ''}">
           <div class="tc-top">
             <span class="tc-cat">${esc(t.category)}</span>
-            <span class="tier-badge ${t.tier}">${t.tier === 'premium' ? '★ Premium' : 'Basic'}</span>
+            <span class="tier-badge ${t.tier}">${esc(t.requiredPlan || t.tier)}</span>
           </div>
           <h4>${esc(t.title)}</h4>
-          <p class="tc-meta">~${t.estMinutes} min · Approve rate: N/A</p>
+          <p class="tc-meta">Required: <b>${esc(t.requiredPlan || t.tier)}</b> · ~${t.estMinutes} min</p>
           <div class="tc-bottom">
             <span class="tc-reward">${usd(t.reward)}</span>
-            ${t.locked ? `<button class="btn btn-ghost auto sub-lock"><span class="bico">${ICON.lock}</span> Premium</button>` : `<button class="btn btn-primary auto open-task" data-id="${t.id}">Start</button>`}
+            ${t.locked
+              ? `<button class="btn btn-ghost auto sub-lock" data-plan="${t.tier}"><span class="bico">${ICON.lock}</span> Upgrade</button>`
+              : `<button class="btn btn-primary auto open-task" data-id="${t.id}">Start</button>`}
           </div>
+          <div style="margin-top:8px"><span class="st ${t.locked ? 'pending' : 'approved'}">${t.locked ? 'Locked — upgrade plan' : 'Available'}</span></div>
         </div>`).join('') : `<p class="p-sub">No tasks match your filters.</p>`}
     </div>`;
 
   const subBtn = document.getElementById('subBtn');
-  if (subBtn) subBtn.addEventListener('click', () => openSubscribe(sub));
+  if (subBtn) subBtn.addEventListener('click', () => openSubscribe(data));
+  view().querySelectorAll('.pick-plan').forEach((b) => b.addEventListener('click', () => openSubscribe(data, b.dataset.plan)));
   view().querySelectorAll('.tab[data-tier]').forEach((b) => b.addEventListener('click', () => { TASK_STATE.tier = b.dataset.tier; pageTasks(); }));
   const fs = document.getElementById('fSearch');
   if (fs) fs.addEventListener('input', (e) => { TASK_STATE.search = e.target.value; clearTimeout(fs._t); fs._t = setTimeout(pageTasks, 250); });
   view().querySelectorAll('.open-task').forEach((b) => b.addEventListener('click', () => openTask(all.find((t) => t.id === b.dataset.id))));
-  view().querySelectorAll('.sub-lock').forEach((b) => b.addEventListener('click', () => openSubscribe(sub)));
+  view().querySelectorAll('.sub-lock').forEach((b) => b.addEventListener('click', () => openSubscribe(data, b.dataset.plan)));
 }
 
 const SUBSCRIBE_METHODS = [
@@ -788,45 +795,65 @@ const SUBSCRIBE_METHODS = [
   { key: 'Paystack', logo: LOGO.paystack, desc: 'Cards & bank' },
 ];
 
-function openSubscribe(sub) {
+function openSubscribe(data, preselectId) {
+  const plans = (data && data.plans) || [];
+  const current = data && data.plan;
+  let selectedPlan = preselectId || (current && current.id) || (plans[0] && plans[0].id);
+  const priceOf = (id) => { const p = plans.find((x) => x.id === id); return p ? p.priceKES : 0; };
   const bg = openModal(`
     <button class="close">×</button>
-    <h3>★ Go Premium</h3>
-    <p class="p-sub">Unlock all $1–$4 tasks for 30 days. Choose how you'd like to pay, anyone can subscribe.</p>
-    <div class="stat brand" style="margin:12px 0"><div class="label">Subscription price</div><div class="value">$${sub.priceUSD} <span class="p-sub" style="font-size:14px">≈ ${kes(sub.priceKES)}</span></div></div>
-    <div id="subMethods"></div>
+    <h3>Choose your plan</h3>
+    <p class="p-sub">Higher plans unlock higher-paying tasks. Billed monthly.</p>
+    <div id="planPick" class="plan-cards"></div>
+    <div id="subMethods" style="margin-top:6px"></div>
     <form id="subForm" style="margin-top:12px">
       <div id="subFields"><p class="p-sub">Select a payment method above.</p></div>
-      <button class="btn btn-primary" type="submit" id="subPay">Pay & activate Premium</button>
+      <button class="btn btn-primary" type="submit" id="subPay">Pay & activate</button>
     </form>`);
+
+  const planPick = bg.querySelector('#planPick');
+  const renderPlans = () => {
+    planPick.innerHTML = plans.map((p) => {
+      const earn = p.minUSD > 0 ? `${usd(p.minUSD)}–${usd(p.maxUSD)}` : `up to ${usd(p.maxUSD)}`;
+      const isCur = current && current.id === p.id;
+      return `<button type="button" class="plan-mini plan-opt ${selectedPlan === p.id ? 'selected' : ''}" data-plan="${p.id}">
+        <div class="pm-name">${esc(p.name)}${isCur ? ' <span class="st approved">current</span>' : ''}</div>
+        <div class="pm-price">${kes(p.priceKES)} <span>/mo</span></div>
+        <div class="pm-earn">Earn ${earn} / task</div>
+      </button>`;
+    }).join('');
+    planPick.querySelectorAll('.plan-opt').forEach((b) => b.addEventListener('click', () => { selectedPlan = b.dataset.plan; renderPlans(); }));
+  };
+  renderPlans();
 
   const subFields = bg.querySelector('#subFields');
   const getSubMethod = renderMethodCards(bg.querySelector('#subMethods'), SUBSCRIBE_METHODS, (m) => {
-    if (m === 'M-Pesa') subFields.innerHTML = `<div class="field"><label>M-Pesa phone number</label><input id="subPhone" placeholder="e.g. +254 712 345 678"></div><p class="p-sub">You'll get an STK PIN prompt to pay ${kes(sub.priceKES)}. Premium unlocks once the payment is confirmed.</p>`;
-    else subFields.innerHTML = `<p class="p-sub">You'll be taken to a secure ${m === 'Card' ? 'card' : 'Paystack'} page to pay. <b>Premium unlocks only after the payment is confirmed</b>, not before.</p>`;
+    if (m === 'M-Pesa') subFields.innerHTML = `<div class="field"><label>M-Pesa phone number</label><input id="subPhone" placeholder="e.g. +254 712 345 678"></div><p class="p-sub">You'll get an STK PIN prompt to pay ${kes(priceOf(selectedPlan))}. Your plan unlocks once the payment is confirmed.</p>`;
+    else subFields.innerHTML = `<p class="p-sub">You'll be taken to a secure ${m === 'Card' ? 'card' : 'Paystack'} page to pay. <b>Your plan unlocks only after the payment is confirmed</b>, not before.</p>`;
   });
 
   bg.querySelector('#subForm').addEventListener('submit', async (e) => {
     e.preventDefault();
+    if (!selectedPlan) return toast('Choose a plan', 'error');
     const method = getSubMethod();
     if (!method) return toast('Choose a payment method', 'error');
     const btn = bg.querySelector('#subPay'); btn.disabled = true;
     if (method === 'M-Pesa') {
-      const { ok, data } = await api('/api/subscribe', { phone: (bg.querySelector('#subPhone') || {}).value || '' });
-      if (!ok) { btn.disabled = false; return toast(data.error || 'Could not start subscription', 'error'); }
-      toast(data.message);
+      const { ok, data: d } = await api('/api/subscribe', { plan: selectedPlan, phone: (bg.querySelector('#subPhone') || {}).value || '' });
+      if (!ok) { btn.disabled = false; return toast(d.error || 'Could not start subscription', 'error'); }
+      toast(d.message);
       let tries = 0;
       const poll = setInterval(async () => {
         tries += 1;
-        const s = await apiGet('/api/deposit/' + data.reference + '/status');
-        if (s.ok && s.data.status === 'success') { clearInterval(poll); bg.remove(); toast('Premium activated!'); await refreshMe(); pageTasks(); }
+        const s = await apiGet('/api/deposit/' + d.reference + '/status');
+        if (s.ok && s.data.status === 'success') { clearInterval(poll); bg.remove(); toast('Plan activated!'); await refreshMe(); pageTasks(); }
         else if ((s.ok && s.data.status === 'failed') || tries >= 20) { clearInterval(poll); btn.disabled = false; if (s.data && s.data.status === 'failed') toast('Payment not completed.', 'error'); }
       }, 3000);
     } else {
-      // Card / Paystack: go to the hosted checkout. Premium is granted server-side ONLY after payment verifies.
-      const { ok, data } = await api('/api/subscribe/manual', { method });
-      if (!ok) { btn.disabled = false; return toast(data.error || 'Could not start Premium payment', 'error'); }
-      if (data.mode === 'redirect' && data.url) { toast(data.message || 'Redirecting to pay…'); location.href = data.url; return; }
+      // Card / Paystack: hosted checkout. The plan is granted server-side ONLY after payment verifies.
+      const { ok, data: d } = await api('/api/subscribe/manual', { plan: selectedPlan, method });
+      if (!ok) { btn.disabled = false; return toast(d.error || 'Could not start payment', 'error'); }
+      if (d.mode === 'redirect' && d.url) { toast(d.message || 'Redirecting to pay…'); location.href = d.url; return; }
       btn.disabled = false;
     }
   });
@@ -1494,7 +1521,7 @@ async function pageRedeem() {
     <div class="panel">
       <h3>Payout history</h3>
       <table class="table"><thead><tr><th>Date</th><th class="num">Amount</th><th>Method</th><th>Destination</th><th>Status</th></tr></thead>
-      <tbody>${data.history.length ? data.history.map((h) => `<tr><td class="p-sub">${fmtDate(h.createdAt)}</td><td class="num">${h.currency === 'KES' ? kes(h.amount) : usd(h.amount)}</td><td>${esc(h.method)}</td><td class="p-sub">${esc(h.destination || '—')}</td><td><span class="st ${statusClass(h.status)}">${esc(h.status)}</span></td></tr>`).join('') : `<tr><td colspan="5" class="p-sub">No payouts yet.</td></tr>`}</tbody></table>
+      <tbody>${data.history.length ? data.history.map((h) => `<tr><td class="p-sub">${fmtDate(h.createdAt)}</td><td class="num">${h.currency === 'KES' ? kes(h.amount) : usd(h.amount)}</td><td>${esc(h.method)}</td><td class="p-sub">${esc(h.destination || '—')}</td><td><span class="st ${statusClass(h.status)}">${esc(h.status)}</span>${h.reason ? `<br><span class="p-sub">${esc(h.reason)}</span>` : ''}</td></tr>`).join('') : `<tr><td colspan="5" class="p-sub">No payouts yet.</td></tr>`}</tbody></table>
     </div>`;
 
   // ---------- Deposit ----------
