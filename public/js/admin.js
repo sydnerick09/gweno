@@ -346,6 +346,7 @@ function renderUsersTable() {
       ${act('suspend', u, u.suspended ? 'Reactivate' : 'Suspend')}
       ${act('hold', u, u.held ? 'Release hold' : 'Hold')}
       ${act('balance', u, 'Balance')}
+      ${act('plan', u, 'Change plan', ' data-plan="' + esc(u.planId || 'none') + '"')}
       ${act('password', u, 'Reset password')}
       ${act('gamify', u, 'XP / Badges')}
       ${act('delete', u, 'Delete', ' style="border-color:var(--danger);color:#c0143c"')}
@@ -551,11 +552,15 @@ function openGiftModal(id, name) {
     <form id="giftForm">
       <div class="grid g2">
         <div class="field"><label>Add XP <span class="p-sub">(− to remove)</span></label><input id="gXp" type="number" placeholder="0"></div>
-        <div class="field"><label>Add coins <span class="p-sub">(− to remove)</span></label><input id="gCoins" type="number" placeholder="0"></div>
+        <div class="field"><label>Set XP to <span class="p-sub">(exact)</span></label><input id="gSetXp" type="number" min="0" placeholder="leave blank"></div>
       </div>
       <div class="grid g2">
+        <div class="field"><label>Add coins <span class="p-sub">(− to remove)</span></label><input id="gCoins" type="number" placeholder="0"></div>
         <div class="field"><label>Grant badge</label><select id="gBadge"><option value="">— none —</option>${BADGE_IDS.map((b) => `<option value="${b}">${b}</option>`).join('')}</select></div>
+      </div>
+      <div class="grid g2">
         <div class="field"><label>Verification</label><select id="gVerif"><option value="">— leave as-is —</option><option value="blue">Blue</option><option value="gold">Gold</option><option value="diamond">Diamond</option><option value="none">Remove</option></select></div>
+        <div class="field"></div>
       </div>
       <button class="btn btn-primary" type="submit">Apply</button>
     </form>`);
@@ -563,6 +568,7 @@ function openGiftModal(id, name) {
     e.preventDefault();
     const val = (s) => bg.querySelector(s).value;
     const body = {};
+    if (val('#gSetXp').trim() !== '') body.setXp = Number(val('#gSetXp'));
     if (val('#gXp').trim() !== '') body.addXp = Number(val('#gXp'));
     if (val('#gCoins').trim() !== '') body.addCoins = Number(val('#gCoins'));
     if (val('#gBadge')) body.grantBadge = val('#gBadge');
@@ -670,6 +676,27 @@ async function userAction(ds) {
     if (verification.trim() !== '') body.verification = verification.trim() === 'none' ? null : verification.trim();
     const { ok, data } = await api(base + '/gamify', body);
     if (ok) toast('Gamification updated'); else toast(data.error || 'Failed', 'error');
+  } else if (ds.a === 'plan') {
+    const cur = ds.plan || 'none';
+    const opts = [
+      ['none', 'Free — no plan'],
+      ['basic', 'Basic — KES 200 (tasks up to $1)'],
+      ['premium', 'Premium — KES 500 (tasks $1–$2)'],
+      ['premiumpro', 'Premium Pro — KES 1000 (tasks $2–$7)'],
+    ];
+    const bg = adminModal(`
+      <button class="close">×</button>
+      <h3 style="margin:0 0 4px">Change subscription plan</h3>
+      <p class="p-sub">${esc(ds.email)}</p>
+      <div class="field"><label>Plan</label>
+        <select id="planSel">${opts.map(([v, l]) => `<option value="${v}" ${v === cur ? 'selected' : ''}>${l}</option>`).join('')}</select></div>
+      <p class="p-sub">Paid plans activate for 30 days from now.</p>
+      <button class="btn btn-primary" id="planSave">Save plan</button>`);
+    bg.querySelector('#planSave').addEventListener('click', async () => {
+      const plan = bg.querySelector('#planSel').value;
+      const { ok, data } = await api(base + '/plan', { plan });
+      if (ok) { bg.remove(); toast('Plan set to ' + (data.plan || plan)); tUsers(); } else toast(data.error || 'Failed', 'error');
+    });
   } else if (ds.a === 'delete') {
     if (!confirm('Permanently delete ' + ds.email + ' and all their data? This cannot be undone.')) return;
     const r = await fetch(base, { method: 'DELETE' });

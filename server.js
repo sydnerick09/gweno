@@ -325,10 +325,68 @@ function canAccessTask(u, task) {
   const need = PLAN_BY_ID[task.tier] ? PLAN_BY_ID[task.tier].rank : 99;
   return userRank(u) >= need;
 }
-const grantPlan = (u, id) => { const iso = new Date().toISOString(); u.plan = { id, since: iso, expires: new Date(now() + SUBSCRIPTION_DAYS * 86400000).toISOString() }; };
+const grantPlan = (u, id) => {
+  const iso = new Date().toISOString();
+  // Premium Pro unlocks the platform permanently; lower plans run for SUBSCRIPTION_DAYS.
+  const expires = id === 'premiumpro' ? null : new Date(now() + SUBSCRIPTION_DAYS * 86400000).toISOString();
+  u.plan = { id, since: iso, expires };
+  audit('plan_upgrade', { userId: u.id, plan: id });
+};
 // Back-compat: some code still calls isPremium — now "has any active paid plan".
 const isPremium = (u) => userRank(u) > 0;
 const grantPremium = (u) => grantPlan(u, 'premium');
+
+// ---- Subscription progression: strict per-plan task limits + withdrawal-gated upgrades ----
+// Basic = 1 task, Premium = 2 tasks, then a successful (admin-confirmed) withdrawal LOCKS
+// tasks and unlocks the next upgrade. Premium Pro removes the per-cycle limit (daily rules
+// only). Everything is DERIVED from data below, so it can't be bypassed client-side.
+const PLAN_TASK_LIMIT = { basic: 1, premium: 2 }; // premiumpro => unlimited (daily platform rules)
+const NEXT_PLAN = { free: 'basic', basic: 'premium', premium: 'premiumpro' };
+
+// Non-rejected task submissions since the current plan started (this "cycle").
+function tasksThisCycleCount(u) {
+  const since = (u.plan && u.plan.since) ? new Date(u.plan.since).getTime() : 0;
+  return mySubmissions(u.id).filter((x) => x.status !== 'rejected' && new Date(x.createdAt).getTime() >= since).length;
+}
+// A withdrawal that an admin has marked Paid since the current plan started.
+function withdrawalPaidThisCycle(u) {
+  const since = (u.plan && u.plan.since) ? new Date(u.plan.since).getTime() : 0;
+  return (db.get().redemptions || []).some((r) => r.userId === u.id && /paid/i.test(r.status || '') && new Date(r.createdAt).getTime() >= since);
+}
+// Server-authoritative gate state — fully derived, so a page refresh or edited request can't bypass it.
+function taskGate(u) {
+  const plan = activePlan(u);
+  const planId = plan ? plan.id : 'free';
+  const unlimited = planId === 'premiumpro';
+  const limit = PLAN_TASK_LIMIT[planId] != null ? PLAN_TASK_LIMIT[planId] : null;
+  const done = tasksThisCycleCount(u);
+  const atLimit = !unlimited && limit != null && done >= limit;
+  const withdrew = atLimit && withdrawalPaidThisCycle(u);
+  const locked = atLimit && withdrew; // finished the plan's tasks + a successful withdrawal => must upgrade
+  const nextPlan = NEXT_PLAN[planId] || null;
+  const np = nextPlan ? PLAN_BY_ID[nextPlan] : null;
+  return { planId, planName: plan ? plan.name : 'Free', limit, done, unlimited, atLimit, withdrew, locked,
+    nextPlan, nextPlanName: np ? np.name : null, nextPlanPriceKES: np ? np.priceKES : null };
+}
+// Whether a member may buy `targetPlanId` next — strict, sequential and cycle-gated.
+function upgradeEligibility(u, targetPlanId) {
+  const target = PLAN_BY_ID[targetPlanId];
+  if (!target) return { ok: false, error: 'Choose a valid plan.' };
+  const cur = activePlan(u);
+  const curRank = cur ? cur.rank : 0;
+  if (target.rank <= curRank) return { ok: false, error: `You already have the ${cur ? cur.name : target.name} plan or higher.` };
+  if (target.rank !== curRank + 1) {
+    const nextName = (PLANS.find((p) => p.rank === curRank + 1) || {}).name || 'the next plan';
+    return { ok: false, error: `Upgrade one level at a time — get ${nextName} first.` };
+  }
+  // Entry to Basic (from free) is open. Advancing further requires the current cycle to be
+  // complete: the plan's tasks done AND a successful, admin-confirmed withdrawal.
+  if (curRank >= 1) {
+    const gate = taskGate(u);
+    if (!gate.locked) return { ok: false, error: `Complete your ${gate.planName} task${gate.limit === 1 ? '' : 's'} and make a successful withdrawal before upgrading to ${target.name}.` };
+  }
+  return { ok: true };
+}
 
 // #5 — one account per device. A used fingerprint stays a tombstone even after
 // the account is deleted, so the same device can't register again.
@@ -1205,6 +1263,7 @@ app.get('/api/tasks', requireAuth, (req, res) => {
   const approved = mine.filter((x) => x.status === 'approved').reduce((a, x) => a + x.reward, 0);
   res.json({
     premium: userRank(req.user) > 0,
+    gate: taskGate(req.user),   // subscription-progression state (locked / limit / next upgrade)
     plan: plan ? { id: plan.id, name: plan.name, rank: plan.rank, maxUSD: plan.maxUSD, expires: req.user.plan && req.user.plan.expires } : null,
     plans: PLANS.map((p) => ({ id: p.id, name: p.name, priceKES: p.priceKES, minUSD: p.minUSD, maxUSD: p.maxUSD, rank: p.rank })),
     totalAvailable: accessible.length,
@@ -1236,6 +1295,14 @@ app.post('/api/tasks/:id/submit', requireAuth, (req, res) => {
   if (!canAccessTask(req.user, task)) {
     return res.status(403).json({ error: 'Upgrade your subscription to access higher-paying tasks.' });
   }
+  // Subscription-progression gate (strict, server-side, fully derived).
+  const gate = taskGate(req.user);
+  if (gate.locked) {
+    return res.status(403).json({ error: `Your tasks are locked. Upgrade to ${gate.nextPlanName || 'the next plan'}${gate.nextPlanPriceKES ? ` (KES ${gate.nextPlanPriceKES.toLocaleString()})` : ''} to unlock more tasks.`, code: 'locked', upgradeTo: gate.nextPlan });
+  }
+  if (gate.atLimit) {
+    return res.status(403).json({ error: `You've completed your ${gate.planName} task limit (${gate.limit}). Withdraw your earnings, then upgrade to ${gate.nextPlanName} to continue.`, code: 'limit_reached', upgradeTo: gate.nextPlan });
+  }
   const S = db.get();
   if (mySubmissions(req.user.id).some((x) => x.taskId === task.id && x.status !== 'rejected' && x.status !== 'correction')) {
     return res.status(409).json({ error: 'You have already submitted this task.' });
@@ -1256,6 +1323,7 @@ app.post('/api/tasks/:id/submit', requireAuth, (req, res) => {
     proof, status: 'pending', createdAt: new Date().toISOString(), reviewedAt: null, reviewNote: '', dispute: null,
   };
   S.submissions.push(sub);
+  audit('task_completed', { userId: req.user.id, taskId: task.id, submissionId: sub.id, plan: gate.planId });
   db.save();
   res.status(201).json({ submission: sub, message: 'Submitted for review. Approvals are usually completed within 5 hours.' });
 });
@@ -1622,6 +1690,7 @@ app.get('/api/admin/users', requireAdminSession, (req, res) => {
       held: !!u.held,
       status: u.suspended ? 'Suspended' : (u.held ? 'On hold' : 'Active'),
       plan: plan ? plan.name : 'Free',                    // current plan (or Free)
+      planId: plan ? plan.id : 'none',                    // for the admin plan selector
       totalEarningsUSD: round2(mine.filter((x) => x.status === 'approved').reduce((a, x) => a + (x.reward || 0), 0)),
       completedTasks: mine.filter((x) => x.status === 'approved').length,
       pendingTasks: mine.filter((x) => x.status === 'pending').length,
@@ -1696,6 +1765,24 @@ app.post('/api/admin/users/:id/hold', requireAdminSession, (req, res) => {
   u.held = !u.held;
   db.save();
   res.json({ ok: true, held: !!u.held });
+});
+
+// Set a member's subscription plan: 'none' (Free), 'basic', 'premium' or 'premiumpro'.
+app.post('/api/admin/users/:id/plan', requireAdminSession, (req, res) => {
+  const u = userById(req.params.id);
+  if (!u) return res.status(404).json({ error: 'User not found.' });
+  ensureUserShape(u);
+  const id = String(req.body.plan || '').trim();
+  if (id === 'none' || id === 'free' || id === '') {
+    u.plan = null;
+    u.premium = { active: false, since: null, expires: null }; // keep legacy flag in sync
+    db.save();
+    return res.json({ ok: true, plan: 'Free', planId: 'none' });
+  }
+  if (!PLAN_BY_ID[id]) return res.status(400).json({ error: 'Choose a valid plan.' });
+  grantPlan(u, id); // 30-day activation from now
+  db.save();
+  res.json({ ok: true, plan: PLAN_BY_ID[id].name, planId: id, expires: u.plan.expires });
 });
 
 // Set a member's balance directly (KES wallet and/or USD wallet).
@@ -2152,6 +2239,7 @@ app.post('/api/redeem', rateLimit('redeem', 15, 10 * 60 * 1000), requireAuth, as
   gamify.award(req.user, 'withdraw', `redeem:${rec.id}`, {        // XP once per withdrawal
     event: { text: 'Withdrawal requested 💸', icon: '💸' },
   });
+  audit('withdrawal_requested', { userId: req.user.id, redemptionId: rec.id, method, amountUSD });
   db.save();
   console.log(`[gweno] withdrawal ${rec.id} user=${req.user.id} ${method} $${amountUSD} ref=${reference}`);
 
@@ -2435,8 +2523,8 @@ app.get('/api/subscription', requireAuth, (req, res) => {
 app.post('/api/subscribe', requireAuth, async (req, res) => {
   const plan = PLAN_BY_ID[String(req.body.plan || '').trim()];
   if (!plan) return res.status(400).json({ error: 'Choose a subscription plan.' });
-  const cur = activePlan(req.user);
-  if (cur && cur.id === plan.id) return res.status(400).json({ error: `You already have the ${plan.name} plan.` });
+  const elig = upgradeEligibility(req.user, plan.id);
+  if (!elig.ok) return res.status(400).json({ error: elig.error });
   const phone = String(req.body.phone || '').trim();
   const amountKES = plan.priceKES;
   if (!/^(?:254|0)\d{9}$/.test(phone.replace(/\s+/g, ''))) return res.status(400).json({ error: 'Enter a valid M-Pesa phone number (e.g. 0712345678).' });
@@ -2466,8 +2554,8 @@ app.post('/api/subscribe', requireAuth, async (req, res) => {
 app.post('/api/subscribe/manual', requireAuth, async (req, res) => {
   const plan = PLAN_BY_ID[String(req.body.plan || '').trim()];
   if (!plan) return res.status(400).json({ error: 'Choose a subscription plan.' });
-  const curPlan = activePlan(req.user);
-  if (curPlan && curPlan.id === plan.id) return res.status(400).json({ error: `You already have the ${plan.name} plan.` });
+  const elig = upgradeEligibility(req.user, plan.id);
+  if (!elig.ok) return res.status(400).json({ error: elig.error });
   const method = String(req.body.method || '').trim();
   if (!['Card', 'Paystack'].includes(method)) return res.status(400).json({ error: 'Choose a card payment method.' });
   if (!investPay.paystackConfigured()) {

@@ -719,6 +719,17 @@ async function pageTasks() {
   const plan = data.plan;                 // current plan {id,name,rank,maxUSD} or null
   const plans = data.plans || [];
   const perDay = data.tasksPerDay || 2;
+  const gate = data.gate || {};           // subscription-progression state
+
+  // Prominent banner showing the strict progression state (limit reached / locked / next upgrade).
+  const gateBanner = (() => {
+    if (!plan) return '';                 // free users see the subscribe banner below
+    if (gate.unlimited) return `<div class="panel premium-active"><h3 style="margin:0">★ Premium Pro — unlimited access</h3><p class="p-sub" style="margin:4px 0 0">You've unlocked the platform permanently. Do up to <b>${perDay} tasks per day</b> under the normal rules.</p></div>`;
+    if (gate.locked) return `<div class="panel danger-zone"><h3 style="margin:0">🔒 Tasks locked</h3><p class="p-sub" style="margin:4px 0 8px">You completed your ${esc(gate.planName)} task${gate.limit === 1 ? '' : 's'} and made a successful withdrawal. Upgrade to <b>${esc(gate.nextPlanName)}</b>${gate.nextPlanPriceKES ? ` (KES ${gate.nextPlanPriceKES.toLocaleString()})` : ''} to unlock more tasks.</p><button class="btn btn-primary auto pick-plan" data-plan="${gate.nextPlan}">Upgrade to ${esc(gate.nextPlanName)}</button></div>`;
+    if (gate.atLimit) return `<div class="panel upgrade"><h3 style="margin:0">✅ ${esc(gate.planName)} task limit reached (${gate.done}/${gate.limit})</h3><p class="p-sub" style="margin:4px 0 8px">Withdraw your earnings, then upgrade to <b>${esc(gate.nextPlanName)}</b> to continue.</p><div style="display:flex;gap:8px;flex-wrap:wrap"><a class="btn btn-ghost auto" href="#/redeem">Withdraw</a><button class="btn btn-primary auto pick-plan" data-plan="${gate.nextPlan}">Upgrade to ${esc(gate.nextPlanName)}</button></div></div>`;
+    if (gate.limit != null) return `<div class="panel"><p class="p-sub" style="margin:0"><b>${esc(gate.planName)} plan:</b> you've used <b>${gate.done} of ${gate.limit}</b> task${gate.limit === 1 ? '' : 's'}. After your last one, withdraw your earnings and upgrade to <b>${esc(gate.nextPlanName)}</b> to continue.</p></div>`;
+    return '';
+  })();
   const filtered = all.filter((t) =>
     (TASK_STATE.tier === 'all' || t.tier === TASK_STATE.tier) &&
     (!TASK_STATE.search || t.title.toLowerCase().includes(TASK_STATE.search.toLowerCase())));
@@ -753,6 +764,7 @@ async function pageTasks() {
       <div class="stat"><div class="label">Your plan</div><div class="value" style="font-size:18px">${plan ? esc(plan.name) : 'None'}</div></div>
     </div>
 
+    ${gateBanner}
     ${banner}
 
     <div class="tabs" style="margin-top:4px">
