@@ -15,7 +15,7 @@ function toast(msg, type = 'ok') {
   setTimeout(() => { t.classList.remove('show'); setTimeout(() => t.remove(), 250); }, 3000);
 }
 
-const TABS = [['overview', 'Overview'], ['submissions', 'Submissions'], ['applications', 'Applications'], ['emails', 'Email log'], ['audit', 'Audit log'], ['users', 'Users'], ['rewards', 'Rewards'], ['sendemail', 'Send Email'], ['broadcast', 'Broadcast'], ['investments', 'Investments'], ['deposits', 'Deposits'], ['withdrawals', 'Withdrawals'], ['support', 'Support']];
+const TABS = [['overview', 'Overview'], ['submissions', 'Submissions'], ['applications', 'Applications'], ['share', 'Social Share'], ['emails', 'Email log'], ['audit', 'Audit log'], ['users', 'Users'], ['rewards', 'Rewards'], ['sendemail', 'Send Email'], ['broadcast', 'Broadcast'], ['investments', 'Investments'], ['deposits', 'Deposits'], ['withdrawals', 'Withdrawals'], ['support', 'Support']];
 
 // Lightweight modal for admin forms (reuses .modal styles from app.css).
 function adminModal(html) {
@@ -108,7 +108,7 @@ const loading = () => { content().innerHTML = `
   </div>`; };
 
 function route() {
-  ({ overview: tOverview, submissions: tSubmissions, applications: tApplications, emails: tEmails, audit: tAudit, users: tUsers, rewards: tRewards, sendemail: tSendEmail, broadcast: tBroadcast, investments: tInvestments, deposits: tDeposits, withdrawals: tWithdrawals, support: tSupport }[TAB] || tOverview)();
+  ({ overview: tOverview, submissions: tSubmissions, applications: tApplications, share: tShareReview, emails: tEmails, audit: tAudit, users: tUsers, rewards: tRewards, sendemail: tSendEmail, broadcast: tBroadcast, investments: tInvestments, deposits: tDeposits, withdrawals: tWithdrawals, support: tSupport }[TAB] || tOverview)();
 }
 
 async function tOverview() {
@@ -194,6 +194,63 @@ function openCorrection(id) {
     if (!reason) return toast('Please enter a reason for correction', 'error');
     bg.remove();
     decideSubmission(id, 'correction', reason);
+  });
+}
+
+// ---- Social Share submissions (Share & Earn) ------------------------------
+async function tShareReview() {
+  loading();
+  const { data } = await apiGet('/api/admin/share');
+  const subs = data.submissions || [];
+  const platName = { tiktok: '🎵 TikTok', whatsapp: '💬 WhatsApp' };
+  const pending = subs.filter((s) => s.status === 'pending').length;
+  content().innerHTML = `
+    <p class="page-sub">Social-sharing proof from members. Open a screenshot to verify the share, then approve to credit <b>${usd(data.reward || 0.30)}</b>, or reject. ${pending ? `<b>${pending}</b> awaiting review.` : ''}</p>
+    <div class="panel" style="overflow-x:auto"><table class="table">
+      <thead><tr><th>User</th><th>Platform</th><th>Screenshot</th><th class="num">Reward</th><th>Submitted</th><th>IP</th><th>Status</th><th>Action</th></tr></thead>
+      <tbody>${subs.length ? subs.map((s) => `
+        <tr>
+          <td>${esc(s.user ? s.user.username : 'User')}<br><span class="p-sub">${esc(s.user && s.user.email ? s.user.email : '')}</span></td>
+          <td>${platName[s.platform] || esc(s.platform)}</td>
+          <td><a href="${esc(s.imageUrl)}" target="_blank" rel="noopener" title="Open full size"><img class="sh-thumb" src="${esc(s.imageUrl)}" alt="screenshot" loading="lazy"></a></td>
+          <td class="num">${usd(s.reward)}</td>
+          <td class="p-sub">${s.createdAt ? new Date(s.createdAt).toLocaleString() : '—'}</td>
+          <td class="p-sub">${esc(s.ip || '—')}</td>
+          <td><span class="st ${s.status}">${statusLabel(s.status)}</span>${s.reviewNote ? `<br><span class="p-sub">${esc(s.reviewNote)}</span>` : ''}${s.reviewedBy ? `<br><span class="p-sub">by ${esc(s.reviewedBy)}</span>` : ''}</td>
+          <td><div style="display:flex;gap:6px;flex-wrap:wrap">
+            ${s.status !== 'approved' ? `<button class="btn btn-primary auto shr-approve" data-id="${s.id}">Approve</button>` : ''}
+            ${s.status !== 'rejected' ? `<button class="btn btn-ghost auto shr-reject" data-id="${s.id}">Reject</button>` : ''}
+          </div></td>
+        </tr>`).join('') : `<tr><td colspan="8" class="p-sub">No share submissions yet.</td></tr>`}</tbody>
+    </table></div>`;
+  content().querySelectorAll('.shr-approve').forEach((b) => b.addEventListener('click', () => openShareDecision(b.dataset.id, 'approved')));
+  content().querySelectorAll('.shr-reject').forEach((b) => b.addEventListener('click', () => openShareDecision(b.dataset.id, 'rejected')));
+}
+
+async function decideShare(id, decision, note) {
+  const { ok, data: d } = await api('/api/admin/share/' + id + '/decision', { decision, note: note || '' });
+  if (!ok) return toast(d.error || 'Failed', 'error');
+  toast(decision === 'approved' ? 'Approved — reward credited.' : 'Rejected.', 'ok');
+  tShareReview();
+}
+
+// Confirm approve / reject with an optional review comment.
+function openShareDecision(id, decision) {
+  const approve = decision === 'approved';
+  const bg = adminModal(`
+    <button class="close">×</button>
+    <h3>${approve ? 'Approve share' : 'Reject share'}</h3>
+    <p class="p-sub">${approve ? 'This credits $0.30 to the member\'s wallet and notifies them.' : 'No payment is made. The member can share again and resubmit.'}</p>
+    <form id="shrForm">
+      <div class="field"><label>Review comment ${approve ? '(optional)' : '(optional, shown to the member)'}</label>
+        <textarea id="shrNote" rows="3" style="width:100%;border:1px solid var(--line);border-radius:10px;padding:10px;font:inherit;background:var(--bg-2);color:var(--text)" placeholder="${approve ? 'e.g. Verified — thanks for sharing!' : 'e.g. The Gweno link is not visible in the screenshot.'}"></textarea></div>
+      <button class="btn ${approve ? 'btn-primary' : 'btn-ghost'}" type="submit">${approve ? 'Approve & credit $0.30' : 'Reject submission'}</button>
+    </form>`);
+  bg.querySelector('#shrForm').addEventListener('submit', (e) => {
+    e.preventDefault();
+    const note = bg.querySelector('#shrNote').value.trim();
+    bg.remove();
+    decideShare(id, decision, note);
   });
 }
 

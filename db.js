@@ -17,8 +17,47 @@ const EMPTY = {
   magicTokens: [], magicRequests: {},
   submissions: [], campaigns: [], redemptions: [], support: [], deposits: [], devices: [],
   adminSessions: [], investments: [], investmentRates: {}, adminEmails: [], broadcasts: [], emailLog: [],
-  applications: [], auditLog: [],
+  applications: [], auditLog: [], botPool: [],
+  // Share & Earn (social sharing) submissions — screenshots live in the separate
+  // share_images store (NOT here) so the hot JSONB state stays small. `transactions`
+  // is a lightweight ledger of credited earnings (share rewards, etc.).
+  shareSubmissions: [], transactions: [],
 };
+
+// ---------------------------------------------------------------------------
+//  Image store — kept OUT of the main JSONB state so screenshots don't bloat the
+//  per-request reload/persist (which would reintroduce slow loads on serverless).
+//  Postgres: a dedicated `share_images` table. File backend: data/share_images/<id>.
+// ---------------------------------------------------------------------------
+const IMG_DIR = path.join(DATA_DIR, 'share_images');
+let imagesTableReady = false;
+async function ensureImagesTable() {
+  if (!pool || imagesTableReady) return;
+  await pool.query('CREATE TABLE IF NOT EXISTS share_images (id text PRIMARY KEY, data text NOT NULL, created_at timestamptz DEFAULT now())');
+  imagesTableReady = true;
+}
+// Store a data-URL image under `id`. Returns nothing; throws on hard failure.
+async function putImage(id, dataUrl) {
+  await ensurePool();
+  if (pool) {
+    await ensureImagesTable();
+    await pool.query('INSERT INTO share_images (id, data) VALUES ($1, $2) ON CONFLICT (id) DO UPDATE SET data = EXCLUDED.data', [id, dataUrl]);
+    return;
+  }
+  if (!fs.existsSync(IMG_DIR)) fs.mkdirSync(IMG_DIR, { recursive: true });
+  fs.writeFileSync(path.join(IMG_DIR, id + '.txt'), dataUrl);
+}
+// Fetch the stored data-URL for `id`, or null if missing.
+async function getImage(id) {
+  await ensurePool();
+  if (pool) {
+    await ensureImagesTable();
+    const { rows } = await pool.query('SELECT data FROM share_images WHERE id = $1', [id]);
+    return rows.length ? rows[0].data : null;
+  }
+  try { return fs.readFileSync(path.join(IMG_DIR, id + '.txt'), 'utf8'); }
+  catch (_) { return null; }
+}
 
 function loadFile() {
   try {
@@ -136,4 +175,4 @@ async function reload() {
   }
 }
 
-module.exports = { init, get: () => state, save: persist, flush, reload, ensurePool };
+module.exports = { init, get: () => state, save: persist, flush, reload, ensurePool, putImage, getImage };

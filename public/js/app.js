@@ -52,6 +52,7 @@ const ICON = {
   // Consistent Feather (2017) line icons for the earning shortcuts.
   edit: '<svg viewBox="0 0 24 24"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4z"/></svg>',
   clipboard: '<svg viewBox="0 0 24 24"><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><rect x="8" y="2" width="8" height="4" rx="1" ry="1"/><path d="M9 12h6M9 16h4"/></svg>',
+  upload: '<svg viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M17 8l-5-5-5 5"/><path d="M12 3v12"/></svg>',
   userplus: '<svg viewBox="0 0 24 24"><path d="M16 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="8.5" cy="7" r="4"/><path d="M20 8v6M23 11h-6"/></svg>',
   user: '<svg viewBox="0 0 24 24"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>',
   search: '<svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/></svg>',
@@ -355,7 +356,7 @@ const NAV = [
 ];
 const TITLES = {
   dashboard: 'Dashboard', stats: 'Stats', earn: 'Earn', tasks: 'Tasks', submissions: 'My submissions',
-  referral: 'Refer & earn', applications: 'Applications', invest: 'Investments', advertise: 'Advertise', learn: 'Learn', redeem: 'Redeem',
+  referral: 'Refer & earn', applications: 'Applications', share: 'Share & Earn', invest: 'Investments', advertise: 'Advertise', learn: 'Learn', redeem: 'Redeem',
   rewards: 'Rewards', leaderboard: 'Leaderboard',
   settings: 'Settings', chat: 'Chat', support: 'Support', admin: 'Admin review', profile: 'Profile',
 };
@@ -422,7 +423,7 @@ async function refreshMe() {
 
 function setActive(routeKey) {
   // Side nav groups tasks/submissions/referral under "Earn".
-  const sideKey = ['tasks', 'submissions', 'referral', 'applications'].includes(routeKey) ? 'earn' : routeKey;
+  const sideKey = ['tasks', 'submissions', 'referral', 'applications', 'share'].includes(routeKey) ? 'earn' : routeKey;
   document.querySelectorAll('.nav-item').forEach((a) => {
     const on = a.dataset.route === sideKey;
     a.classList.toggle('active', on);
@@ -440,7 +441,7 @@ function router() {
   setActive(key);
   const map = {
     dashboard: pageDashboard, stats: pageStats, earn: pageEarn, tasks: pageTasks,
-    submissions: pageSubmissions, referral: pageReferral, applications: pageApplications,
+    submissions: pageSubmissions, referral: pageReferral, applications: pageApplications, share: pageShare,
     invest: pageInvest, advertise: pageAdvertise,
     learn: pageLearn, redeem: pageRedeem, settings: pageSettings, chat: pageChat,
     support: pageSupport, admin: pageAdmin, profile: pageProfile,
@@ -633,6 +634,7 @@ async function pageEarn() {
     <div class="tiles">
       <a class="tile" href="#/tasks"><div class="ico">${ICON.edit}</div><h4>Tasks</h4><p>Complete microtasks for cash rewards.</p><span class="tag">Open →</span></a>
       <a class="tile" href="#/earn/surveys" id="surveysTile"><div class="ico">${ICON.clipboard}</div><h4>Surveys</h4><p>Answer surveys and earn in minutes.</p><span class="tag">Open →</span></a>
+      <a class="tile" href="#/share"><div class="ico">${ICON.userplus}</div><h4>Share &amp; earn</h4><p>Share Gweno on TikTok or WhatsApp for $0.30.</p><span class="tag">Open →</span></a>
       <a class="tile" href="#/referral"><div class="ico">${ICON.userplus}</div><h4>Refer & earn</h4><p>5 KES per friend who joins.</p><span class="tag">Open →</span></a>
       <a class="tile" href="#/applications"><div class="ico">${ICON.clipboard}</div><h4>Apply for tasks</h4><p>Send a proposal and get approved to work.</p><span class="tag">Open →</span></a>
       <a class="tile" href="#/submissions"><div class="ico">${ICON.submissions}</div><h4>My submissions</h4><p>Track approvals, rejections & disputes.</p><span class="tag">Open →</span></a>
@@ -656,10 +658,25 @@ async function pageEarn() {
   document.getElementById('surveysTile').addEventListener('click', (e) => { e.preventDefault(); pageSurveys(); });
 }
 
+// Shown in place of a gated earning page when the user has no active subscription.
+function upgradeGateHTML(msg, back) {
+  return `${back ? `<p class="page-sub"><a href="#/earn">← Back to Earn</a></p>` : ''}
+    <div class="panel upgrade" style="text-align:center">
+      <div style="font-size:34px;margin-bottom:6px">🔒</div>
+      <h3 style="margin:0">Subscribe to unlock this</h3>
+      <p class="p-sub" style="margin:8px auto 16px;max-width:460px">${esc(msg || 'This earning feature needs an active subscription.')}</p>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;justify-content:center">
+        <a class="btn btn-primary auto" href="#/tasks">Do your free task</a>
+        <a class="btn btn-ghost auto" href="#/tasks">See plans</a>
+      </div>
+    </div>`;
+}
+
 async function pageSurveys() {
   document.getElementById('pageTitle').textContent = 'Surveys';
   loading();
   const { data } = await apiGet('/api/surveys');
+  if (data && data.code === 'no_plan') { view().innerHTML = upgradeGateHTML(data.error, true); return; }
   const list = data.surveys || [];
   view().innerHTML = `
     <p class="page-sub"><a href="#/earn">← Back to Earn</a></p>
@@ -730,6 +747,11 @@ async function pageTasks() {
     if (gate.limit != null) return `<div class="panel"><p class="p-sub" style="margin:0"><b>${esc(gate.planName)} plan:</b> you've used <b>${gate.done} of ${gate.limit}</b> task${gate.limit === 1 ? '' : 's'}. After your last one, withdraw your earnings and upgrade to <b>${esc(gate.nextPlanName)}</b> to continue.</p></div>`;
     return '';
   })();
+  // Free-trial task banner (only for users with no active plan).
+  const freeBanner = (data.free && data.free.active) ? (data.free.exhausted
+    ? `<div class="panel upgrade"><h3 style="margin:0">🎁 Free tasks used up</h3><p class="p-sub" style="margin:4px 0 8px">You've completed all your free trial tasks. Subscribe to a plan below to keep earning.</p><button class="btn btn-primary auto" id="freeSub">See plans</button></div>`
+    : `<div class="panel premium-active"><h3 style="margin:0">🎁 Your free task is ready</h3><p class="p-sub" style="margin:4px 0 0">Complete the free task below to earn <b>${usd(data.free.reward || 0.40)}</b>. <b>${data.free.remaining}</b> free task${data.free.remaining === 1 ? '' : 's'} left — subscribe to a plan to unlock the full marketplace.</p></div>`)
+    : '';
   const cats = data.categories || [];      // [{ name, icon }]
   const q = (TASK_STATE.search || '').toLowerCase();
   const filtered = all.filter((t) =>
@@ -771,6 +793,7 @@ async function pageTasks() {
       <div class="stat"><div class="label">Your plan</div><div class="value" style="font-size:18px">${plan ? esc(plan.name) : 'None'}</div></div>
     </div>
 
+    ${freeBanner}
     ${gateBanner}
     ${banner}
 
@@ -811,6 +834,8 @@ async function pageTasks() {
 
   const subBtn = document.getElementById('subBtn');
   if (subBtn) subBtn.addEventListener('click', () => openSubscribe(data));
+  const freeSub = document.getElementById('freeSub');
+  if (freeSub) freeSub.addEventListener('click', () => openSubscribe(data));
   view().querySelectorAll('.pick-plan').forEach((b) => b.addEventListener('click', () => openSubscribe(data, b.dataset.plan)));
   view().querySelectorAll('.tab[data-tier]').forEach((b) => b.addEventListener('click', () => { TASK_STATE.tier = b.dataset.tier; pageTasks(); }));
   view().querySelectorAll('.cat-chip[data-cat]').forEach((b) => b.addEventListener('click', () => { TASK_STATE.category = b.dataset.cat; pageTasks(); }));
@@ -1058,7 +1083,8 @@ function openDispute(id) {
 async function pageApplications() {
   loading();
   const [{ data: t }, { data: a }] = await Promise.all([apiGet('/api/tasks'), apiGet('/api/applications')]);
-  const tasks = (t.tasks || []).filter((x) => !x.locked);
+  if (a && a.code === 'no_plan') { view().innerHTML = upgradeGateHTML(a.error, false); return; }
+  const tasks = (t.tasks || []).filter((x) => !x.locked && x.tier !== 'free');
   const apps = a.applications || [];
   view().innerHTML = `
     <p class="page-sub">Apply for a task with a short proposal. Our team reviews applications and emails you the outcome.</p>
@@ -1102,6 +1128,7 @@ async function pageApplications() {
 async function pageReferral() {
   loading();
   const { data } = await apiGet('/api/referral');
+  if (data && data.code === 'no_plan') { view().innerHTML = upgradeGateHTML(data.error, true); return; }
   view().innerHTML = `
     <p class="page-sub">Invite friends and earn <b>${data.perReferralKES} KES</b> for each one who joins.</p>
     <div class="grid g2">
@@ -1137,6 +1164,113 @@ async function pageReferral() {
   document.getElementById('regen').addEventListener('click', async () => {
     const { ok } = await api('/api/referral/regenerate', {});
     if (ok) { toast('New referral link generated'); pageReferral(); }
+  });
+}
+
+// =====================================================================
+//  SHARE & EARN  (social sharing rewards)
+// =====================================================================
+function readImageFile(file) {
+  return new Promise((resolve, reject) => {
+    const fr = new FileReader();
+    fr.onload = () => resolve(fr.result);
+    fr.onerror = () => reject(new Error('read failed'));
+    fr.readAsDataURL(file);
+  });
+}
+// Downscale + recompress a data-URL so the upload stays small (fast + cheap to store).
+function compressDataUrl(dataUrl, maxDim, quality) {
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.onload = () => {
+      let w = img.width, h = img.height;
+      const scale = Math.min(1, maxDim / Math.max(w, h));
+      w = Math.max(1, Math.round(w * scale)); h = Math.max(1, Math.round(h * scale));
+      const c = document.createElement('canvas'); c.width = w; c.height = h;
+      c.getContext('2d').drawImage(img, 0, 0, w, h);
+      try { resolve(c.toDataURL('image/jpeg', quality)); } catch (_) { resolve(dataUrl); }
+    };
+    img.onerror = () => resolve(dataUrl);
+    img.src = dataUrl;
+  });
+}
+
+async function pageShare() {
+  loading();
+  const { data } = await apiGet('/api/share');
+  const tasks = data.tasks || [];
+  const subs = data.submissions || [];
+  const platIcon = { tiktok: '🎵', whatsapp: '💬' };
+  view().innerHTML = `
+    <p class="page-sub">Promote Gweno and earn <b>${usd(data.reward || 0.30)}</b> per approved share. Every screenshot is reviewed before the reward is paid.</p>
+    ${data.earnedUSD ? `<div class="panel premium-active"><p class="p-sub" style="margin:0">You've earned <b>${usd(data.earnedUSD)}</b> from Share &amp; Earn so far. Keep sharing!</p></div>` : ''}
+    <div class="panel">
+      <h3>Your Gweno link</h3>
+      <p class="p-sub">Post this link when you share — it also credits you any referrals.</p>
+      <div class="copybox"><input id="shareLink" readonly value="${esc(data.link)}"><button class="btn btn-primary auto" id="copyShare">Copy</button></div>
+    </div>
+    <div class="share-cards">
+      ${tasks.map((t) => {
+        const active = subs.find((s) => s.platform === t.key && s.status !== 'rejected');
+        return `<div class="share-card">
+          <div class="sh-top"><span class="sh-ico">${t.icon}</span><h4>${esc(t.name)}</h4><span class="tc-reward">${usd(t.reward)}</span></div>
+          <ol class="instr">${t.steps.map((s) => `<li>${esc(s)}</li>`).join('')}</ol>
+          ${active
+            ? `<div class="sh-status"><span class="st ${active.status}">${statusLabel(active.status)}</span> <span class="p-sub">${active.status === 'approved' ? 'Reward credited to your wallet.' : 'Under review — usually within a few hours.'}</span></div>`
+            : `<button class="btn btn-primary auto share-upload" data-platform="${t.key}" data-name="${esc(t.name)}"><span class="bico">${ICON.upload || ''}</span> Upload screenshot</button>`}
+        </div>`;
+      }).join('')}
+    </div>
+    <div class="panel">
+      <h3>Your share history</h3>
+      <table class="table">
+        <thead><tr><th>Platform</th><th>Screenshot</th><th class="num">Reward</th><th>Status</th><th>Submitted</th></tr></thead>
+        <tbody>${subs.length ? subs.map((s) => `
+          <tr>
+            <td>${platIcon[s.platform] || ''} ${esc(s.platformName || s.platform)}</td>
+            <td><a href="/api/share/image/${s.id}" target="_blank" rel="noopener" title="Open full size"><img class="sh-thumb" src="/api/share/image/${s.id}" alt="screenshot" loading="lazy"></a></td>
+            <td class="num">${usd(s.reward)}</td>
+            <td><span class="st ${s.status}">${statusLabel(s.status)}</span>${s.reviewNote ? `<br><span class="p-sub">${esc(s.reviewNote)}</span>` : ''}</td>
+            <td class="p-sub">${new Date(s.createdAt).toLocaleDateString()}</td>
+          </tr>`).join('') : `<tr><td colspan="5" class="p-sub">No shares yet. Upload a screenshot above to get started.</td></tr>`}</tbody>
+      </table>
+    </div>`;
+  const copyBtn = document.getElementById('copyShare');
+  if (copyBtn) copyBtn.addEventListener('click', () => copyText(data.link));
+  view().querySelectorAll('.share-upload').forEach((b) => b.addEventListener('click', () => openShareUpload(b.dataset.platform, b.dataset.name)));
+}
+
+function openShareUpload(platform, name) {
+  const bg = openModal(`
+    <button class="close">×</button>
+    <h3>Upload ${esc(name)} screenshot</h3>
+    <p class="p-sub">JPG, JPEG or PNG · max 5 MB. Make sure your shared Gweno link is visible in the screenshot.</p>
+    <div class="field"><input type="file" id="shFile" accept="image/png,image/jpeg"></div>
+    <div id="shPreviewWrap" style="display:none;margin:10px 0"><img id="shPreview" class="sh-preview" alt="preview"></div>
+    <button class="btn btn-primary" id="shSubmit" type="button" disabled>Submit for review</button>`);
+  let payload = null;
+  const fileEl = bg.querySelector('#shFile');
+  const submitEl = bg.querySelector('#shSubmit');
+  fileEl.addEventListener('change', async () => {
+    const f = fileEl.files && fileEl.files[0];
+    payload = null; submitEl.disabled = true;
+    if (!f) return;
+    if (!/image\/(png|jpe?g)/i.test(f.type) && !/\.(png|jpe?g)$/i.test(f.name)) { toast('Only JPG, JPEG or PNG images are allowed.', 'error'); fileEl.value = ''; return; }
+    if (f.size > 5 * 1024 * 1024) { toast('That image is too large (max 5 MB).', 'error'); fileEl.value = ''; return; }
+    try {
+      const raw = await readImageFile(f);
+      payload = await compressDataUrl(raw, 1400, 0.82);
+      bg.querySelector('#shPreview').src = payload;
+      bg.querySelector('#shPreviewWrap').style.display = 'block';
+      submitEl.disabled = false;
+    } catch (_) { toast('Could not read that image. Please try another.', 'error'); }
+  });
+  submitEl.addEventListener('click', async () => {
+    if (!payload) return;
+    submitEl.disabled = true; submitEl.textContent = 'Submitting…';
+    const { ok, data } = await api('/api/share/submit', { platform, image: payload });
+    if (ok) { toast(data.message || 'Submitted for review.'); bg.remove(); pageShare(); }
+    else { toast(data.error || 'Could not submit.', 'error'); submitEl.disabled = false; submitEl.textContent = 'Submit for review'; }
   });
 }
 

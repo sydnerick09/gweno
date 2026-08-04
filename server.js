@@ -23,7 +23,7 @@ const payments = require('./payments');
 const mailer = require('./mailer');
 const oauth = require('./oauth');
 const gamify = require('./gamify');
-const { TASKS } = tasksMod;
+const { TASKS, FREE_TASKS } = tasksMod;
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -111,7 +111,7 @@ const b2cResultUrl = (req) => process.env.MPESA_RESULT_URL || `${mpesaBase(req)}
 const b2cTimeoutUrl = (req) => process.env.MPESA_TIMEOUT_URL || `${mpesaBase(req)}/api/mpesa/timeout`;
 
 app.set('trust proxy', 1); // trust the first proxy (correct client IPs when deployed)
-app.use(express.json({ limit: '2mb', verify: (req, res, buf) => { req.rawBody = buf; } })); // raw body kept for Paystack webhook signature
+app.use(express.json({ limit: '6mb', verify: (req, res, buf) => { req.rawBody = buf; } })); // 6mb allows Share & Earn screenshots; raw body kept for Paystack webhook signature
 app.use(express.urlencoded({ extended: false })); // Apple OAuth returns via form_post
 app.use(cookieParser());
 
@@ -241,6 +241,7 @@ app.use(async (req, res, next) => {
   S.investments = S.investments || []; // member investments
   S.investmentRates = S.investmentRates || {}; // admin per-plan interest-rate overrides
   S.adminEmails = S.adminEmails || []; // admin-sent emails (individual + broadcast) history
+  S.botPool = S.botPool || []; // persistent generated/demo users (one displayName reused everywhere)
 })();
 
 // One-time backfill: award XP/badges/levels for activity that happened before the
@@ -321,7 +322,9 @@ function activePlan(u) {
 }
 const userRank = (u) => { const p = activePlan(u); return p ? p.rank : 0; };
 // A task is accessible if the member's plan rank >= the task's required-tier rank.
+// Free tasks (tier 'free') are open to everyone — that's the single free-trial task.
 function canAccessTask(u, task) {
+  if (task && task.tier === 'free') return true;
   const need = PLAN_BY_ID[task.tier] ? PLAN_BY_ID[task.tier].rank : 99;
   return userRank(u) >= need;
 }
@@ -335,6 +338,33 @@ const grantPlan = (u, id) => {
 // Back-compat: some code still calls isPremium — now "has any active paid plan".
 const isPremium = (u) => userRank(u) > 0;
 const grantPremium = (u) => grantPlan(u, 'premium');
+
+// The next free task for a no-plan user: one at a time, from a finite pool. A free
+// task the user already submitted (pending/approved) is skipped; a rejected one may
+// be retried. Returns null once the pool is exhausted (=> they must subscribe).
+function nextFreeTask(u) {
+  const takenFree = new Set(mySubmissions(u.id)
+    .filter((x) => x.status !== 'rejected' && typeof x.taskId === 'string' && x.taskId[0] === 'F')
+    .map((x) => x.taskId));
+  return FREE_TASKS.find((t) => !takenFree.has(t.id)) || null;
+}
+function freeTasksRemaining(u) {
+  const takenFree = new Set(mySubmissions(u.id)
+    .filter((x) => x.status !== 'rejected' && typeof x.taskId === 'string' && x.taskId[0] === 'F')
+    .map((x) => x.taskId));
+  return FREE_TASKS.filter((t) => !takenFree.has(t.id)).length;
+}
+
+// Gate for earning modules that require an active subscription (surveys, referral,
+// apply-for-tasks, future paid clicks/games). Share & Earn is intentionally NOT gated
+// (it drives growth), and the single free task lives on the Tasks page.
+function requirePlan(req, res, next) {
+  if (userRank(req.user) > 0) return next();
+  return res.status(403).json({
+    error: 'This earning feature needs an active subscription. Try the free task on the Tasks page, then subscribe to unlock surveys, referrals and more.',
+    code: 'no_plan', upgrade: true,
+  });
+}
 
 // ---- Subscription progression: strict per-plan task limits + withdrawal-gated upgrades ----
 // Basic = 1 task, Premium = 2 tasks, then a successful (admin-confirmed) withdrawal LOCKS
@@ -678,11 +708,13 @@ const LB_COUNTRIES = ['Kenya', 'Kenya', 'Kenya', 'Uganda', 'Tanzania', 'Nigeria'
 function fakeCompletions(seed) {
   const rng = mulberry32(seed);
   const pick = (a) => a[Math.floor(rng() * a.length)];
+  const genUsers = ensureBotPool();               // reuse the SAME generated users everywhere
   const premiumTasks = TASKS.filter((t) => t.tier !== 'basic');
   const basicTasks = TASKS.filter((t) => t.tier === 'basic');
   const one = (pool, planName) => {
     const t = pick(pool.length ? pool : TASKS) || TASKS[0];
-    return { username: `${pick(LB_FIRST)} ${pick(LB_LAST)[0]}.`, country: pick(LB_COUNTRIES), task: t.title, reward: t.reward, plan: planName };
+    const g = pick(genUsers);                       // a persistent generated user (stable displayName)
+    return { username: g.displayName, country: g.country, task: t.title, reward: t.reward, plan: planName };
   };
   const items = [];
   for (let i = 0; i < 30; i++) items.push(one(premiumTasks, 'Premium'));
@@ -1136,19 +1168,45 @@ function taskWorkers(id) {
 }
 const LB_FIRST = ['Brian', 'Amina', 'John', 'Grace', 'David', 'Faith', 'Kevin', 'Mercy', 'Peter', 'Joy', 'Samuel', 'Cynthia', 'Daniel', 'Esther', 'Michael', 'Ruth', 'Emmanuel', 'Sharon', 'Victor', 'Lydia', 'James', 'Naomi', 'Collins', 'Wanjiru', 'Dennis', 'Aisha', 'Felix', 'Chloe', 'George', 'Halima', 'Ian', 'Beatrice', 'Kelvin', 'Diana', 'Nancy', 'Oscar', 'Purity', 'Anthony', 'Rose', 'Stephen', 'Winnie', 'Timothy', 'Zainab', 'Alex', 'Belinda', 'Caleb', 'Doris', 'Eric', 'Fiona', 'Gideon', 'Hilda', 'Isaac', 'Janet', 'Kamau', 'Linda', 'Musa', 'Njeri', 'Otieno', 'Pauline', 'Ahmed', 'Sophia', 'Liam', 'Olivia', 'Noah', 'Emma', 'Lucas', 'Mia', 'Ethan', 'Zara', 'Ali', 'Habiba', 'Yusuf', 'Salma', 'Tariq', 'Layla', 'Mateo', 'Valentina', 'Andre', 'Chidi', 'Ngozi', 'Kwame', 'Ama', 'Sadia', 'Rehema', 'Baraka', 'Tabitha', 'Elvis', 'Mercy'];
 const LB_LAST = ['Kamau', 'Otieno', 'Mwangi', 'Achieng', 'Njoroge', 'Wanjala', 'Omondi', 'Chebet', 'Kiptoo', 'Mutua', 'Njeri', 'Barasa', 'Kariuki', 'Wafula', 'Onyango', 'Cheruiyot', 'Maina', 'Adhiambo', 'Kimani', 'Mbugua', 'Owino', 'Wekesa', 'Kones', 'Aluoch', 'Gitau', 'Musyoka', 'Chege', 'Ndegwa', 'Auma', 'Bett', 'Kiplagat', 'Were', 'Muriuki', 'Odongo', 'Ochieng', 'Mumo', 'Karanja', 'Simiyu', 'Wambui', 'Hassan', 'Yusuf', 'Ahmed', 'Ibrahim', 'Okoth', 'Juma', 'Salim', 'Mohamed', 'Abdi', 'Kiprop', 'Wangari'];
-// Build `count` synthetic leaders descending from (topXp - 20) with random names.
+// ---- Canonical pool of GENERATED (system/demo) users ------------------------
+// Each generated user has ONE permanent public `displayName` (e.g. "Wycliffe12") that is
+// stored once and reused in every leaderboard/feed, so the same demo user never shows up
+// under different names. Real registered users are never touched. An admin can rename a
+// generated user via /api/admin/generated-users/:id/rename.
+const GEN_POOL_SIZE = 260;
+function ensureBotPool() {
+  const s = db.get();
+  if (Array.isArray(s.botPool) && s.botPool.length) return s.botPool;
+  const rng = mulberry32(770077);
+  const pick = (a) => a[Math.floor(rng() * a.length)];
+  const used = new Set();
+  const pool = [];
+  for (let i = 0; i < GEN_POOL_SIZE; i++) {
+    let name, tries = 0;
+    // Username-style handle: first name + a 2-digit number, e.g. "Wycliffe12".
+    do { name = `${pick(LB_FIRST)}${String(10 + Math.floor(rng() * 90))}`; tries++; } while (used.has(name) && tries < 40);
+    used.add(name);
+    const r = rng();
+    const verification = r < 0.03 ? 'diamond' : r < 0.12 ? 'gold' : r < 0.34 ? 'blue' : null;
+    pool.push({ id: 'gen_' + i, displayName: name, country: pick(LB_COUNTRIES), verification, generated: true });
+  }
+  s.botPool = pool;
+  db.save();
+  return pool;
+}
+
+// Build `count` synthetic leaders descending from (topXp - 20). Names/verification come
+// from the persistent generated-user pool, so they are identical across every feed.
 function fakeLeaders(count, topXp, seed) {
+  const pool = ensureBotPool();
   const rng = mulberry32(seed);
-  const pick = (arr) => arr[Math.floor(rng() * arr.length)];
+  // Period-specific ordering of the SAME generated users (their names never change).
+  const order = pool.map((b) => ({ b, k: rng() })).sort((a, z) => a.k - z.k).slice(0, count);
   const out = [];
   let x = Math.max(topXp - 20, 120);
-  const used = new Set();
-  for (let i = 0; i < count; i++) {
-    let name, tries = 0;
-    do { name = `${pick(LB_FIRST)} ${pick(LB_LAST)}`; tries++; } while (used.has(name) && tries < 10);
-    used.add(name);
-    const verification = i < 5 ? 'diamond' : i < 20 ? 'gold' : i < 70 ? 'blue' : null;
-    out.push({ id: 'lb_' + seed + '_' + i, name, avatar: null, level: gamify.level(x).name, verification, xp: Math.max(x, 5), bot: true });
+  for (let i = 0; i < order.length; i++) {
+    const b = order[i].b;
+    out.push({ id: b.id, name: b.displayName, avatar: null, level: gamify.level(x).name, verification: b.verification, xp: Math.max(x, 5), bot: true });
     x -= 8 + Math.floor(rng() * 40); // descend by 8–47 each step
     if (x < 30) x = 30 + Math.floor(rng() * 20);
   }
@@ -1261,12 +1319,26 @@ app.get('/api/tasks', requireAuth, (req, res) => {
   // Hide tasks that are pending or approved; rejected ones can be retried.
   const done = new Set(mine.filter((x) => x.status !== 'rejected' && x.status !== 'correction').map((x) => x.taskId));
   // Held accounts don't receive new tasks until an admin restores them.
-  const available = (req.user.held ? [] : TASKS.filter((t) => !done.has(t.id))).map((t) => ({
+  let available = (req.user.held ? [] : TASKS.filter((t) => !done.has(t.id))).map((t) => ({
     ...t,
     requiredPlan: PLAN_BY_ID[t.tier] ? PLAN_BY_ID[t.tier].name : t.tier,
     locked: !canAccessTask(req.user, t),
     workers: taskWorkers(t.id),   // people currently working on this task (live, synthetic)
   }));
+  // No-plan users get exactly ONE free task (Easy, $0.40). When it's done the next
+  // one from the finite pool appears; the paid catalog below stays locked as a preview.
+  const noPlan = userRank(req.user) === 0;
+  let free = null;
+  if (!req.user.held && noPlan) {
+    const ft = nextFreeTask(req.user);
+    if (ft) {
+      const card = { ...ft, requiredPlan: 'Free', locked: false, workers: taskWorkers(ft.id) };
+      available = [card, ...available];
+      free = { active: true, exhausted: false, remaining: freeTasksRemaining(req.user), reward: 0.40 };
+    } else {
+      free = { active: true, exhausted: true, remaining: 0, reward: 0.40 };
+    }
+  }
   const accessible = available.filter((t) => !t.locked);
   const pending = mine.filter((x) => x.status === 'pending').reduce((a, x) => a + x.reward, 0);
   const approved = mine.filter((x) => x.status === 'approved').reduce((a, x) => a + x.reward, 0);
@@ -1284,6 +1356,7 @@ app.get('/api/tasks', requireAuth, (req, res) => {
     balanceUSD: round2(req.user.usd),
     live: payments.mpesaStkConfigured(),
     held: !!req.user.held,
+    free,                              // { active, exhausted, remaining, reward } for no-plan users, else null
     categories: tasksMod.CATEGORIES,   // [{ name, icon }] for the category filter
     tasks: available,
   });
@@ -1496,7 +1569,7 @@ app.post('/api/admin/emails/:id/resend', requireAdminSession, async (req, res) =
 // =============================================================================
 //  APPLICATIONS  —  apply for a task with a proposal (admin reviews)
 // =============================================================================
-app.get('/api/applications', requireAuth, (req, res) => {
+app.get('/api/applications', requireAuth, requirePlan, (req, res) => {
   const mine = (db.get().applications || [])
     .filter((a) => a.userId === req.user.id)
     .map((a) => ({ ...a, task: tasksMod.byId(a.taskId) }))
@@ -1843,6 +1916,27 @@ app.get('/api/admin/leaderboard', requireAdminSession, (req, res) => {
   res.json({ rows });
 });
 
+// Generated (system/demo) users — list + rename. Renaming updates the one stored displayName,
+// so the new name then appears in every leaderboard/feed. Real users are never listed here.
+app.get('/api/admin/generated-users', requireAdminSession, (req, res) => {
+  const q = String(req.query.q || '').trim().toLowerCase();
+  let pool = ensureBotPool();
+  if (q) pool = pool.filter((b) => b.displayName.toLowerCase().includes(q));
+  res.json({ users: pool.slice(0, 300).map((b) => ({ id: b.id, displayName: b.displayName, country: b.country, verification: b.verification })), total: ensureBotPool().length });
+});
+
+app.post('/api/admin/generated-users/:id/rename', requireAdminSession, (req, res) => {
+  const b = ensureBotPool().find((x) => x.id === req.params.id);
+  if (!b) return res.status(404).json({ error: 'Generated user not found.' });
+  const name = String(req.body.displayName || '').trim();
+  if (!name || name.length > 30) return res.status(400).json({ error: 'Enter a display name (max 30 characters).' });
+  const old = b.displayName;
+  b.displayName = name;
+  audit('generated_user_rename', { admin: ADMIN_USERNAME, id: b.id, from: old, to: name });
+  db.save();
+  res.json({ ok: true, displayName: b.displayName });
+});
+
 // (A member's email address is edited via the "Edit details" form → /api/admin/users/:id/details.
 //  The old dedicated change-email route was removed to avoid colliding with the send-email route.)
 
@@ -2080,7 +2174,7 @@ app.post('/api/admin/support/:id/reply', requireAdminSession, async (req, res) =
 // =============================================================================
 //  REFERRALS  —  single-use link, 5 KES per successful referral, + QR
 // =============================================================================
-app.get('/api/referral', requireAuth, (req, res) => {
+app.get('/api/referral', requireAuth, requirePlan, (req, res) => {
   const u = req.user; // ensureUserShape already issued a fresh code if the last was used
   const link = `${baseUrl(req)}/signup.html?ref=${u.referral.code}`;
   const referred = db.get().users
@@ -2097,7 +2191,7 @@ app.get('/api/referral', requireAuth, (req, res) => {
   });
 });
 
-app.post('/api/referral/regenerate', requireAuth, (req, res) => {
+app.post('/api/referral/regenerate', requireAuth, requirePlan, (req, res) => {
   req.user.referral = { code: newRefCode(), used: false };
   db.save();
   const link = `${baseUrl(req)}/signup.html?ref=${req.user.referral.code}`;
@@ -2755,7 +2849,7 @@ app.post('/api/campaigns', requireAuth, (req, res) => {
 // =============================================================================
 //  SURVEYS  —  catalog + one-time completion reward (USD)
 // =============================================================================
-app.get('/api/surveys', requireAuth, (req, res) => {
+app.get('/api/surveys', requireAuth, requirePlan, (req, res) => {
   const done = new Set(req.user[SURVEY_DONE] || []);
   res.json({
     surveys: surveysMod.SURVEYS.map((s) => ({
@@ -2765,7 +2859,7 @@ app.get('/api/surveys', requireAuth, (req, res) => {
   });
 });
 
-app.post('/api/surveys/:id/complete', requireAuth, (req, res) => {
+app.post('/api/surveys/:id/complete', requireAuth, requirePlan, (req, res) => {
   const survey = surveysMod.byId(req.params.id);
   if (!survey) return res.status(404).json({ error: 'Survey not found.' });
   const done = req.user[SURVEY_DONE] || (req.user[SURVEY_DONE] = []);
@@ -2785,6 +2879,172 @@ app.post('/api/surveys/:id/complete', requireAuth, (req, res) => {
 });
 
 // =============================================================================
+//  SHARE & EARN  —  social-sharing rewards (TikTok / WhatsApp)
+//  Open to every signed-in user (drives growth). Each submission is admin-reviewed;
+//  the $0.30 reward is credited ONLY on approval. Screenshots are stored OUTSIDE the
+//  hot JSONB state (db.putImage) so per-request reload/persist stays fast.
+// =============================================================================
+const SHARE_REWARD = 0.30;
+const SHARE_TASKS = [
+  { key: 'tiktok',   name: 'TikTok Share',        reward: SHARE_REWARD, icon: '🎵',
+    steps: ['Share your Gweno link on TikTok (a post or story).', 'Take a screenshot of the published post.', 'Upload the screenshot below as proof.'] },
+  { key: 'whatsapp', name: 'WhatsApp Group Share', reward: SHARE_REWARD, icon: '💬',
+    steps: ['Share your Gweno link in a WhatsApp group.', 'Take a screenshot of the message in the group.', 'Upload the screenshot below as proof.'] },
+];
+const SHARE_BY_KEY = Object.fromEntries(SHARE_TASKS.map((t) => [t.key, t]));
+
+// sha256 of the uploaded image — used to reject re-used screenshots (anti-abuse).
+function imageHash(dataUrl) { return crypto.createHash('sha256').update(String(dataUrl)).digest('hex'); }
+
+// Decode a stored data-URL and stream it as a real image (opens full-size in a tab).
+async function serveShareImage(res, imageId) {
+  const dataUrl = await db.getImage(imageId);
+  const m = dataUrl && dataUrl.match(/^data:(image\/[a-z0-9+.-]+);base64,(.*)$/i);
+  if (!m) return res.status(404).send('Not found');
+  res.set('Content-Type', m[1]);
+  res.set('Cache-Control', 'private, max-age=300');
+  res.send(Buffer.from(m[2], 'base64'));
+}
+
+app.get('/api/share', requireAuth, (req, res) => {
+  const link = `${baseUrl(req)}/signup.html?ref=${(req.user.referral && req.user.referral.code) || ''}`;
+  const mine = (db.get().shareSubmissions || [])
+    .filter((s) => s.userId === req.user.id)
+    .sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)))
+    .map((s) => ({
+      id: s.id, platform: s.platform, platformName: (SHARE_BY_KEY[s.platform] || {}).name || s.platform,
+      reward: s.reward, status: s.status, reviewNote: s.reviewNote || '',
+      createdAt: s.createdAt, reviewedAt: s.reviewedAt,
+    }));
+  // A platform is open to submit only if there's no pending/approved submission for it.
+  const blocked = new Set(mine.filter((s) => s.status !== 'rejected').map((s) => s.platform));
+  const earnedUSD = round2(mine.filter((s) => s.status === 'approved').reduce((a, s) => a + (s.reward || 0), 0));
+  res.json({
+    link, reward: SHARE_REWARD, maxBytes: 5 * 1024 * 1024, earnedUSD,
+    tasks: SHARE_TASKS.map((t) => ({ ...t, canSubmit: !blocked.has(t.key) })),
+    submissions: mine,
+  });
+});
+
+app.post('/api/share/submit', requireAuth, rateLimit('share', 20, 60_000), async (req, res) => {
+  const platform = String(req.body.platform || '').trim().toLowerCase();
+  const task = SHARE_BY_KEY[platform];
+  if (!task) return res.status(400).json({ error: 'Choose TikTok or WhatsApp.' });
+  if (req.user.held) return res.status(403).json({ error: 'Your account is on hold. Sharing is paused until an admin restores it.' });
+
+  const img = String(req.body.image || '');
+  // Format: JPG / JPEG / PNG only.
+  if (!/^data:image\/(png|jpe?g);base64,/i.test(img)) return res.status(400).json({ error: 'Upload a JPG, JPEG or PNG screenshot.' });
+  // Size: max 5 MB (measured on the decoded bytes).
+  const b64 = img.slice(img.indexOf(',') + 1);
+  if (b64.length < 200) return res.status(400).json({ error: 'That screenshot looks empty. Please upload a real screenshot.' });
+  if (Math.floor((b64.length * 3) / 4) > 5 * 1024 * 1024) return res.status(413).json({ error: 'That screenshot is too large (max 5 MB).' });
+
+  const S = db.get();
+  S.shareSubmissions = S.shareSubmissions || [];
+  const mine = S.shareSubmissions.filter((s) => s.userId === req.user.id);
+  // Repeats aren't allowed: one active (pending/approved) submission per platform.
+  if (mine.some((s) => s.platform === platform && s.status !== 'rejected')) {
+    return res.status(409).json({ error: `You already have a ${task.name} submission under review or approved.` });
+  }
+  // Anti-abuse: reject a screenshot that's already been submitted (by anyone).
+  const hash = imageHash(img);
+  if (S.shareSubmissions.some((s) => s.imageHash === hash)) {
+    return res.status(409).json({ error: 'This screenshot has already been submitted. Please share again and upload a fresh screenshot.' });
+  }
+
+  const id = rid(8);
+  const imageId = 'shimg_' + id;
+  try { await db.putImage(imageId, img); }
+  catch (e) { console.error('share image store failed:', e.message); return res.status(500).json({ error: 'Could not save your screenshot. Please try again.' }); }
+
+  const rec = {
+    id, userId: req.user.id, username: req.user.username || req.user.name || 'User',
+    platform, reward: task.reward, imageId, imageHash: hash,
+    status: 'pending', reviewNote: '', reviewedAt: null, reviewedBy: null,
+    ip: req.ip || null, createdAt: new Date().toISOString(),
+  };
+  S.shareSubmissions.unshift(rec);
+  audit('share_submitted', { userId: req.user.id, platform, shareId: id });
+  db.save();
+  await db.flush();
+  res.status(201).json({
+    ok: true,
+    submission: { id, platform, platformName: task.name, status: 'pending', reward: task.reward, createdAt: rec.createdAt },
+    message: `Screenshot submitted for review. You'll be credited $${task.reward.toFixed(2)} once an admin approves it.`,
+  });
+});
+
+// Owner-only image of their own share screenshot (for the status thumbnail).
+app.get('/api/share/image/:id', requireAuth, async (req, res) => {
+  const rec = (db.get().shareSubmissions || []).find((s) => s.id === req.params.id);
+  if (!rec || rec.userId !== req.user.id) return res.status(404).send('Not found');
+  await serveShareImage(res, rec.imageId);
+});
+
+// ---- Admin: review social-share submissions -------------------------------
+app.get('/api/admin/share', requireAdminSession, (req, res) => {
+  const all = (db.get().shareSubmissions || [])
+    .map((s) => {
+      const u = userById(s.userId);
+      return {
+        id: s.id, userId: s.userId, platform: s.platform,
+        platformName: (SHARE_BY_KEY[s.platform] || {}).name || s.platform,
+        reward: s.reward, status: s.status, reviewNote: s.reviewNote || '',
+        ip: s.ip || null, createdAt: s.createdAt, reviewedAt: s.reviewedAt, reviewedBy: s.reviewedBy || null,
+        imageUrl: `/api/admin/share/image/${s.id}`,
+        user: u ? { username: u.username, email: u.email } : { username: s.username || 'User', email: null },
+      };
+    })
+    .sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)));
+  res.json({ submissions: all, reward: SHARE_REWARD });
+});
+
+app.get('/api/admin/share/image/:id', requireAdminSession, async (req, res) => {
+  const rec = (db.get().shareSubmissions || []).find((s) => s.id === req.params.id);
+  if (!rec) return res.status(404).send('Not found');
+  await serveShareImage(res, rec.imageId);
+});
+
+app.post('/api/admin/share/:id/decision', requireAdminSession, async (req, res) => {
+  const rec = (db.get().shareSubmissions || []).find((s) => s.id === req.params.id);
+  if (!rec) return res.status(404).json({ error: 'Submission not found.' });
+  const decision = String(req.body.decision || '');
+  const note = String(req.body.note || '').trim();
+  if (!['approved', 'rejected'].includes(decision)) return res.status(400).json({ error: 'Invalid decision.' });
+
+  const owner = userById(rec.userId);
+  if (owner) ensureUserShape(owner);
+  const wasApproved = rec.status === 'approved';
+  const S = db.get();
+  if (decision === 'approved' && !wasApproved && owner) {
+    owner.usd = round2((owner.usd || 0) + rec.reward);                 // credit ONLY on approval
+    S.transactions = S.transactions || [];
+    S.transactions.unshift({
+      id: rid(8), userId: owner.id, type: 'share_reward', platform: rec.platform,
+      amountUSD: round2(rec.reward), ref: rec.id, createdAt: new Date().toISOString(),
+    });
+    if (S.transactions.length > 5000) S.transactions.length = 5000;
+    // In-app notification (+ XP), idempotent per submission.
+    gamify.award(owner, 'share', `share:${rec.id}`, {
+      earnedUSD: round2(rec.reward),
+      event: { text: `Share reward approved (+$${round2(rec.reward).toFixed(2)})`, icon: '📣' },
+    });
+  }
+  if (decision !== 'approved' && wasApproved && owner) {
+    owner.usd = round2(Math.max(0, (owner.usd || 0) - rec.reward));    // reverse a prior approval
+  }
+  rec.status = decision;
+  rec.reviewNote = note;
+  rec.reviewedAt = new Date().toISOString();
+  rec.reviewedBy = ADMIN_USERNAME;
+  audit('share_' + decision, { admin: ADMIN_USERNAME, userId: rec.userId, platform: rec.platform, shareId: rec.id, amount: decision === 'approved' ? round2(rec.reward) : 0 });
+  db.save();
+  await db.flush();
+  res.json({ ok: true, submission: { id: rec.id, status: rec.status, reviewNote: rec.reviewNote, reviewedAt: rec.reviewedAt } });
+});
+
+// =============================================================================
 //  EARNINGS  —  breakdown by source
 // =============================================================================
 app.get('/api/earnings', requireAuth, (req, res) => {
@@ -2792,11 +3052,14 @@ app.get('/api/earnings', requireAuth, (req, res) => {
   const subs = mySubmissions(u.id);
   const taskUSD = round2(subs.filter((x) => x.status === 'approved').reduce((a, x) => a + x.reward, 0));
   const surveyUSD = round2((u[SURVEY_DONE] || []).reduce((a, id) => a + ((surveysMod.byId(id) || {}).reward || 0), 0));
+  const shareUSD = round2((db.get().shareSubmissions || [])
+    .filter((s) => s.userId === u.id && s.status === 'approved').reduce((a, s) => a + (s.reward || 0), 0));
   res.json({
     balanceKES: round2(u.balance), balanceUSD: round2(u.usd),
     sources: [
       { key: 'tasks', label: 'Tasks', usd: taskUSD, kes: 0 },
       { key: 'surveys', label: 'Surveys', usd: surveyUSD, kes: 0 },
+      { key: 'share', label: 'Share & Earn', usd: shareUSD, kes: 0 },
       { key: 'referrals', label: 'Referral bonus', usd: 0, kes: round2(u.referralEarningsKES || 0), note: `${u.referralCount || 0} referral(s)` },
       { key: 'games', label: 'Games', usd: 0, kes: 0, note: 'Coming soon' },
       { key: 'clicks', label: 'Paid clicks', usd: 0, kes: 0, note: 'Coming soon' },

@@ -445,11 +445,96 @@ const TASKS = RAW.map((t, i) => {
 
 const CATEGORIES = Object.keys(CAT_META).map((name) => ({ name, icon: CAT_META[name].icon }));
 
+// ---------------------------------------------------------------------------
+//  FREE TASKS — the single, regenerating free task shown to users with NO active
+//  subscription. Each is Easy and pays $0.40. A free user sees exactly one at a
+//  time; when it's done, the next one appears. The pool is finite (once exhausted
+//  the user must subscribe) so there's no unlimited free earning.
+// ---------------------------------------------------------------------------
+const FREE_RAW = [
+  T('Answer 3 quick opinion questions', 'Surveys', 0.40, 'Easy', 'data', ['Opinion'],
+    'A 30-second opinion micro-survey.',
+    ['Q1 Do you shop online? Q2 Do you use mobile money? Q3 Do you read reviews before buying?',
+     'Answer each as a row  number: answer (yes/no).', 'Enter 3 rows.'], { minLines: 3 }),
+  T('Write a one-sentence app review', 'Surveys', 0.40, 'Easy', 'text', ['Feedback'],
+    'Share a quick thought on any app you use.',
+    ['Think of an app you used this week.', 'Write one honest sentence about what you like or dislike.',
+     'Paste your sentence below.'], { minWords: 8 }),
+  T('Name 3 brands you recognise', 'Surveys', 0.40, 'Easy', 'data', ['Opinion'],
+    'A fast brand-recognition check.',
+    ['Q1 A mobile-money brand. Q2 A supermarket. Q3 A soft drink.',
+     'Answer each  number: brand.', 'Enter 3 rows.'], { minLines: 3 }),
+  T('Sort 4 items into groups', 'Data Entry', 0.40, 'Easy', 'data', ['Sorting'],
+    'Put each item in the right group.',
+    ['Items: milk, t-shirt, banana, jeans.', 'For each write  item: group (Food / Clothing).',
+     'Enter 4 rows.'], { minLines: 4 }),
+  T('List 3 uses for a smartphone', 'Education', 0.40, 'Easy', 'text', ['Ideas'],
+    'A quick brainstorm.',
+    ['Think about everyday phone use.', 'List 3 different things people use a smartphone for.',
+     'Paste your 3 answers (numbered) below.'], { minWords: 8 }),
+  T('Answer 3 general-knowledge questions', 'Education', 0.40, 'Easy', 'data', ['Knowledge'],
+    'Three quick questions.',
+    ['Q1 Capital of Kenya? Q2 2+2? Q3 Days in a week?', 'Answer each  number: answer.',
+     'Enter 3 rows.'], { minLines: 3 }),
+  T('Translate "hello, how are you?" to Swahili', 'Translation', 0.40, 'Easy', 'text', ['Swahili'],
+    'One quick translation.',
+    ['Translate the phrase "Hello, how are you?" into natural Swahili.',
+     'Paste your translation below.'], { minWords: 3 }),
+  T('Suggest a name for a coffee shop', 'Marketing', 0.40, 'Easy', 'text', ['Ideas'],
+    'A one-line naming task.',
+    ['A new neighbourhood coffee shop needs a name.', 'Suggest one catchy name and a 5-word tagline.',
+     'Paste your idea below.'], { minWords: 6 }),
+  T('Describe your favourite meal', 'Writing', 0.40, 'Easy', 'text', ['Writing'],
+    'A short, fun writing warm-up.',
+    ['Think of a meal you love.', 'Describe it in one or two sentences.',
+     'Paste your description below.'], { minWords: 10 }),
+  T('Pick 3 colours for a logo', 'Design', 0.40, 'Easy', 'text', ['Colour'],
+    'Quick colour choices.',
+    ['Brand: a fresh juice bar.', 'Suggest 3 colours (names or hex codes) that would suit it.',
+     'Paste your 3 colours below.'], { minWords: 4 }),
+  T('Enter 3 sample contacts', 'Data Entry', 0.40, 'Easy', 'data', ['Data entry'],
+    'Type three clean contact rows.',
+    ['Invent 3 realistic sample contacts.', 'Each row: a name and a phone number.',
+     'Enter 3 rows:  Name, +2547XXXXXXXX'], { minLines: 3 }),
+  T('Answer a 3-question shopping survey', 'Surveys', 0.40, 'Easy', 'data', ['Opinion'],
+    'Tell us how you shop.',
+    ['Q1 Where do you shop most? Q2 How often? Q3 Cash or mobile money?',
+     'Answer each  number: answer.', 'Enter 3 rows.'], { minLines: 3 }),
+];
+const FREE_TASKS = FREE_RAW.map((t, i) => ({
+  id: 'F' + String(i + 1).padStart(3, '0'),
+  title: t.title,
+  category: t.category,
+  icon: (CAT_META[t.category] || {}).icon || '📌',
+  description: t.description || '',
+  difficulty: 'Easy',
+  skills: t.skills || [],
+  reward: 0.40,
+  tier: 'free',                         // accessible to everyone (see canAccessTask)
+  free: true,
+  proofType: t.proofType || 'text',
+  requiresProof: true,
+  expected: t.expected || null,
+  minSimilarity: t.minSimilarity || null,
+  minWords: t.minWords || null,
+  minChars: t.minChars || null,
+  minLines: t.minLines || null,
+  code: t.code || null,
+  approveRate: null,
+  estMinutes: 3 + (i % 3),
+  instructions: t.instructions,
+}));
+
+const ALL_BY_ID = {};
+TASKS.forEach((t) => { ALL_BY_ID[t.id] = t; });
+FREE_TASKS.forEach((t) => { ALL_BY_ID[t.id] = t; });
+
 module.exports = {
   TASKS,
+  FREE_TASKS,
   CATEGORIES,
   CAT_META,
-  byId: (id) => TASKS.find((t) => t.id === id) || null,
+  byId: (id) => ALL_BY_ID[id] || null,   // searches both the paid catalog and free pool
   validateProof,
   tierForReward,
 };
