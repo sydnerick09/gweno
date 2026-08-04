@@ -705,7 +705,7 @@ function openSurvey(s) {
 // =====================================================================
 //  TASKS
 // =====================================================================
-let TASK_STATE = { search: '', tier: 'all' };
+let TASK_STATE = { search: '', tier: 'all', category: 'all' };
 async function pageTasks() {
   loading();
   // Returning from a Premium card payment? (Premium is granted server-side only after payment verifies.)
@@ -730,9 +730,16 @@ async function pageTasks() {
     if (gate.limit != null) return `<div class="panel"><p class="p-sub" style="margin:0"><b>${esc(gate.planName)} plan:</b> you've used <b>${gate.done} of ${gate.limit}</b> task${gate.limit === 1 ? '' : 's'}. After your last one, withdraw your earnings and upgrade to <b>${esc(gate.nextPlanName)}</b> to continue.</p></div>`;
     return '';
   })();
+  const cats = data.categories || [];      // [{ name, icon }]
+  const q = (TASK_STATE.search || '').toLowerCase();
   const filtered = all.filter((t) =>
     (TASK_STATE.tier === 'all' || t.tier === TASK_STATE.tier) &&
-    (!TASK_STATE.search || t.title.toLowerCase().includes(TASK_STATE.search.toLowerCase())));
+    (TASK_STATE.category === 'all' || t.category === TASK_STATE.category) &&
+    (!q || t.title.toLowerCase().includes(q) || (t.category || '').toLowerCase().includes(q) ||
+      (t.skills || []).some((s) => s.toLowerCase().includes(q))));
+  // Live count of tasks per category (respecting the current plan/search) for the chip labels.
+  const catCount = {};
+  all.forEach((t) => { catCount[t.category] = (catCount[t.category] || 0) + 1; });
 
   const planCard = (p) => {
     const isCur = plan && plan.id === p.id;
@@ -769,32 +776,46 @@ async function pageTasks() {
 
     <div class="tabs" style="margin-top:4px">
       ${[['all', 'All'], ['basic', 'Basic'], ['premium', 'Premium'], ['premiumpro', 'Premium Pro']].map(([k, l]) => `<button class="tab ${TASK_STATE.tier === k ? 'active' : ''}" data-tier="${k}">${l}</button>`).join('')}
-      <input id="fSearch" value="${esc(TASK_STATE.search)}" placeholder="Search tasks…" class="tab-search">
+      <input id="fSearch" value="${esc(TASK_STATE.search)}" placeholder="Search title, category or skill…" class="tab-search">
+    </div>
+
+    <div class="cat-chips">
+      <button class="cat-chip ${TASK_STATE.category === 'all' ? 'active' : ''}" data-cat="all">All categories <span class="cc-n">${all.length}</span></button>
+      ${cats.map((c) => `<button class="cat-chip ${TASK_STATE.category === c.name ? 'active' : ''}" data-cat="${esc(c.name)}"><span class="cc-ico">${c.icon}</span> ${esc(c.name)}${catCount[c.name] ? ` <span class="cc-n">${catCount[c.name]}</span>` : ''}</button>`).join('')}
     </div>
 
     <div class="task-cards">
       ${filtered.length ? filtered.map((t) => `
         <div class="task-card ${t.locked ? 'locked' : ''}">
           <div class="tc-top">
-            <span class="tc-cat">${esc(t.category)}</span>
+            <span class="tc-cat"><span class="tc-ico">${t.icon || '📌'}</span> ${esc(t.category)}</span>
             <span class="tier-badge ${t.tier}">${esc(t.requiredPlan || t.tier)}</span>
           </div>
           <h4>${esc(t.title)}</h4>
-          <p class="tc-meta">Required: <b>${esc(t.requiredPlan || t.tier)}</b> · ~${t.estMinutes} min</p>
+          ${t.description ? `<p class="tc-desc">${esc(t.description)}</p>` : ''}
+          ${(t.skills && t.skills.length) ? `<div class="tc-skills">${t.skills.slice(0, 3).map((s) => `<span class="skill">${esc(s)}</span>`).join('')}</div>` : ''}
+          <div class="tc-facts">
+            <span class="fact diff-${(t.difficulty || '').toLowerCase()}">${esc(t.difficulty || 'Medium')}</span>
+            <span class="fact">⏱ ~${t.estMinutes} min</span>
+            <span class="fact">👥 ${t.workers} working</span>
+          </div>
           <div class="tc-bottom">
             <span class="tc-reward">${usd(t.reward)}</span>
             ${t.locked
               ? `<button class="btn btn-ghost auto sub-lock" data-plan="${t.tier}"><span class="bico">${ICON.lock}</span> Upgrade</button>`
               : `<button class="btn btn-primary auto open-task" data-id="${t.id}">Start</button>`}
           </div>
-          <div style="margin-top:8px"><span class="st ${t.locked ? 'pending' : 'approved'}">${t.locked ? 'Locked — upgrade plan' : 'Available'}</span></div>
-        </div>`).join('') : `<p class="p-sub">No tasks match your filters.</p>`}
+          <div style="margin-top:8px"><span class="st ${t.locked ? 'pending' : 'approved'}">${t.locked ? `Locked — needs ${esc(t.requiredPlan || t.tier)}` : 'Available now'}</span></div>
+        </div>`).join('') : `<p class="p-sub">No tasks match your filters. <button class="btn btn-ghost auto" id="clearFilters">Clear filters</button></p>`}
     </div>`;
 
   const subBtn = document.getElementById('subBtn');
   if (subBtn) subBtn.addEventListener('click', () => openSubscribe(data));
   view().querySelectorAll('.pick-plan').forEach((b) => b.addEventListener('click', () => openSubscribe(data, b.dataset.plan)));
   view().querySelectorAll('.tab[data-tier]').forEach((b) => b.addEventListener('click', () => { TASK_STATE.tier = b.dataset.tier; pageTasks(); }));
+  view().querySelectorAll('.cat-chip[data-cat]').forEach((b) => b.addEventListener('click', () => { TASK_STATE.category = b.dataset.cat; pageTasks(); }));
+  const clearBtn = document.getElementById('clearFilters');
+  if (clearBtn) clearBtn.addEventListener('click', () => { TASK_STATE = { search: '', tier: 'all', category: 'all' }; pageTasks(); });
   const fs = document.getElementById('fSearch');
   if (fs) fs.addEventListener('input', (e) => { TASK_STATE.search = e.target.value; clearTimeout(fs._t); fs._t = setTimeout(pageTasks, 250); });
   view().querySelectorAll('.open-task').forEach((b) => b.addEventListener('click', () => openTask(all.find((t) => t.id === b.dataset.id))));
@@ -944,8 +965,16 @@ function openTask(t) {
   const noPaste = t.proofType === 'match';
   const bg = openModal(`
     <button class="close">×</button>
-    <h3>${esc(t.title)}</h3>
-    <p class="p-sub">${esc(t.category)} · Reward ${usd(t.reward)} · ~${t.estMinutes} min</p>
+    <div class="tc-top" style="margin-bottom:6px"><span class="tc-cat"><span class="tc-ico">${t.icon || '📌'}</span> ${esc(t.category)}</span><span class="tier-badge ${t.tier}">${esc(t.requiredPlan || t.tier)}</span></div>
+    <h3 style="margin:0">${esc(t.title)}</h3>
+    ${t.description ? `<p class="p-sub" style="margin:6px 0 0">${esc(t.description)}</p>` : ''}
+    <div class="tc-facts" style="margin-top:10px">
+      <span class="fact tc-reward" style="font-size:15px">${usd(t.reward)}</span>
+      <span class="fact diff-${(t.difficulty || '').toLowerCase()}">${esc(t.difficulty || 'Medium')}</span>
+      <span class="fact">⏱ ~${t.estMinutes} min</span>
+      ${t.workers != null ? `<span class="fact">👥 ${t.workers} working</span>` : ''}
+    </div>
+    ${(t.skills && t.skills.length) ? `<div class="tc-skills" style="margin-top:8px">${t.skills.map((s) => `<span class="skill">${esc(s)}</span>`).join('')}</div>` : ''}
     <h4 style="margin:16px 0 6px">How to complete this task</h4>
     <ol class="instr${noPaste ? ' no-copy' : ''}">${t.instructions.map((s) => `<li>${esc(s)}</li>`).join('')}</ol>
     ${noPaste ? '<p class="p-sub">This is a typing task — please type the text yourself. Copy and paste are disabled.</p>' : ''}

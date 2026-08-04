@@ -1126,6 +1126,14 @@ function mulberry32(seed) {
     return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
   };
 }
+// Synthetic "people currently working on this task" count. Deterministic per task id
+// but drifts every ~2 minutes so the marketplace feels live without a real presence system.
+function taskWorkers(id) {
+  const bucket = Math.floor(Date.now() / (2 * 60 * 1000));
+  let h = 0;
+  for (let i = 0; i < id.length; i++) h = (h * 31 + id.charCodeAt(i)) >>> 0;
+  return 2 + ((h + bucket) % 34); // 2–35 workers
+}
 const LB_FIRST = ['Brian', 'Amina', 'John', 'Grace', 'David', 'Faith', 'Kevin', 'Mercy', 'Peter', 'Joy', 'Samuel', 'Cynthia', 'Daniel', 'Esther', 'Michael', 'Ruth', 'Emmanuel', 'Sharon', 'Victor', 'Lydia', 'James', 'Naomi', 'Collins', 'Wanjiru', 'Dennis', 'Aisha', 'Felix', 'Chloe', 'George', 'Halima', 'Ian', 'Beatrice', 'Kelvin', 'Diana', 'Nancy', 'Oscar', 'Purity', 'Anthony', 'Rose', 'Stephen', 'Winnie', 'Timothy', 'Zainab', 'Alex', 'Belinda', 'Caleb', 'Doris', 'Eric', 'Fiona', 'Gideon', 'Hilda', 'Isaac', 'Janet', 'Kamau', 'Linda', 'Musa', 'Njeri', 'Otieno', 'Pauline', 'Ahmed', 'Sophia', 'Liam', 'Olivia', 'Noah', 'Emma', 'Lucas', 'Mia', 'Ethan', 'Zara', 'Ali', 'Habiba', 'Yusuf', 'Salma', 'Tariq', 'Layla', 'Mateo', 'Valentina', 'Andre', 'Chidi', 'Ngozi', 'Kwame', 'Ama', 'Sadia', 'Rehema', 'Baraka', 'Tabitha', 'Elvis', 'Mercy'];
 const LB_LAST = ['Kamau', 'Otieno', 'Mwangi', 'Achieng', 'Njoroge', 'Wanjala', 'Omondi', 'Chebet', 'Kiptoo', 'Mutua', 'Njeri', 'Barasa', 'Kariuki', 'Wafula', 'Onyango', 'Cheruiyot', 'Maina', 'Adhiambo', 'Kimani', 'Mbugua', 'Owino', 'Wekesa', 'Kones', 'Aluoch', 'Gitau', 'Musyoka', 'Chege', 'Ndegwa', 'Auma', 'Bett', 'Kiplagat', 'Were', 'Muriuki', 'Odongo', 'Ochieng', 'Mumo', 'Karanja', 'Simiyu', 'Wambui', 'Hassan', 'Yusuf', 'Ahmed', 'Ibrahim', 'Okoth', 'Juma', 'Salim', 'Mohamed', 'Abdi', 'Kiprop', 'Wangari'];
 // Build `count` synthetic leaders descending from (topXp - 20) with random names.
@@ -1257,6 +1265,7 @@ app.get('/api/tasks', requireAuth, (req, res) => {
     ...t,
     requiredPlan: PLAN_BY_ID[t.tier] ? PLAN_BY_ID[t.tier].name : t.tier,
     locked: !canAccessTask(req.user, t),
+    workers: taskWorkers(t.id),   // people currently working on this task (live, synthetic)
   }));
   const accessible = available.filter((t) => !t.locked);
   const pending = mine.filter((x) => x.status === 'pending').reduce((a, x) => a + x.reward, 0);
@@ -1275,6 +1284,7 @@ app.get('/api/tasks', requireAuth, (req, res) => {
     balanceUSD: round2(req.user.usd),
     live: payments.mpesaStkConfigured(),
     held: !!req.user.held,
+    categories: tasksMod.CATEGORIES,   // [{ name, icon }] for the category filter
     tasks: available,
   });
 });
@@ -1284,7 +1294,7 @@ app.get('/api/tasks/:id', requireAuth, (req, res) => {
   if (!task) return res.status(404).json({ error: 'Task not found.' });
   const sub = mySubmissions(req.user.id).find((x) => x.taskId === task.id && x.status !== 'rejected');
   const requiredPlan = PLAN_BY_ID[task.tier] ? PLAN_BY_ID[task.tier].name : task.tier;
-  res.json({ task: { ...task, requiredPlan, locked: !canAccessTask(req.user, task) }, submission: sub || null });
+  res.json({ task: { ...task, requiredPlan, locked: !canAccessTask(req.user, task), workers: taskWorkers(task.id) }, submission: sub || null });
 });
 
 app.post('/api/tasks/:id/submit', requireAuth, (req, res) => {

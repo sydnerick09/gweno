@@ -66,6 +66,7 @@ html[data-theme="dark"] .nav-item.active,
 html[data-theme="dark"] .avatar-sm,
 html[data-theme="dark"] .task-row .t-ico,
 html[data-theme="dark"] .tab.active,
+html[data-theme="dark"] .cat-chip.active,
 html[data-theme="dark"] .step .n { color: #111827; }
 /* The logo is inked in dark navy. On the dark theme keep every mark visible:
    small nav/footer marks become clean white silhouettes… */
