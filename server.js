@@ -1036,20 +1036,65 @@ app.get('/api/gamification', requireAuth, (req, res) => {
   res.json({ ...sum, rank, totalUsers: users.length, events: (me.game.events || []).slice(0, 20) });
 });
 
+// Deterministic PRNG so the synthetic leaderboard names/XP stay stable per period
+// (they don't reshuffle on every request) but differ between periods.
+function mulberry32(seed) {
+  let a = seed >>> 0;
+  return function () {
+    a |= 0; a = (a + 0x6D2B79F5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+const LB_FIRST = ['Brian', 'Amina', 'John', 'Grace', 'David', 'Faith', 'Kevin', 'Mercy', 'Peter', 'Joy', 'Samuel', 'Cynthia', 'Daniel', 'Esther', 'Michael', 'Ruth', 'Emmanuel', 'Sharon', 'Victor', 'Lydia', 'James', 'Naomi', 'Collins', 'Wanjiru', 'Dennis', 'Aisha', 'Felix', 'Chloe', 'George', 'Halima', 'Ian', 'Beatrice', 'Kelvin', 'Diana', 'Nancy', 'Oscar', 'Purity', 'Anthony', 'Rose', 'Stephen', 'Winnie', 'Timothy', 'Zainab', 'Alex', 'Belinda', 'Caleb', 'Doris', 'Eric', 'Fiona', 'Gideon', 'Hilda', 'Isaac', 'Janet', 'Kamau', 'Linda', 'Musa', 'Njeri', 'Otieno', 'Pauline', 'Ahmed', 'Sophia', 'Liam', 'Olivia', 'Noah', 'Emma', 'Lucas', 'Mia', 'Ethan', 'Zara', 'Ali', 'Habiba', 'Yusuf', 'Salma', 'Tariq', 'Layla', 'Mateo', 'Valentina', 'Andre', 'Chidi', 'Ngozi', 'Kwame', 'Ama', 'Sadia', 'Rehema', 'Baraka', 'Tabitha', 'Elvis', 'Mercy'];
+const LB_LAST = ['Kamau', 'Otieno', 'Mwangi', 'Achieng', 'Njoroge', 'Wanjala', 'Omondi', 'Chebet', 'Kiptoo', 'Mutua', 'Njeri', 'Barasa', 'Kariuki', 'Wafula', 'Onyango', 'Cheruiyot', 'Maina', 'Adhiambo', 'Kimani', 'Mbugua', 'Owino', 'Wekesa', 'Kones', 'Aluoch', 'Gitau', 'Musyoka', 'Chege', 'Ndegwa', 'Auma', 'Bett', 'Kiplagat', 'Were', 'Muriuki', 'Odongo', 'Ochieng', 'Mumo', 'Karanja', 'Simiyu', 'Wambui', 'Hassan', 'Yusuf', 'Ahmed', 'Ibrahim', 'Okoth', 'Juma', 'Salim', 'Mohamed', 'Abdi', 'Kiprop', 'Wangari'];
+// Build `count` synthetic leaders descending from (topXp - 20) with random names.
+function fakeLeaders(count, topXp, seed) {
+  const rng = mulberry32(seed);
+  const pick = (arr) => arr[Math.floor(rng() * arr.length)];
+  const out = [];
+  let x = Math.max(topXp - 20, 120);
+  const used = new Set();
+  for (let i = 0; i < count; i++) {
+    let name, tries = 0;
+    do { name = `${pick(LB_FIRST)} ${pick(LB_LAST)}`; tries++; } while (used.has(name) && tries < 10);
+    used.add(name);
+    const verification = i < 5 ? 'diamond' : i < 20 ? 'gold' : i < 70 ? 'blue' : null;
+    out.push({ id: 'lb_' + seed + '_' + i, name, avatar: null, level: gamify.level(x).name, verification, xp: Math.max(x, 5), bot: true });
+    x -= 8 + Math.floor(rng() * 40); // descend by 8–47 each step
+    if (x < 30) x = 30 + Math.floor(rng() * 20);
+  }
+  return out;
+}
+
 app.get('/api/leaderboard', requireAuth, (req, res) => {
   const period = String(req.query.period || 'weekly');
   const days = period === 'monthly' ? 30 : period === 'all' ? 3650 : 7;
-  const rows = db.get().users
+  const realRows = db.get().users
     .filter((u) => !u.suspended)
     .map((u) => { gamify.ensureGameShape(u);
       const xp = period === 'all' ? u.game.xp : gamify.periodXP(u.game, days);
       return { id: u.id, name: u.username || u.name || 'User', avatar: u.avatar || null,
-        level: gamify.level(u.game.xp).name, verification: u.game.verification, xp }; })
-    .filter((r) => r.xp > 0)
+        level: gamify.level(u.game.xp).name, verification: u.game.verification, xp, bot: false }; })
+    .filter((r) => r.xp > 0);
+
+  // Anchor the 200 synthetic leaders just below the real leader (so the top real
+  // member keeps #1 by 20 XP). If nobody real has XP yet, seed a lively board.
+  const realTop = realRows.reduce((m, r) => Math.max(m, r.xp), 0);
+  const base = period === 'all' ? 26000 : period === 'monthly' ? 12000 : 4500;
+  const anchor = realTop > 0 ? realTop : base;
+  const seed = period === 'monthly' ? 2027 : period === 'all' ? 5051 : 1009;
+  const bots = fakeLeaders(200, anchor, seed);
+
+  const merged = realRows.concat(bots)
     .sort((a, b) => b.xp - a.xp)
-    .slice(0, 50)
     .map((r, i) => ({ rank: i + 1, ...r, me: r.id === req.user.id }));
-  res.json({ period, top: rows });
+
+  // Show up to 205 rows; always include the viewer's own row if they're further down.
+  let top = merged.slice(0, 205);
+  if (!top.some((r) => r.me)) { const mine = merged.find((r) => r.me); if (mine) top = top.concat(mine); }
+  res.json({ period, top });
 });
 
 app.get('/api/notifications', requireAuth, (req, res) => {
@@ -1457,11 +1502,26 @@ app.post('/api/admin/email/broadcast', requireAdminSession, async (req, res) => 
   const subject = String(req.body.subject || '').trim();
   const body = String(req.body.body || '').trim();
   if (!subject || !body) return res.status(400).json({ error: 'Subject and message are both required.' });
+  // Target a segment (all / premium / free / active / suspended / country) or an explicit list of ids.
+  const segment = String(req.body.segment || 'all');
+  const country = String(req.body.country || '').trim().toLowerCase();
   const ids = Array.isArray(req.body.userIds) && req.body.userIds.length ? new Set(req.body.userIds) : null;
-  const targets = db.get().users.filter((u) => u.email && (!ids || ids.has(u.id)));
+  const match = (u) => {
+    if (!u.email) return false;
+    if (ids) return ids.has(u.id);
+    switch (segment) {
+      case 'premium': return isPremium(u);
+      case 'free': return !isPremium(u);
+      case 'active': return !u.suspended;
+      case 'suspended': return !!u.suspended;
+      case 'country': return String((u.profile && u.profile.country) || '').toLowerCase() === country;
+      default: return true; // all
+    }
+  };
+  const targets = db.get().users.filter(match);
   let sent = 0, failed = 0;
   for (const u of targets) { const r = await sendAdminEmail(u, subject, body, 'broadcast'); if (r.status === 'Sent') sent += 1; else failed += 1; }
-  audit('email_broadcast', { admin: ADMIN_USERNAME, count: targets.length, sent, failed, subject });
+  audit('email_broadcast', { admin: ADMIN_USERNAME, segment: ids ? 'selected' : segment, count: targets.length, sent, failed, subject });
   db.save();
   res.json({ ok: true, total: targets.length, sent, failed });
 });
@@ -1665,17 +1725,8 @@ app.get('/api/admin/leaderboard', requireAdminSession, (req, res) => {
   res.json({ rows });
 });
 
-// Change a member's email address.
-app.post('/api/admin/users/:id/email', requireAdminSession, (req, res) => {
-  const u = userById(req.params.id);
-  if (!u) return res.status(404).json({ error: 'User not found.' });
-  const newEmail = normEmail(req.body.email);
-  if (!isEmail(newEmail)) return res.status(400).json({ error: 'Enter a valid email address.' });
-  if (newEmail !== u.email && findUserByEmail(newEmail)) return res.status(409).json({ error: 'That email is already in use.' });
-  u.email = newEmail;
-  db.save();
-  res.json({ ok: true, email: u.email });
-});
+// (A member's email address is edited via the "Edit details" form → /api/admin/users/:id/details.
+//  The old dedicated change-email route was removed to avoid colliding with the send-email route.)
 
 // Set a NEW password for a member. Passwords are stored only as a one-way bcrypt
 // hash and can never be read back — the admin can reset it, not view it.

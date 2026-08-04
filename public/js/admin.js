@@ -15,7 +15,7 @@ function toast(msg, type = 'ok') {
   setTimeout(() => { t.classList.remove('show'); setTimeout(() => t.remove(), 250); }, 3000);
 }
 
-const TABS = [['overview', 'Overview'], ['submissions', 'Submissions'], ['applications', 'Applications'], ['emails', 'Email log'], ['audit', 'Audit log'], ['users', 'Users'], ['rewards', 'Rewards'], ['broadcast', 'Broadcast'], ['investments', 'Investments'], ['deposits', 'Deposits'], ['withdrawals', 'Withdrawals'], ['support', 'Support']];
+const TABS = [['overview', 'Overview'], ['submissions', 'Submissions'], ['applications', 'Applications'], ['emails', 'Email log'], ['audit', 'Audit log'], ['users', 'Users'], ['rewards', 'Rewards'], ['sendemail', 'Send Email'], ['broadcast', 'Broadcast'], ['investments', 'Investments'], ['deposits', 'Deposits'], ['withdrawals', 'Withdrawals'], ['support', 'Support']];
 
 // Lightweight modal for admin forms (reuses .modal styles from app.css).
 function adminModal(html) {
@@ -108,7 +108,7 @@ const loading = () => { content().innerHTML = `
   </div>`; };
 
 function route() {
-  ({ overview: tOverview, submissions: tSubmissions, applications: tApplications, emails: tEmails, audit: tAudit, users: tUsers, rewards: tRewards, broadcast: tBroadcast, investments: tInvestments, deposits: tDeposits, withdrawals: tWithdrawals, support: tSupport }[TAB] || tOverview)();
+  ({ overview: tOverview, submissions: tSubmissions, applications: tApplications, emails: tEmails, audit: tAudit, users: tUsers, rewards: tRewards, sendemail: tSendEmail, broadcast: tBroadcast, investments: tInvestments, deposits: tDeposits, withdrawals: tWithdrawals, support: tSupport }[TAB] || tOverview)();
 }
 
 async function tOverview() {
@@ -364,19 +364,38 @@ function renderUsersTable() {
   content().querySelectorAll('.uemail').forEach((b) => b.addEventListener('click', () => openUserEmail(find(b.dataset.id))));
 }
 
+// Reusable email templates ({name} is replaced with the recipient's name).
+const EMAIL_TEMPLATES = {
+  '': { subject: '', body: '' },
+  'Welcome': { subject: 'Welcome to Gweno 🎉', body: 'Hi {name},\n\nWelcome to Gweno! Your account is ready. Complete tasks and surveys to earn, and cash out to M-Pesa when you reach the minimum.\n\nHappy earning,\nThe Gweno Team' },
+  'Premium upgrade': { subject: 'Your Gweno Premium is active', body: 'Hi {name},\n\nThank you for upgrading to Premium! You now have access to premium tasks and higher rewards.\n\nThe Gweno Team' },
+  'Payment received': { subject: 'Payment received', body: 'Hi {name},\n\nWe have received your payment and your wallet has been credited. Thank you!\n\nThe Gweno Team' },
+  'Withdrawal approved': { subject: 'Withdrawal approved & paid', body: 'Hi {name},\n\nGood news — your withdrawal has been approved and paid to your chosen account.\n\nThe Gweno Team' },
+  'Withdrawal rejected': { subject: 'Withdrawal update', body: 'Hi {name},\n\nUnfortunately your recent withdrawal could not be processed and the amount has been refunded to your wallet. Please check your payout details and try again.\n\nThe Gweno Team' },
+  'Account suspended': { subject: 'Your Gweno account status', body: 'Hi {name},\n\nYour account has been suspended pending review. If you believe this is a mistake, please reply to this email.\n\nThe Gweno Team' },
+  'Announcement': { subject: 'An update from Gweno', body: 'Hi {name},\n\nWe wanted to share an update with you:\n\n[Your message here]\n\nThe Gweno Team' },
+  'Maintenance': { subject: 'Scheduled maintenance', body: 'Hi {name},\n\nGweno will undergo scheduled maintenance and may be briefly unavailable. We apologise for any inconvenience.\n\nThe Gweno Team' },
+};
+const tplOptions = () => Object.keys(EMAIL_TEMPLATES).map((k) => `<option value="${esc(k)}">${k ? esc(k) : '— pick a template —'}</option>`).join('');
+
 // Compose and send a one-off email to a single user.
 function openUserEmail(u) {
   if (!u) return;
+  const nm = u.name || u.username || 'there';
   const bg = adminModal(`
     <button class="close">×</button>
     <h3>Email ${esc(u.name || u.username || '')}</h3>
     <p class="p-sub">To: ${esc(u.email || '—')}</p>
     <form id="ueForm">
+      <div class="field"><label>Template</label><select id="ueTpl" style="width:100%;${inputStyle}">${tplOptions()}</select></div>
       <div class="field"><label>Subject</label><input id="ueSubject" maxlength="160" style="width:100%;${inputStyle}"></div>
       <div class="field"><label>Message</label><textarea id="ueBody" rows="6" style="width:100%;${inputStyle}" placeholder="Write your message…"></textarea></div>
-      <button class="btn btn-primary" type="submit"${u.email ? '' : ' disabled'}>Send email</button>
+      <div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn btn-primary" type="submit"${u.email ? '' : ' disabled'}>Send email</button><button class="btn btn-ghost auto" type="button" id="uePreview">Preview</button></div>
       ${u.email ? '' : '<p class="p-sub" style="margin-top:8px">This user has no email address on file.</p>'}
-    </form>`);
+    </form>
+    <div id="uePrev" style="display:none;margin-top:14px;border:1px solid var(--line);border-radius:10px;padding:14px;background:var(--bg-2)"></div>`);
+  bg.querySelector('#ueTpl').addEventListener('change', (e) => { const t = EMAIL_TEMPLATES[e.target.value]; if (!t) return; bg.querySelector('#ueSubject').value = t.subject; bg.querySelector('#ueBody').value = t.body.replace(/\{name\}/g, nm); });
+  bg.querySelector('#uePreview').addEventListener('click', () => { const p = bg.querySelector('#uePrev'); p.style.display = 'block'; p.innerHTML = `<b>${esc(bg.querySelector('#ueSubject').value)}</b><hr>${esc(bg.querySelector('#ueBody').value).replace(/\n/g, '<br>')}`; });
   bg.querySelector('#ueForm').addEventListener('submit', async (e) => {
     e.preventDefault();
     const subject = bg.querySelector('#ueSubject').value.trim();
@@ -386,6 +405,43 @@ function openUserEmail(u) {
     const { ok, data: d } = await api('/api/admin/users/' + u.id + '/email', { subject, body });
     if (ok) { const st = d.email ? d.email.status : '—'; toast('Email ' + st, st === 'Failed' ? 'error' : 'ok'); bg.remove(); }
     else { btn.disabled = false; toast(d.error || 'Failed', 'error'); }
+  });
+}
+
+// Broadcast an email to a segment of members.
+async function tSendEmail() {
+  content().innerHTML = `
+    <p class="page-sub">Send one email to many members at once. Delivery is logged in the <b>Email log</b> tab.</p>
+    <div class="panel">
+      <h3>📣 Broadcast email</h3>
+      <form id="beForm">
+        <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:8px">
+          <select id="beSeg" style="flex:1;min-width:200px;${inputStyle}">
+            <option value="all">All members</option><option value="premium">Premium members</option><option value="free">Free members</option>
+            <option value="active">Active members</option><option value="suspended">Suspended members</option><option value="country">Members in a country…</option>
+          </select>
+          <input id="beCountry" placeholder="Country (if selected)" style="flex:1;min-width:160px;${inputStyle}">
+        </div>
+        <div class="field"><label>Template</label><select id="beTpl" style="width:100%;${inputStyle}">${tplOptions()}</select></div>
+        <div class="field"><label>Subject</label><input id="beSubject" maxlength="160" style="width:100%;${inputStyle}"></div>
+        <div class="field"><label>Message</label><textarea id="beBody" rows="8" style="width:100%;${inputStyle}" placeholder="Write your message…"></textarea></div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn btn-primary" type="submit" id="beSend">Send broadcast</button><button class="btn btn-ghost auto" type="button" id="bePreview">Preview</button></div>
+      </form>
+      <div id="bePrev" style="display:none;margin-top:14px;border:1px solid var(--line);border-radius:10px;padding:14px;background:var(--bg-2)"></div>
+    </div>`;
+  document.getElementById('beTpl').addEventListener('change', (e) => { const t = EMAIL_TEMPLATES[e.target.value]; if (!t) return; document.getElementById('beSubject').value = t.subject; document.getElementById('beBody').value = t.body.replace(/\{name\}/g, 'there'); });
+  document.getElementById('bePreview').addEventListener('click', () => { const p = document.getElementById('bePrev'); p.style.display = 'block'; p.innerHTML = `<b>${esc(document.getElementById('beSubject').value)}</b><hr>${esc(document.getElementById('beBody').value).replace(/\n/g, '<br>')}`; });
+  document.getElementById('beForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const subject = document.getElementById('beSubject').value.trim(), body = document.getElementById('beBody').value.trim();
+    const segment = document.getElementById('beSeg').value, country = document.getElementById('beCountry').value.trim();
+    if (!subject || !body) return toast('Enter a subject and message', 'error');
+    if (segment === 'country' && !country) return toast('Enter a country name', 'error');
+    if (!confirm(`Send this email to the "${segment}"${segment === 'country' ? ' (' + country + ')' : ''} segment?`)) return;
+    const btn = document.getElementById('beSend'); btn.disabled = true;
+    const { ok, data } = await api('/api/admin/email/broadcast', { subject, body, segment, country });
+    if (ok) { toast(`Sent to ${data.sent}/${data.total}${data.failed ? ` · ${data.failed} failed` : ''}`); btn.disabled = false; document.getElementById('beForm').reset(); }
+    else { toast(data.error || 'Failed', 'error'); btn.disabled = false; }
   });
 }
 
@@ -593,11 +649,6 @@ async function userAction(ds) {
     if (usdV === null) return;
     const { ok, data } = await api(base + '/balance', { balance: Number(kesV), usd: Number(usdV) });
     if (ok) { toast('Balance updated'); tUsers(); } else toast(data.error || 'Failed', 'error');
-  } else if (ds.a === 'email') {
-    const email = prompt('New email address for this account:', ds.email);
-    if (!email) return;
-    const { ok, data } = await api(base + '/email', { email });
-    if (ok) { toast('Email updated'); tUsers(); } else toast(data.error || 'Failed', 'error');
   } else if (ds.a === 'password') {
     const pw = prompt('Set a NEW password (8+ chars incl. a letter & a number). The member will be signed out everywhere:');
     if (!pw) return;
