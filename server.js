@@ -614,9 +614,28 @@ function findUserByEmail(email) {
 }
 
 // Recent real completions (approved submissions) for the dashboard feed.
+// Community completions shown in the "Recent task completions" feed: 30 members on
+// premium-tier tasks + 20 on basic. Rotates every few minutes so the feed looks live.
+const LB_COUNTRIES = ['Kenya', 'Kenya', 'Kenya', 'Uganda', 'Tanzania', 'Nigeria', 'Ghana', 'South Africa', 'Rwanda', 'Zambia', 'Cameroon', 'Ethiopia', 'Malawi', 'United States', 'United Kingdom', 'India', 'Philippines', 'Nigeria', 'Kenya', 'Ghana'];
+function fakeCompletions(seed) {
+  const rng = mulberry32(seed);
+  const pick = (a) => a[Math.floor(rng() * a.length)];
+  const premiumTasks = TASKS.filter((t) => t.tier !== 'basic');
+  const basicTasks = TASKS.filter((t) => t.tier === 'basic');
+  const one = (pool, planName) => {
+    const t = pick(pool.length ? pool : TASKS) || TASKS[0];
+    return { username: `${pick(LB_FIRST)} ${pick(LB_LAST)[0]}.`, country: pick(LB_COUNTRIES), task: t.title, reward: t.reward, plan: planName };
+  };
+  const items = [];
+  for (let i = 0; i < 30; i++) items.push(one(premiumTasks, 'Premium'));
+  for (let i = 0; i < 20; i++) items.push(one(basicTasks, 'Basic'));
+  for (let i = items.length - 1; i > 0; i--) { const j = Math.floor(rng() * (i + 1)); const tmp = items[i]; items[i] = items[j]; items[j] = tmp; } // shuffle
+  return items;
+}
+
 app.get('/api/public/activity', (req, res) => {
   const s = db.get();
-  const items = (s.submissions || [])
+  const real = (s.submissions || [])
     .filter((x) => x.status === 'approved')
     .sort((a, b) => String(b.reviewedAt || b.createdAt).localeCompare(String(a.reviewedAt || a.createdAt)))
     .slice(0, 8)
@@ -630,6 +649,8 @@ app.get('/api/public/activity', (req, res) => {
         reward: x.reward,
       };
     });
+  const seed = Math.floor(Date.now() / (3 * 60 * 1000)); // rotate every 3 minutes
+  const items = real.concat(fakeCompletions(seed)).slice(0, 58);
   res.json({ items });
 });
 
