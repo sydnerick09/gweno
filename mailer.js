@@ -28,10 +28,24 @@ function transport() {
   return transporter;
 }
 
-async function send({ to, subject, text, html, replyTo }) {
+async function send({ to, bcc, subject, text, html, replyTo }) {
   const t = transport();
   if (!t) throw new Error('Email is not configured');
-  return t.sendMail({ from: CFG.from, to, subject, text, html, replyTo });
+  return t.sendMail({ from: CFG.from, to, bcc, subject, text, html, replyTo });
+}
+
+// Wrap a plain admin message in a simple branded HTML shell.
+function adminHtml(subject, bodyText) {
+  const esc = (s) => String(s || '').replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
+  const body = esc(bodyText).replace(/\n/g, '<br>');
+  return `<div style="font-family:system-ui,-apple-system,'Segoe UI',sans-serif;max-width:560px;margin:auto;color:#1f2933;line-height:1.6">
+    <div style="background:#2196f3;color:#fff;padding:16px 20px;border-radius:10px 10px 0 0;font-weight:700;font-size:18px">gweno</div>
+    <div style="border:1px solid #e0e0e0;border-top:none;border-radius:0 0 10px 10px;padding:22px 20px">
+      ${subject ? `<h2 style="margin:0 0 12px;font-size:18px;color:#1f2933">${esc(subject)}</h2>` : ''}
+      <div style="font-size:15px">${body}</div>
+      <p style="color:#6b7280;font-size:12px;margin-top:24px;border-top:1px solid #eee;padding-top:12px">Sent from the Gweno team · <a href="${DASHBOARD_URL}" style="color:#1976d2">gweno.vercel.app</a></p>
+    </div>
+  </div>`;
 }
 
 async function sendPasswordReset(to, link) {
@@ -98,6 +112,27 @@ gweno Team`;
   return send({ to, subject: 'Task Approved & Earnings Credited', text });
 }
 
+async function sendWithdrawalPaid({ to, name, gross, fee, net, reference, date }) {
+  const text =
+`Hello ${name},
+
+Good news — your withdrawal has been approved and paid.
+
+Gross amount: ${gross}
+Withdrawal fee (20%): ${fee}
+Net amount sent to you: ${net}
+
+Reference: ${reference}
+Date: ${date}
+
+The net amount has been sent to the payout details on your request. If you have any questions about this payment, simply reply to this email.
+
+Thank you for being part of gweno.
+
+gweno Team`;
+  return send({ to, subject: 'Withdrawal Approved & Paid', text });
+}
+
 async function sendApplicationApproved({ to, name, task }) {
   const text =
 `Hello ${name},
@@ -156,7 +191,13 @@ async function sendSupport({ fromEmail, subject, message }) {
   });
 }
 
+// Free-form admin email (per-user via `to`, or broadcast via `bcc` list). Branded HTML.
+async function sendAdmin({ to, bcc, subject, body }) {
+  return send({ to: to || CFG.from, bcc, subject, text: body, html: adminHtml(subject, body) });
+}
+
 module.exports = {
   configured, send, sendPasswordReset, sendMagicLink, sendSupport, CFG,
-  sendTaskApproved, sendTaskRejected, sendTaskCorrection, sendApplicationApproved,
+  sendTaskApproved, sendTaskRejected, sendTaskCorrection, sendApplicationApproved, sendWithdrawalPaid,
+  sendAdmin,
 };

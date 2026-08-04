@@ -240,6 +240,7 @@ app.use(async (req, res, next) => {
   S.adminSessions = S.adminSessions || []; // separate admin login sessions
   S.investments = S.investments || []; // member investments
   S.investmentRates = S.investmentRates || {}; // admin per-plan interest-rate overrides
+  S.adminEmails = S.adminEmails || []; // admin-sent emails (individual + broadcast) history
 })();
 
 // One-time backfill: award XP/badges/levels for activity that happened before the
@@ -1235,6 +1236,9 @@ function audit(action, meta = {}) {
   if (S.auditLog.length > 1000) S.auditLog.length = 1000;
 }
 
+// NOTE: admin email endpoints live further below (sendAdminEmail + /api/admin/users/:id/email,
+// /api/admin/email/broadcast, /api/admin/users/:id/emails), using the shared emailLog.
+
 // Email the outcome of a task application (approved => #3 copy, rejected => rejection copy).
 async function notifyApplication(appRec, owner, task) {
   const decision = appRec.status;
@@ -1313,7 +1317,7 @@ app.post('/api/admin/submissions/:id/decision', requireAdminSession, async (req,
   sub.status = decision;
   sub.reviewedAt = new Date().toISOString();
   sub.reviewNote = note;
-  audit('submission_' + decision, { userId: sub.userId, taskId: sub.taskId, submissionId: sub.id, amount: decision === 'approved' ? round2(sub.reward) : 0 });
+  audit('submission_' + decision, { admin: ADMIN_USERNAME, userId: sub.userId, taskId: sub.taskId, submissionId: sub.id, amount: decision === 'approved' ? round2(sub.reward) : 0 });
   db.save();  // commit the decision + balance BEFORE emailing (email failure never rolls back)
 
   const emailRec = await notifyDecision(sub, owner, tasksMod.byId(sub.taskId));
@@ -1398,7 +1402,7 @@ app.post('/api/admin/applications/:id/decision', requireAdminSession, async (req
   appRec.status = decision;
   appRec.reviewedAt = new Date().toISOString();
   appRec.reviewNote = note;
-  audit('application_' + decision, { userId: appRec.userId, taskId: appRec.taskId, applicationId: appRec.id });
+  audit('application_' + decision, { admin: ADMIN_USERNAME, userId: appRec.userId, taskId: appRec.taskId, applicationId: appRec.id });
   db.save();
   const emailRec = await notifyApplication(appRec, userById(appRec.userId), tasksMod.byId(appRec.taskId));
   res.json({ ok: true, application: appRec, email: { status: emailRec.status, error: emailRec.error } });
@@ -1411,6 +1415,61 @@ app.get('/api/admin/audit', requireAdminSession, (req, res) => {
     return { ...a, username: u ? u.username : null };
   });
   res.json({ audit: log });
+});
+
+// =============================================================================
+//  ADMIN EMAIL  —  compose to one user, broadcast to many, per-user history
+// =============================================================================
+// Send a branded admin email to a user and record it in the email log + audit trail.
+async function sendAdminEmail(u, subject, body, type) {
+  const rec = {
+    id: rid(6), type: 'email_' + type, userId: u.id, to: u.email || null,
+    subject, body, status: 'Failed', error: null, admin: ADMIN_USERNAME, createdAt: new Date().toISOString(),
+  };
+  try {
+    if (!u.email) throw new Error('User has no email on file');
+    if (!mailer.configured()) throw new Error('Email is not configured (set SMTP_* env vars)');
+    await mailer.sendAdmin({ to: u.email, subject, body });
+    rec.status = 'Sent';
+  } catch (e) { rec.error = e.message; }
+  const S = db.get();
+  S.emailLog = S.emailLog || [];
+  S.emailLog.unshift(rec);
+  if (S.emailLog.length > 2000) S.emailLog.length = 2000;
+  return rec;
+}
+
+// Compose and send an email to a single user.
+app.post('/api/admin/users/:id/email', requireAdminSession, async (req, res) => {
+  const u = userById(req.params.id);
+  if (!u) return res.status(404).json({ error: 'User not found.' });
+  const subject = String(req.body.subject || '').trim();
+  const body = String(req.body.body || '').trim();
+  if (!subject || !body) return res.status(400).json({ error: 'Subject and message are both required.' });
+  const rec = await sendAdminEmail(u, subject, body, 'direct');
+  audit('email_direct', { admin: ADMIN_USERNAME, userId: u.id, subject });
+  db.save();
+  res.json({ ok: true, email: { status: rec.status, error: rec.error } });
+});
+
+// Broadcast an email to all users, or a selected subset (userIds).
+app.post('/api/admin/email/broadcast', requireAdminSession, async (req, res) => {
+  const subject = String(req.body.subject || '').trim();
+  const body = String(req.body.body || '').trim();
+  if (!subject || !body) return res.status(400).json({ error: 'Subject and message are both required.' });
+  const ids = Array.isArray(req.body.userIds) && req.body.userIds.length ? new Set(req.body.userIds) : null;
+  const targets = db.get().users.filter((u) => u.email && (!ids || ids.has(u.id)));
+  let sent = 0, failed = 0;
+  for (const u of targets) { const r = await sendAdminEmail(u, subject, body, 'broadcast'); if (r.status === 'Sent') sent += 1; else failed += 1; }
+  audit('email_broadcast', { admin: ADMIN_USERNAME, count: targets.length, sent, failed, subject });
+  db.save();
+  res.json({ ok: true, total: targets.length, sent, failed });
+});
+
+// A user's email history (everything ever emailed to them).
+app.get('/api/admin/users/:id/emails', requireAdminSession, (req, res) => {
+  const emails = (db.get().emailLog || []).filter((e) => e.userId === req.params.id);
+  res.json({ emails });
 });
 
 // ---- Admin sign-in (separate credentials + own cookie; not a client account) ----
@@ -1714,6 +1773,33 @@ app.get('/api/admin/redemptions', requireAdminSession, (req, res) => {
 // Admin verifies a withdrawal, then releases (Paid) or rejects (Failed) it.
 // Rejecting refunds the held USD. Approving an M-Pesa payout triggers the real
 // B2C send when M-Pesa is configured; otherwise it's marked Paid (send manually).
+// Send the "Withdrawal Approved & Paid" receipt email + log it (caller persists with db.save()).
+async function notifyWithdrawalPaid(rec) {
+  const owner = userById(rec.userId);
+  const money = (n) => (rec.currency === 'KES' ? Math.round(Number(n) || 0).toLocaleString() + ' KES' : '$' + (Number(n) || 0).toFixed(2));
+  const emailRec = {
+    id: rid(6), type: 'withdrawal_paid', userId: rec.userId, redemptionId: rec.id,
+    amount: round2(rec.net != null ? rec.net : rec.amount), to: (owner && owner.email) || null,
+    subject: 'Withdrawal Approved & Paid', status: 'Failed', error: null, admin: ADMIN_USERNAME, createdAt: new Date().toISOString(),
+  };
+  try {
+    if (!owner || !owner.email) throw new Error('User has no email on file');
+    if (!mailer.configured()) throw new Error('Email is not configured (set SMTP_* env vars)');
+    await mailer.sendWithdrawalPaid({
+      to: owner.email, name: owner.name || owner.username || 'there',
+      gross: money(rec.amount), fee: money(rec.fee != null ? rec.fee : rec.amount * 0.20),
+      net: money(rec.net != null ? rec.net : rec.amount * 0.80),
+      reference: rec.reference, date: new Date().toLocaleString(),
+    });
+    emailRec.status = 'Sent';
+  } catch (e) { emailRec.error = e.message; }
+  const S = db.get();
+  S.emailLog = S.emailLog || [];
+  S.emailLog.unshift(emailRec);
+  if (S.emailLog.length > 2000) S.emailLog.length = 2000;
+  return emailRec;
+}
+
 app.post('/api/admin/redemptions/:id/mark', requireAdminSession, async (req, res) => {
   const rec = db.get().redemptions.find((r) => r.id === req.params.id);
   if (!rec) return res.status(404).json({ error: 'Redemption not found.' });
@@ -1727,18 +1813,29 @@ app.post('/api/admin/redemptions/:id/mark', requireAdminSession, async (req, res
     if (u) { ensureUserShape(u); u.usd = round2(u.usd + heldUSD); }
     rec.status = 'Failed'; rec.reviewedAt = new Date().toISOString();
     rec.reason = String(req.body.reason || '').trim() || rec.reason || '';  // rejection reason (shown to the member)
+    audit('withdrawal_rejected', { admin: ADMIN_USERNAME, userId: rec.userId, redemptionId: rec.id, amount: round2(heldUSD), reason: rec.reason });
     db.save();
     return res.json({ ok: true, redemption: rec });
   }
 
+  // Paid: record the 20% withdrawal fee + net paid (admin may override either) for the receipt.
+  if (status === 'Paid') {
+    rec.fee = req.body.fee != null ? round2(req.body.fee) : round2(rec.amount * 0.20);
+    rec.net = req.body.net != null ? round2(req.body.net) : round2(rec.amount - rec.fee);
+  }
+
   // Approving an M-Pesa payout: actually send it via B2C when configured.
   if (status === 'Paid' && rec.method === 'M-Pesa' && rec.status !== 'Paid' && payments.mpesaConfigured()) {
-    const kesAmount = rec.currency === 'KES' ? Math.round(rec.amount) : Math.round(heldUSD * FX_KES_PER_USD);
+    // Pay out the NET amount (after the withdrawal fee); the fee is retained by the platform.
+    const payoutKES = rec.net != null ? rec.net : rec.amount;
+    const kesAmount = rec.currency === 'KES' ? Math.round(payoutKES) : Math.round((rec.net != null ? rec.net : heldUSD) * FX_KES_PER_USD);
     try {
       rec.provider = { type: 'mpesa', kesAmount, ...(await payments.mpesaB2C({ phone: rec.destination, amount: kesAmount, resultUrl: b2cResultUrl(req), timeoutUrl: b2cTimeoutUrl(req) })) };
       rec.status = 'Processing'; rec.reviewedAt = new Date().toISOString(); // final Paid/Failed comes on the M-Pesa result callback
+      const em = await notifyWithdrawalPaid(rec);
+      audit('withdrawal_paid', { admin: ADMIN_USERNAME, userId: rec.userId, redemptionId: rec.id, amount: round2(rec.net != null ? rec.net : rec.amount) });
       db.save();
-      return res.json({ ok: true, redemption: rec, message: `M-Pesa payout of ${kesAmount.toLocaleString()} KES submitted.` });
+      return res.json({ ok: true, redemption: rec, email: { status: em.status, error: em.error }, message: `M-Pesa payout of ${kesAmount.toLocaleString()} KES submitted.` });
     } catch (err) {
       rec.error = String(err.message || err); db.save();
       return res.status(502).json({ error: 'M-Pesa payout failed: ' + rec.error });
@@ -1746,8 +1843,14 @@ app.post('/api/admin/redemptions/:id/mark', requireAdminSession, async (req, res
   }
 
   rec.status = status; rec.reviewedAt = new Date().toISOString();
+  let email = null;
+  if (status === 'Paid') {
+    const em = await notifyWithdrawalPaid(rec);
+    email = { status: em.status, error: em.error };
+    audit('withdrawal_paid', { admin: ADMIN_USERNAME, userId: rec.userId, redemptionId: rec.id, amount: round2(rec.net != null ? rec.net : rec.amount) });
+  }
   db.save();
-  res.json({ ok: true, redemption: rec });
+  res.json({ ok: true, redemption: rec, email });
 });
 
 // M-Pesa STK diagnostics — surfaces the exact Daraja error without exposing secrets.

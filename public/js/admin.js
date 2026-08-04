@@ -197,26 +197,33 @@ function openCorrection(id) {
   });
 }
 
-// Audit log of automatic decision emails, with manual resend.
+const EMAIL_TYPE = {
+  approved: 'Task approved', rejected: 'Task rejected', correction: 'Correction requested',
+  application_approved: 'Application approved', application_rejected: 'Application rejected',
+  withdrawal_paid: 'Withdrawal paid', email_direct: 'Direct email', email_broadcast: 'Broadcast email',
+};
+const emailTypeLabel = (t) => EMAIL_TYPE[t] || String(t || '').replace(/_/g, ' ');
+const CAN_RESEND = new Set(['approved', 'rejected', 'correction', 'application_approved', 'application_rejected']);
+
+// Full log of every email the system/admin sent, with delivery status + resend.
 async function tEmails() {
   loading();
   const { data } = await apiGet('/api/admin/emails');
   const list = data.emails || [];
   content().innerHTML = `
-    <p class="page-sub">Every automatic decision email (approval, rejection, correction), with delivery status. Resend any that failed.</p>
-    <div class="panel"><table class="table">
-      <thead><tr><th>When</th><th>Type</th><th>User</th><th>Task</th><th class="num">Amount</th><th>To</th><th>Status</th><th>Action</th></tr></thead>
+    <p class="page-sub">Every email sent from the platform — task decisions, withdrawal receipts, and direct/broadcast messages — with delivery status.</p>
+    <div class="panel" style="overflow-x:auto"><table class="table">
+      <thead><tr><th>When</th><th>Type</th><th>Subject / Task</th><th>User</th><th>To</th><th>Status</th><th>Action</th></tr></thead>
       <tbody>${list.length ? list.map((e) => `
         <tr>
           <td class="p-sub">${new Date(e.createdAt).toLocaleString()}</td>
-          <td>${statusLabel(e.type)}</td>
+          <td>${esc(emailTypeLabel(e.type))}</td>
+          <td class="p-sub">${esc(e.subject || e.taskTitle || e.taskId || '—')}</td>
           <td>${esc(e.username || e.userId || '—')}</td>
-          <td>${esc(e.taskTitle || e.taskId || '—')}</td>
-          <td class="num">${e.amount ? usd(e.amount) : '—'}</td>
           <td class="p-sub">${esc(e.to || '—')}</td>
           <td><span class="st ${e.status === 'Sent' ? 'approved' : 'rejected'}">${esc(e.status)}</span>${e.error ? `<br><span class="p-sub">${esc(e.error)}</span>` : ''}</td>
-          <td><button class="btn btn-ghost auto eresend" data-id="${esc(e.id)}">Resend</button></td>
-        </tr>`).join('') : `<tr><td colspan="8" class="p-sub">No decision emails yet.</td></tr>`}</tbody>
+          <td>${CAN_RESEND.has(e.type) ? `<button class="btn btn-ghost auto eresend" data-id="${esc(e.id)}">Resend</button>` : ''}</td>
+        </tr>`).join('') : `<tr><td colspan="7" class="p-sub">No emails sent yet.</td></tr>`}</tbody>
     </table></div>`;
   content().querySelectorAll('.eresend').forEach((b) => b.addEventListener('click', async () => {
     b.disabled = true;
@@ -260,63 +267,133 @@ async function tAudit() {
   loading();
   const { data } = await apiGet('/api/admin/audit');
   const log = data.audit || [];
-  const detail = (a) => [a.taskId ? 'task ' + a.taskId : '', a.amount ? usd(a.amount) : '', a.applicationId ? 'app ' + a.applicationId : '', a.submissionId ? 'sub ' + a.submissionId : ''].filter(Boolean).join(' · ');
+  const detail = (a) => [
+    a.amount ? usd(a.amount) : '', a.reason ? '“' + a.reason + '”' : '',
+    a.subject ? '“' + a.subject + '”' : '', a.count != null ? `${a.sent}/${a.count} sent` : '',
+    a.taskId ? 'task ' + a.taskId : '', a.redemptionId ? 'payout ' + a.redemptionId : '',
+    a.applicationId ? 'app ' + a.applicationId : '', a.submissionId ? 'sub ' + a.submissionId : '',
+  ].filter(Boolean).join(' · ');
   content().innerHTML = `
-    <p class="page-sub">A record of admin decisions and member applications, newest first.</p>
-    <div class="panel"><table class="table">
-      <thead><tr><th>When</th><th>Action</th><th>User</th><th>Details</th></tr></thead>
+    <p class="page-sub">A record of every admin approval, payment and email — newest first.</p>
+    <div class="panel" style="overflow-x:auto"><table class="table">
+      <thead><tr><th>When</th><th>Admin</th><th>Action</th><th>User</th><th>Details</th></tr></thead>
       <tbody>${log.length ? log.map((a) => `
         <tr>
           <td class="p-sub">${new Date(a.createdAt).toLocaleString()}</td>
+          <td>${esc(a.admin || '—')}</td>
           <td>${esc(String(a.action || '').replace(/_/g, ' '))}</td>
           <td>${esc(a.username || a.userId || '—')}</td>
           <td class="p-sub">${esc(detail(a) || '—')}</td>
-        </tr>`).join('') : `<tr><td colspan="4" class="p-sub">No activity logged yet.</td></tr>`}</tbody>
+        </tr>`).join('') : `<tr><td colspan="5" class="p-sub">No activity logged yet.</td></tr>`}</tbody>
     </table></div>`;
 }
+
+let USERS_CACHE = [];
+const USERS_STATE = { q: '', status: 'all', page: 1, per: 20 };
+const inputStyle = 'padding:9px 12px;border:1px solid var(--line);border-radius:10px;background:var(--bg-2);color:var(--text)';
 
 async function tUsers() {
   loading();
   const { data } = await apiGet('/api/admin/users');
-  const users = data.users || [];
-  const via = (ps) => (ps && ps.length ? ps.map((p) => (p === 'email' ? 'Email' : p.charAt(0).toUpperCase() + p.slice(1))).join(', ') : 'Email');
+  USERS_CACHE = data.users || [];
+  USERS_STATE.page = 1;
+  content().innerHTML = `
+    <p class="page-sub">${USERS_CACHE.length} registered user(s). <b>Suspend</b> blocks sign-in · <b>Hold</b> pauses withdrawals & tasks · <b>Delete</b> removes the account. <a href="/api/admin/export" download>Download data export</a>.</p>
+    <div class="panel" style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:12px">
+      <input id="uSearch" placeholder="Search name, email, username or ID…" style="flex:1;min-width:220px;${inputStyle}">
+      <select id="uStatus" style="${inputStyle}">${[['all', 'All statuses'], ['active', 'Active'], ['suspended', 'Suspended'], ['hold', 'On hold']].map(([v, l]) => `<option value="${v}">${l}</option>`).join('')}</select>
+      <span class="p-sub" id="uCount"></span>
+    </div>
+    <div class="panel" style="overflow-x:auto"><table class="table">
+      <thead><tr><th>Name</th><th>Email</th><th>Plan</th><th class="num">Wallet</th><th class="num">Earned</th><th class="num">Tasks</th><th>Status</th><th>Actions</th></tr></thead>
+      <tbody id="uBody"></tbody>
+    </table></div>
+    <div id="uPager" style="display:flex;gap:12px;align-items:center;justify-content:center;margin-top:4px"></div>`;
+  const s = document.getElementById('uSearch');
+  s.addEventListener('input', () => { USERS_STATE.q = s.value; USERS_STATE.page = 1; renderUsersTable(); });
+  document.getElementById('uStatus').addEventListener('change', (e) => { USERS_STATE.status = e.target.value; USERS_STATE.page = 1; renderUsersTable(); });
+  renderUsersTable();
+}
+
+function renderUsersTable() {
   const badges = (u) => `${u.isAdmin ? '<span class="st approved">admin</span> ' : ''}${u.suspended ? '<span class="st rejected">suspended</span> ' : ''}${u.held ? '<span class="st pending">on hold</span> ' : ''}${!u.suspended && !u.held ? '<span class="st approved">active</span>' : ''}`;
   const act = (a, u, label, extra) => `<button class="btn btn-ghost auto uact" data-a="${a}" data-id="${u.id}" data-email="${esc(u.email)}" data-kes="${u.balance}" data-usd="${u.usd}"${extra || ''}>${label}</button>`;
-  content().innerHTML = `
-    <p class="page-sub">${users.length} registered user(s). <b>Suspend</b> blocks sign-in · <b>Hold</b> pauses withdrawals · <b>Delete</b> removes the account. <a href="/api/admin/export" download>Download data export</a>.</p>
-    <p class="pill-note">🔒 Passwords are encrypted one-way and can't be shown, for a member who asks, use <b>Password</b> to set them a new one.</p>
-    <div class="panel"><table class="table">
-      <thead><tr><th>Name</th><th>Email</th><th>Plan</th><th class="num">Wallet</th><th class="num">Earned</th><th class="num">Tasks</th><th>Status</th><th>Actions</th></tr></thead>
-      <tbody>${users.map((u) => `<tr>
-        <td>${esc(u.name || u.username || '—')}<br><span class="p-sub">@${esc(u.username || '')}</span></td>
-        <td class="p-sub">${esc(u.email)}</td>
-        <td class="p-sub">${esc(u.plan || 'Free')}</td>
-        <td class="num">${usd(u.usd)}<br><span class="p-sub">${kes(u.balance)}</span></td>
-        <td class="num">${usd(u.totalEarningsUSD)}</td>
-        <td class="num">${u.completedTasks} done<br><span class="p-sub">${u.pendingTasks} pending</span></td>
-        <td>${badges(u)}</td>
-        <td><div style="display:flex;gap:6px;flex-wrap:wrap">
-          <button class="btn btn-ghost auto uview" data-id="${u.id}">View</button>
-          <button class="btn btn-primary auto udetails" data-id="${u.id}">Edit details</button>
-          ${act('suspend', u, u.suspended ? 'Reactivate' : 'Suspend')}
-          ${act('hold', u, u.held ? 'Release hold' : 'Hold')}
-          ${act('balance', u, 'Balance')}
-          ${act('password', u, 'Reset password')}
-          ${act('gamify', u, 'XP / Badges')}
-          ${act('delete', u, 'Delete', ' style="border-color:var(--danger);color:#c0143c"')}
-        </div></td>
-      </tr>`).join('') || `<tr><td colspan="8" class="p-sub">No users yet.</td></tr>`}</tbody>
-    </table></div>`;
+  const q = USERS_STATE.q.trim().toLowerCase();
+  const list = USERS_CACHE.filter((u) => {
+    if (USERS_STATE.status === 'active' && (u.suspended || u.held)) return false;
+    if (USERS_STATE.status === 'suspended' && !u.suspended) return false;
+    if (USERS_STATE.status === 'hold' && !u.held) return false;
+    if (!q) return true;
+    return [u.name, u.username, u.email, u.id].some((v) => String(v || '').toLowerCase().includes(q));
+  });
+  const pages = Math.max(1, Math.ceil(list.length / USERS_STATE.per));
+  if (USERS_STATE.page > pages) USERS_STATE.page = pages;
+  const from = (USERS_STATE.page - 1) * USERS_STATE.per;
+  const items = list.slice(from, from + USERS_STATE.per);
+  const cnt = document.getElementById('uCount'); if (cnt) cnt.textContent = `${list.length} match${list.length === 1 ? '' : 'es'}`;
+  document.getElementById('uBody').innerHTML = items.map((u) => `<tr>
+    <td>${esc(u.name || u.username || '—')}<br><span class="p-sub">@${esc(u.username || '')}</span></td>
+    <td class="p-sub">${esc(u.email)}</td>
+    <td class="p-sub">${esc(u.plan || 'Free')}</td>
+    <td class="num">${usd(u.usd)}<br><span class="p-sub">${kes(u.balance)}</span></td>
+    <td class="num">${usd(u.totalEarningsUSD)}</td>
+    <td class="num">${u.completedTasks} done<br><span class="p-sub">${u.pendingTasks} pending</span></td>
+    <td>${badges(u)}</td>
+    <td><div style="display:flex;gap:6px;flex-wrap:wrap">
+      <button class="btn btn-ghost auto uview" data-id="${u.id}">View</button>
+      <button class="btn btn-ghost auto uemail" data-id="${u.id}">Email</button>
+      <button class="btn btn-primary auto udetails" data-id="${u.id}">Edit</button>
+      ${act('suspend', u, u.suspended ? 'Reactivate' : 'Suspend')}
+      ${act('hold', u, u.held ? 'Release hold' : 'Hold')}
+      ${act('balance', u, 'Balance')}
+      ${act('password', u, 'Reset password')}
+      ${act('gamify', u, 'XP / Badges')}
+      ${act('delete', u, 'Delete', ' style="border-color:var(--danger);color:#c0143c"')}
+    </div></td>
+  </tr>`).join('') || `<tr><td colspan="8" class="p-sub">No users match your search.</td></tr>`;
+  document.getElementById('uPager').innerHTML = `
+    <button class="btn btn-ghost auto" id="uPrev" style="width:auto"${USERS_STATE.page <= 1 ? ' disabled' : ''}>← Prev</button>
+    <span class="p-sub">Page ${USERS_STATE.page} of ${pages}</span>
+    <button class="btn btn-ghost auto" id="uNext" style="width:auto"${USERS_STATE.page >= pages ? ' disabled' : ''}>Next →</button>`;
+  document.getElementById('uPrev').addEventListener('click', () => { if (USERS_STATE.page > 1) { USERS_STATE.page -= 1; renderUsersTable(); } });
+  document.getElementById('uNext').addEventListener('click', () => { if (USERS_STATE.page < pages) { USERS_STATE.page += 1; renderUsersTable(); } });
+  const find = (id) => USERS_CACHE.find((u) => u.id === id);
   content().querySelectorAll('.uact').forEach((b) => b.addEventListener('click', () => userAction(b.dataset)));
-  content().querySelectorAll('.udetails').forEach((b) => b.addEventListener('click', () => openDetailsForm(users.find((u) => u.id === b.dataset.id))));
-  content().querySelectorAll('.uview').forEach((b) => b.addEventListener('click', () => openUserView(users.find((u) => u.id === b.dataset.id))));
+  content().querySelectorAll('.udetails').forEach((b) => b.addEventListener('click', () => openDetailsForm(find(b.dataset.id))));
+  content().querySelectorAll('.uview').forEach((b) => b.addEventListener('click', () => openUserView(find(b.dataset.id))));
+  content().querySelectorAll('.uemail').forEach((b) => b.addEventListener('click', () => openUserEmail(find(b.dataset.id))));
+}
+
+// Compose and send a one-off email to a single user.
+function openUserEmail(u) {
+  if (!u) return;
+  const bg = adminModal(`
+    <button class="close">×</button>
+    <h3>Email ${esc(u.name || u.username || '')}</h3>
+    <p class="p-sub">To: ${esc(u.email || '—')}</p>
+    <form id="ueForm">
+      <div class="field"><label>Subject</label><input id="ueSubject" maxlength="160" style="width:100%;${inputStyle}"></div>
+      <div class="field"><label>Message</label><textarea id="ueBody" rows="6" style="width:100%;${inputStyle}" placeholder="Write your message…"></textarea></div>
+      <button class="btn btn-primary" type="submit"${u.email ? '' : ' disabled'}>Send email</button>
+      ${u.email ? '' : '<p class="p-sub" style="margin-top:8px">This user has no email address on file.</p>'}
+    </form>`);
+  bg.querySelector('#ueForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const subject = bg.querySelector('#ueSubject').value.trim();
+    const body = bg.querySelector('#ueBody').value.trim();
+    if (!subject || !body) return toast('Subject and message are required', 'error');
+    const btn = bg.querySelector('button[type="submit"]'); btn.disabled = true;
+    const { ok, data: d } = await api('/api/admin/users/' + u.id + '/email', { subject, body });
+    if (ok) { const st = d.email ? d.email.status : '—'; toast('Email ' + st, st === 'Failed' ? 'error' : 'ok'); bg.remove(); }
+    else { btn.disabled = false; toast(d.error || 'Failed', 'error'); }
+  });
 }
 
 // Read-only full profile of a member (passwords are never shown — only that they're encrypted).
 function openUserView(u) {
   if (!u) return;
   const row = (l, v) => `<div class="wa-row"><span class="wa-row-l">${esc(l)}</span><span class="wa-row-v">${v}</span></div>`;
-  adminModal(`
+  const bg = adminModal(`
     <button class="close">×</button>
     <h3>${esc(u.name || u.username || 'User')}</h3>
     <p class="p-sub">${esc(u.email || '')}</p>
@@ -334,7 +411,19 @@ function openUserView(u) {
       ${row('Country', esc(u.country || '—'))}
       ${row('Password', u.hasPassword ? '*************** <span class="p-sub">Encrypted</span>' : '<span class="p-sub">Not set (social sign-in)</span>')}
     </div>
+    <h4 style="margin:16px 0 6px">Email history</h4>
+    <div id="uvEmails"><p class="p-sub">Loading…</p></div>
     <p class="p-sub" style="margin-top:12px">Full task and withdrawal history are in the <b>Submissions</b> and <b>Withdrawals</b> tabs.</p>`);
+  // Load this user's email history into the modal.
+  apiGet('/api/admin/users/' + u.id + '/emails').then(({ data }) => {
+    const box = bg.querySelector('#uvEmails'); if (!box) return;
+    const list = (data && data.emails) || [];
+    box.innerHTML = list.length ? list.map((e) => `
+      <div style="padding:8px 0;border-bottom:1px solid var(--line)">
+        <div style="display:flex;justify-content:space-between;gap:8px"><b>${esc(e.subject || statusLabel(e.type) || 'Email')}</b><span class="st ${e.status === 'Sent' ? 'approved' : 'rejected'}">${esc(e.status)}</span></div>
+        <p class="p-sub" style="margin:2px 0 0">${new Date(e.createdAt).toLocaleString()}${e.admin ? ' · by ' + esc(e.admin) : ''}</p>
+      </div>`).join('') : '<p class="p-sub">No emails sent to this user yet.</p>';
+  });
 }
 
 // Edit a client's full details (admin can change everything, including the locked fields).
@@ -443,6 +532,15 @@ async function tBroadcast() {
       </form>
     </div>
     <div class="panel">
+      <h3>Broadcast email to all users</h3>
+      <p class="p-sub">Sends a real email (not just an in-app banner) to every member who has an email on file.</p>
+      <form id="beForm">
+        <div class="field"><label>Subject</label><input id="beSubject" maxlength="160" style="width:100%;${inputStyle}"></div>
+        <div class="field"><label>Message</label><textarea id="beBody" rows="5" style="width:100%;${inputStyle}" placeholder="Write your email…"></textarea></div>
+        <button class="btn btn-primary" type="submit">Send email to all users</button>
+      </form>
+    </div>
+    <div class="panel">
       <h3>Sent broadcasts</h3>
       ${list.length ? list.map((b) => `
         <div style="padding:12px 0;border-bottom:1px solid var(--line)">
@@ -460,6 +558,18 @@ async function tBroadcast() {
       message: document.getElementById('bcMsg').value,
     });
     if (ok) { toast(d.message || 'Broadcast sent'); tBroadcast(); } else toast(d.error || 'Failed', 'error');
+  });
+  document.getElementById('beForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const subject = document.getElementById('beSubject').value.trim();
+    const body = document.getElementById('beBody').value.trim();
+    if (!subject || !body) return toast('Subject and message are required', 'error');
+    if (!confirm('Send this email to ALL users who have an email address?')) return;
+    const btn = e.target.querySelector('button[type="submit"]'); btn.disabled = true;
+    const { ok, data: d } = await api('/api/admin/email/broadcast', { subject, body });
+    btn.disabled = false;
+    if (ok) { toast(`Emailed ${d.sent}/${d.total}${d.failed ? ` · ${d.failed} failed` : ''}`, d.failed ? 'error' : 'ok'); e.target.reset(); }
+    else toast(d.error || 'Failed', 'error');
   });
   content().querySelectorAll('.bcdel').forEach((b) => b.addEventListener('click', async () => {
     if (!confirm('Delete this broadcast? Members will no longer see it.')) return;
@@ -565,11 +675,40 @@ async function tWithdrawals() {
       <thead><tr><th>Date</th><th>User</th><th class="num">Amount</th><th>To</th><th>Status</th><th>Action</th></tr></thead>
       <tbody>${rs.length ? rs.map((r) => `<tr><td class="p-sub">${new Date(r.createdAt).toLocaleString()}</td><td>${esc(r.user ? r.user.username : '—')}</td><td class="num">${r.currency === 'KES' ? kes(r.amount) : usd(r.amount)}</td><td class="p-sub"><b>${esc(r.method || '')}</b><br>${esc(r.destination || '—')}</td><td><span class="st ${sc(r.status)}">${esc(r.status)}</span>${r.status === 'Failed' && r.reason ? `<br><span class="p-sub">${esc(r.reason)}</span>` : ''}</td><td>${!/paid/i.test(r.status) ? `<button class="btn btn-primary auto mk" data-id="${r.id}" data-s="Paid">Approve (paid)</button> ` : ''}${r.status !== 'Failed' ? `<button class="btn btn-ghost auto mkfail" data-id="${r.id}">Reject</button>` : ''}</td></tr>`).join('') : `<tr><td colspan="6" class="p-sub">No withdrawals yet.</td></tr>`}</tbody>
     </table></div>`;
-  content().querySelectorAll('.mk').forEach((b) => b.addEventListener('click', async () => {
-    const { ok, data: d } = await api('/api/admin/redemptions/' + b.dataset.id + '/mark', { status: b.dataset.s });
-    if (ok) { toast('Marked ' + b.dataset.s); tWithdrawals(); } else toast(d.error || 'Failed', 'error');
-  }));
+  content().querySelectorAll('.mk').forEach((b) => b.addEventListener('click', () => openWithdrawPaid(rs.find((r) => r.id === b.dataset.id))));
   content().querySelectorAll('.mkfail').forEach((b) => b.addEventListener('click', () => openWithdrawReject(b.dataset.id)));
+}
+
+// Approve & mark paid, with automatic 20% fee / net calculation the admin can override.
+function openWithdrawPaid(r) {
+  if (!r) return;
+  const isKes = r.currency === 'KES';
+  const money = (n) => (isKes ? Math.round(Number(n) || 0).toLocaleString() + ' KES' : '$' + (Number(n) || 0).toFixed(2));
+  const gross = Number(r.amount) || 0;
+  const round2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
+  const bg = adminModal(`
+    <button class="close">×</button>
+    <h3>Approve &amp; mark paid</h3>
+    <p class="p-sub">${esc(r.user ? r.user.username : '')} · <b>${esc(r.method || '')}</b> → ${esc(r.destination || '—')}</p>
+    <div class="wa-row"><span class="wa-row-l">Gross amount</span><span class="wa-row-v">${money(gross)}</span></div>
+    <form id="wpForm">
+      <div class="grid g2" style="margin-top:10px">
+        <div class="field"><label>Withdrawal fee (20%, editable)</label><input id="wpFee" type="number" step="0.01" min="0" value="${round2(gross * 0.20)}"></div>
+        <div class="field"><label>Net amount to send</label><input id="wpNet" type="number" step="0.01" min="0" value="${round2(gross * 0.80)}"></div>
+      </div>
+      <p class="p-sub">The member is emailed the gross, fee, net, reference and date. <b>Net</b> is what you actually send${isKes ? '' : ''}.</p>
+      <button class="btn btn-primary" type="submit">Confirm paid &amp; email receipt</button>
+    </form>`);
+  const feeEl = bg.querySelector('#wpFee'), netEl = bg.querySelector('#wpNet');
+  feeEl.addEventListener('input', () => { netEl.value = round2(gross - (Number(feeEl.value) || 0)); });
+  netEl.addEventListener('input', () => { feeEl.value = round2(gross - (Number(netEl.value) || 0)); });
+  bg.querySelector('#wpForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const btn = e.target.querySelector('button[type="submit"]'); btn.disabled = true;
+    const { ok, data: d } = await api('/api/admin/redemptions/' + r.id + '/mark', { status: 'Paid', fee: Number(feeEl.value), net: Number(netEl.value) });
+    if (ok) { const em = d.email || {}; toast(`Marked paid · email ${em.status || '—'}`, em.status === 'Failed' ? 'error' : 'ok'); bg.remove(); tWithdrawals(); }
+    else { btn.disabled = false; toast(d.error || 'Failed', 'error'); }
+  });
 }
 
 // Reject a withdrawal with a reason; the amount is refunded to the member's wallet.
