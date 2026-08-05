@@ -20,6 +20,37 @@ function toast(msg, type = 'ok') {
 
 const TABS = [['overview', 'Overview'], ['submissions', 'Submissions'], ['applications', 'Applications'], ['share', 'Social Share'], ['emails', 'Email log'], ['audit', 'Audit log'], ['users', 'Users'], ['rewards', 'Rewards'], ['sendemail', 'Send Email'], ['broadcast', 'Broadcast'], ['investments', 'Investments'], ['deposits', 'Deposits'], ['withdrawals', 'Withdrawals'], ['support', 'Support']];
 
+// ---- Reusable client-side pagination for admin tables ----
+const PAGE_STATE = {};        // key -> current page (1-based); reset to 1 on tab switch
+const PAGE_SIZE = 25;
+function paginate(key, items, per = PAGE_SIZE) {
+  const total = items.length;
+  const pages = Math.max(1, Math.ceil(total / per));
+  let page = PAGE_STATE[key] || 1;
+  page = Math.min(Math.max(1, page), pages);
+  PAGE_STATE[key] = page;
+  const from = (page - 1) * per;
+  return { rows: items.slice(from, from + per), page, pages, total, from, per };
+}
+// A pager bar (hidden when everything fits on one page). Place it after the table.
+function pagerBar(key, p) {
+  if (p.total <= p.per) return '';
+  return `<div class="pager" data-pager="${esc(key)}" style="display:flex;gap:10px;align-items:center;justify-content:flex-end;flex-wrap:wrap;margin-top:12px">
+    <span class="p-sub">${p.from + 1}–${Math.min(p.from + p.per, p.total)} of ${p.total}</span>
+    <button class="btn btn-ghost auto pg-prev" style="width:auto"${p.page <= 1 ? ' disabled' : ''}>← Prev</button>
+    <span class="p-sub">Page ${p.page} / ${p.pages}</span>
+    <button class="btn btn-ghost auto pg-next" style="width:auto"${p.page >= p.pages ? ' disabled' : ''}>Next →</button>
+  </div>`;
+}
+// Wire the pager's buttons to change the page and re-run the table's render().
+function wirePager(key, p, rerender) {
+  const bar = content().querySelector(`[data-pager="${key}"]`);
+  if (!bar) return;
+  const go = (n) => { PAGE_STATE[key] = Math.min(Math.max(1, n), p.pages); rerender(); };
+  const prev = bar.querySelector('.pg-prev'); if (prev) prev.addEventListener('click', () => go(p.page - 1));
+  const next = bar.querySelector('.pg-next'); if (next) next.addEventListener('click', () => go(p.page + 1));
+}
+
 // Lightweight modal for admin forms (reuses .modal styles from app.css).
 function adminModal(html) {
   const bg = document.createElement('div');
@@ -100,6 +131,7 @@ function renderShell() {
   const themeBtn = document.getElementById('themeBtn'); if (themeBtn) themeBtn.addEventListener('click', toggleTheme);
   document.querySelectorAll('.tab').forEach((b) => b.addEventListener('click', () => {
     TAB = b.dataset.tab;
+    PAGE_STATE[TAB] = 1;   // start each tab on page 1
     document.querySelectorAll('.tab').forEach((x) => x.classList.toggle('active', x.dataset.tab === TAB));
     route();
   }));
@@ -152,11 +184,13 @@ async function tSubmissions() {
   loading();
   const { data } = await apiGet('/api/admin/submissions');
   const subs = data.submissions || [];
-  content().innerHTML = `
+  const render = () => {
+    const p = paginate('submissions', subs);
+    content().innerHTML = `
     <p class="page-sub">Every task submission and exactly what the member submitted. Approving credits the user's USD balance.</p>
     <div class="panel"><table class="table">
       <thead><tr><th>User</th><th>Task</th><th class="num">Reward</th><th>What they submitted</th><th>Submitted</th><th>Status</th><th>Action</th></tr></thead>
-      <tbody>${subs.length ? subs.map((sm) => `
+      <tbody>${subs.length ? p.rows.map((sm) => `
         <tr>
           <td>${esc(sm.user ? sm.user.username : '—')}<br><span class="p-sub">${esc(sm.user ? sm.user.email : '')}</span></td>
           <td>${esc(sm.task ? sm.task.title : sm.taskId)}${sm.task ? `<br><span class="p-sub">${esc(sm.task.category || '')}</span>` : ''}</td>
@@ -170,10 +204,13 @@ async function tSubmissions() {
             ${sm.status !== 'rejected' ? `<button class="btn btn-ghost auto adm-reject" data-id="${sm.id}">Reject</button>` : ''}
           </div></td>
         </tr>`).join('') : `<tr><td colspan="7" class="p-sub">No submissions yet.</td></tr>`}</tbody>
-    </table></div>`;
-  content().querySelectorAll('.adm-approve').forEach((b) => b.addEventListener('click', () => decideSubmission(b.dataset.id, 'approved')));
-  content().querySelectorAll('.adm-reject').forEach((b) => b.addEventListener('click', () => decideSubmission(b.dataset.id, 'rejected')));
-  content().querySelectorAll('.adm-correct').forEach((b) => b.addEventListener('click', () => openCorrection(b.dataset.id)));
+    </table>${pagerBar('submissions', p)}</div>`;
+    content().querySelectorAll('.adm-approve').forEach((b) => b.addEventListener('click', () => decideSubmission(b.dataset.id, 'approved')));
+    content().querySelectorAll('.adm-reject').forEach((b) => b.addEventListener('click', () => decideSubmission(b.dataset.id, 'rejected')));
+    content().querySelectorAll('.adm-correct').forEach((b) => b.addEventListener('click', () => openCorrection(b.dataset.id)));
+    wirePager('submissions', p, render);
+  };
+  render();
 }
 
 // Approve / reject / request-correction. Surfaces whether the decision email sent.
@@ -212,11 +249,13 @@ async function tShareReview() {
   const subs = data.submissions || [];
   const platName = { tiktok: '🎵 TikTok', whatsapp: '💬 WhatsApp' };
   const pending = subs.filter((s) => s.status === 'pending').length;
-  content().innerHTML = `
+  const render = () => {
+    const p = paginate('share', subs);
+    content().innerHTML = `
     <p class="page-sub">Social-sharing proof from members. Open a screenshot to verify the share, then approve to credit <b>${usd(data.reward || 0.30)}</b>, or reject. ${pending ? `<b>${pending}</b> awaiting review.` : ''}</p>
     <div class="panel" style="overflow-x:auto"><table class="table">
       <thead><tr><th>User</th><th>Platform</th><th>Screenshot</th><th class="num">Reward</th><th>Submitted</th><th>IP</th><th>Status</th><th>Action</th></tr></thead>
-      <tbody>${subs.length ? subs.map((s) => `
+      <tbody>${subs.length ? p.rows.map((s) => `
         <tr>
           <td>${esc(s.user ? s.user.username : 'User')}<br><span class="p-sub">${esc(s.user && s.user.email ? s.user.email : '')}</span></td>
           <td>${platName[s.platform] || esc(s.platform)}</td>
@@ -230,9 +269,12 @@ async function tShareReview() {
             ${s.status !== 'rejected' ? `<button class="btn btn-ghost auto shr-reject" data-id="${s.id}">Reject</button>` : ''}
           </div></td>
         </tr>`).join('') : `<tr><td colspan="8" class="p-sub">No share submissions yet.</td></tr>`}</tbody>
-    </table></div>`;
-  content().querySelectorAll('.shr-approve').forEach((b) => b.addEventListener('click', () => openShareDecision(b.dataset.id, 'approved')));
-  content().querySelectorAll('.shr-reject').forEach((b) => b.addEventListener('click', () => openShareDecision(b.dataset.id, 'rejected')));
+    </table>${pagerBar('share', p)}</div>`;
+    content().querySelectorAll('.shr-approve').forEach((b) => b.addEventListener('click', () => openShareDecision(b.dataset.id, 'approved')));
+    content().querySelectorAll('.shr-reject').forEach((b) => b.addEventListener('click', () => openShareDecision(b.dataset.id, 'rejected')));
+    wirePager('share', p, render);
+  };
+  render();
 }
 
 async function decideShare(id, decision, note) {
@@ -275,11 +317,13 @@ async function tEmails() {
   loading();
   const { data } = await apiGet('/api/admin/emails');
   const list = data.emails || [];
-  content().innerHTML = `
+  const render = () => {
+    const p = paginate('emails', list);
+    content().innerHTML = `
     <p class="page-sub">Every email sent from the platform — task decisions, withdrawal receipts, and direct/broadcast messages — with delivery status.</p>
     <div class="panel" style="overflow-x:auto"><table class="table">
       <thead><tr><th>When</th><th>Type</th><th>Subject / Task</th><th>User</th><th>To</th><th>Status</th><th>Action</th></tr></thead>
-      <tbody>${list.length ? list.map((e) => `
+      <tbody>${list.length ? p.rows.map((e) => `
         <tr>
           <td class="p-sub">${new Date(e.createdAt).toLocaleString()}</td>
           <td>${esc(emailTypeLabel(e.type))}</td>
@@ -289,13 +333,16 @@ async function tEmails() {
           <td><span class="st ${e.status === 'Sent' ? 'approved' : 'rejected'}">${esc(e.status)}</span>${e.error ? `<br><span class="p-sub">${esc(e.error)}</span>` : ''}</td>
           <td>${CAN_RESEND.has(e.type) ? `<button class="btn btn-ghost auto eresend" data-id="${esc(e.id)}">Resend</button>` : ''}</td>
         </tr>`).join('') : `<tr><td colspan="7" class="p-sub">No emails sent yet.</td></tr>`}</tbody>
-    </table></div>`;
-  content().querySelectorAll('.eresend').forEach((b) => b.addEventListener('click', async () => {
-    b.disabled = true;
-    const { ok, data: d } = await api('/api/admin/emails/' + b.dataset.id + '/resend', {});
-    if (ok) { const st = d.email ? d.email.status : '—'; toast('Resend: ' + st, st === 'Failed' ? 'error' : 'ok'); tEmails(); }
-    else { b.disabled = false; toast(d.error || 'Failed', 'error'); }
-  }));
+    </table>${pagerBar('emails', p)}</div>`;
+    content().querySelectorAll('.eresend').forEach((b) => b.addEventListener('click', async () => {
+      b.disabled = true;
+      const { ok, data: d } = await api('/api/admin/emails/' + b.dataset.id + '/resend', {});
+      if (ok) { const st = d.email ? d.email.status : '—'; toast('Resend: ' + st, st === 'Failed' ? 'error' : 'ok'); tEmails(); }
+      else { b.disabled = false; toast(d.error || 'Failed', 'error'); }
+    }));
+    wirePager('emails', p, render);
+  };
+  render();
 }
 
 // Task applications + proposals. Approving emails the member that they can begin working.
@@ -303,11 +350,13 @@ async function tApplications() {
   loading();
   const { data } = await apiGet('/api/admin/applications');
   const apps = data.applications || [];
-  content().innerHTML = `
+  const render = () => {
+    const p = paginate('applications', apps);
+    content().innerHTML = `
     <p class="page-sub">Task applications and the proposals members submitted. Approving emails them that they can begin working.</p>
     <div class="panel"><table class="table">
       <thead><tr><th>User</th><th>Task</th><th>Proposal</th><th>Status</th><th>Applied</th><th>Action</th></tr></thead>
-      <tbody>${apps.length ? apps.map((a) => `
+      <tbody>${apps.length ? p.rows.map((a) => `
         <tr>
           <td>${esc(a.user ? a.user.username : '—')}<br><span class="p-sub">${esc(a.user ? a.user.email : '')}</span></td>
           <td>${esc(a.task ? a.task.title : a.taskId)}</td>
@@ -319,12 +368,15 @@ async function tApplications() {
             ${a.status !== 'rejected' ? `<button class="btn btn-ghost auto appd" data-id="${a.id}" data-d="rejected">Reject</button>` : ''}
           </div></td>
         </tr>`).join('') : `<tr><td colspan="6" class="p-sub">No applications yet.</td></tr>`}</tbody>
-    </table></div>`;
-  content().querySelectorAll('.appd').forEach((b) => b.addEventListener('click', async () => {
-    const { ok, data: d } = await api('/api/admin/applications/' + b.dataset.id + '/decision', { decision: b.dataset.d });
-    if (ok) { const em = d.email || {}; toast(`${statusLabel(b.dataset.d)} · email ${em.status || '—'}${em.status === 'Failed' ? ' — see Email log' : ''}`, em.status === 'Failed' ? 'error' : 'ok'); tApplications(); }
-    else toast(d.error || 'Failed', 'error');
-  }));
+    </table>${pagerBar('applications', p)}</div>`;
+    content().querySelectorAll('.appd').forEach((b) => b.addEventListener('click', async () => {
+      const { ok, data: d } = await api('/api/admin/applications/' + b.dataset.id + '/decision', { decision: b.dataset.d });
+      if (ok) { const em = d.email || {}; toast(`${statusLabel(b.dataset.d)} · email ${em.status || '—'}${em.status === 'Failed' ? ' — see Email log' : ''}`, em.status === 'Failed' ? 'error' : 'ok'); tApplications(); }
+      else toast(d.error || 'Failed', 'error');
+    }));
+    wirePager('applications', p, render);
+  };
+  render();
 }
 
 // Read-only admin activity log.
@@ -338,11 +390,13 @@ async function tAudit() {
     a.taskId ? 'task ' + a.taskId : '', a.redemptionId ? 'payout ' + a.redemptionId : '',
     a.applicationId ? 'app ' + a.applicationId : '', a.submissionId ? 'sub ' + a.submissionId : '',
   ].filter(Boolean).join(' · ');
-  content().innerHTML = `
+  const render = () => {
+    const p = paginate('audit', log);
+    content().innerHTML = `
     <p class="page-sub">A record of every admin approval, payment and email — newest first.</p>
     <div class="panel" style="overflow-x:auto"><table class="table">
       <thead><tr><th>When</th><th>Admin</th><th>Action</th><th>User</th><th>Details</th></tr></thead>
-      <tbody>${log.length ? log.map((a) => `
+      <tbody>${log.length ? p.rows.map((a) => `
         <tr>
           <td class="p-sub">${new Date(a.createdAt).toLocaleString()}</td>
           <td>${esc(a.admin || '—')}</td>
@@ -350,7 +404,10 @@ async function tAudit() {
           <td>${esc(a.username || a.userId || '—')}</td>
           <td class="p-sub">${esc(detail(a) || '—')}</td>
         </tr>`).join('') : `<tr><td colspan="5" class="p-sub">No activity logged yet.</td></tr>`}</tbody>
-    </table></div>`;
+    </table>${pagerBar('audit', p)}</div>`;
+    wirePager('audit', p, render);
+  };
+  render();
 }
 
 let USERS_CACHE = [];
@@ -850,7 +907,9 @@ async function tDeposits() {
   const { data } = await apiGet('/api/admin/deposits');
   const deps = data.deposits || [];
   const sc = (s) => (/success/i.test(s) ? 'approved' : (s === 'failed' ? 'rejected' : 'pending'));
-  content().innerHTML = `
+  const render = () => {
+    const p = paginate('deposits', deps);
+    content().innerHTML = `
     <p class="page-sub">Wallet top-ups (M-Pesa STK &amp; other methods).</p>
 
     ${ROLE === 'finance' ? '' : `<div class="panel">
@@ -864,25 +923,28 @@ async function tDeposits() {
       <pre id="mpOut" style="white-space:pre-wrap;background:var(--bg-2);border:1px solid var(--line);border-radius:10px;padding:12px;font-size:13px;margin:0;display:none"></pre>
     </div>`}
 
-    <div class="panel"><table class="table">
+    <div class="panel" style="overflow-x:auto"><table class="table">
       <thead><tr><th>Date</th><th>User</th><th class="num">Amount</th><th>Method</th><th>Details</th><th>Status</th><th>Ref</th></tr></thead>
-      <tbody>${deps.length ? deps.map((d) => `<tr><td class="p-sub">${new Date(d.createdAt).toLocaleString()}</td><td>${esc(d.user ? d.user.username : '—')}</td><td class="num">${d.currency === 'USD' ? usd(d.amount) : kes(d.amount)}</td><td>${esc(d.method || 'M-Pesa')}</td><td class="p-sub">${esc(d.phone || d.details || '—')}</td><td><span class="st ${sc(d.status)}">${esc(d.status)}${d.demo ? ' (demo)' : ''}</span></td><td class="p-sub">${esc(d.reference || '')}</td></tr>`).join('') : `<tr><td colspan="7" class="p-sub">No deposits yet.</td></tr>`}</tbody>
-    </table></div>`;
+      <tbody>${deps.length ? p.rows.map((d) => `<tr><td class="p-sub">${new Date(d.createdAt).toLocaleString()}</td><td>${esc(d.user ? d.user.username : '—')}</td><td class="num">${d.currency === 'USD' ? usd(d.amount) : kes(d.amount)}</td><td>${esc(d.method || 'M-Pesa')}</td><td class="p-sub">${esc(d.phone || d.details || '—')}</td><td><span class="st ${sc(d.status)}">${esc(d.status)}${d.demo ? ' (demo)' : ''}</span></td><td class="p-sub">${esc(d.reference || '')}</td></tr>`).join('') : `<tr><td colspan="7" class="p-sub">No deposits yet.</td></tr>`}</tbody>
+    </table>${pagerBar('deposits', p)}</div>`;
 
-  if (ROLE !== 'finance') {
-    const out = document.getElementById('mpOut');
-    const show = (obj, isErr) => { out.style.display = 'block'; out.style.color = isErr ? 'var(--danger)' : 'var(--text)'; out.textContent = typeof obj === 'string' ? obj : JSON.stringify(obj, null, 2); };
-    document.getElementById('mpDiag').addEventListener('click', async () => {
-      show('Checking…');
-      const { ok, data: d } = await apiGet('/api/admin/mpesa/diagnose');
-      show(d, !ok || (d.oauth && !d.oauth.ok));
-    });
-    document.getElementById('mpTest').addEventListener('click', async () => {
-      show('Sending test STK…');
-      const { ok, data: d } = await api('/api/admin/mpesa/test-stk', { phone: document.getElementById('mpPhone').value });
-      show(ok ? d : (d.error || 'Failed'), !ok);
-    });
-  }
+    if (ROLE !== 'finance') {
+      const out = document.getElementById('mpOut');
+      const show = (obj, isErr) => { out.style.display = 'block'; out.style.color = isErr ? 'var(--danger)' : 'var(--text)'; out.textContent = typeof obj === 'string' ? obj : JSON.stringify(obj, null, 2); };
+      document.getElementById('mpDiag').addEventListener('click', async () => {
+        show('Checking…');
+        const { ok, data: d } = await apiGet('/api/admin/mpesa/diagnose');
+        show(d, !ok || (d.oauth && !d.oauth.ok));
+      });
+      document.getElementById('mpTest').addEventListener('click', async () => {
+        show('Sending test STK…');
+        const { ok, data: d } = await api('/api/admin/mpesa/test-stk', { phone: document.getElementById('mpPhone').value });
+        show(ok ? d : (d.error || 'Failed'), !ok);
+      });
+    }
+    wirePager('deposits', p, render);
+  };
+  render();
 }
 
 async function tWithdrawals() {
@@ -890,14 +952,19 @@ async function tWithdrawals() {
   const { data } = await apiGet('/api/admin/redemptions');
   const rs = data.redemptions || [];
   const sc = (s) => (/paid/i.test(s) ? 'approved' : (s === 'Failed' ? 'rejected' : 'pending'));
-  content().innerHTML = `
+  const render = () => {
+    const p = paginate('withdrawals', rs);
+    content().innerHTML = `
     <p class="page-sub">Member &amp; admin-initiated withdrawals (M-Pesa, PayPal &amp; bank) — <b>all paid manually</b>. Send the money to the destination shown, then click <b>Mark paid</b>. Marking a payout <b>Failed</b> refunds the user's balance.</p>
     <div class="panel" style="overflow-x:auto"><table class="table">
       <thead><tr><th>Date</th><th>User</th><th class="num">Amount</th><th>To</th><th>Initiated by</th><th>Status</th><th>Action</th></tr></thead>
-      <tbody>${rs.length ? rs.map((r) => `<tr><td class="p-sub">${new Date(r.createdAt).toLocaleString()}</td><td>${esc(r.user ? r.user.username : '—')}</td><td class="num">${r.currency === 'KES' ? kes(r.amount) : usd(r.amount)}</td><td class="p-sub"><b>${esc(r.method || '')}</b><br>${esc(r.destination || '—')}</td><td class="p-sub">${r.initiatedBy ? `<b>Admin</b> (${esc(r.initiatedBy)})${r.adminNote ? `<br><span class="p-sub">${esc(r.adminNote)}</span>` : ''}` : 'Client'}</td><td><span class="st ${sc(r.status)}">${esc(r.status)}</span>${r.status === 'Failed' && r.reason ? `<br><span class="p-sub">${esc(r.reason)}</span>` : ''}</td><td>${!/paid/i.test(r.status) ? `<button class="btn btn-primary auto mk" data-id="${r.id}" data-s="Paid">Approve (paid)</button> ` : ''}${r.status !== 'Failed' ? `<button class="btn btn-ghost auto mkfail" data-id="${r.id}">Reject</button>` : ''}</td></tr>`).join('') : `<tr><td colspan="7" class="p-sub">No withdrawals yet.</td></tr>`}</tbody>
-    </table></div>`;
-  content().querySelectorAll('.mk').forEach((b) => b.addEventListener('click', () => openWithdrawPaid(rs.find((r) => r.id === b.dataset.id))));
-  content().querySelectorAll('.mkfail').forEach((b) => b.addEventListener('click', () => openWithdrawReject(b.dataset.id)));
+      <tbody>${rs.length ? p.rows.map((r) => `<tr><td class="p-sub">${new Date(r.createdAt).toLocaleString()}</td><td>${esc(r.user ? r.user.username : '—')}</td><td class="num">${r.currency === 'KES' ? kes(r.amount) : usd(r.amount)}</td><td class="p-sub"><b>${esc(r.method || '')}</b><br>${esc(r.destination || '—')}</td><td class="p-sub">${r.initiatedBy ? `<b>Admin</b> (${esc(r.initiatedBy)})${r.adminNote ? `<br><span class="p-sub">${esc(r.adminNote)}</span>` : ''}` : 'Client'}</td><td><span class="st ${sc(r.status)}">${esc(r.status)}</span>${r.status === 'Failed' && r.reason ? `<br><span class="p-sub">${esc(r.reason)}</span>` : ''}</td><td>${!/paid/i.test(r.status) ? `<button class="btn btn-primary auto mk" data-id="${r.id}" data-s="Paid">Approve (paid)</button> ` : ''}${r.status !== 'Failed' ? `<button class="btn btn-ghost auto mkfail" data-id="${r.id}">Reject</button>` : ''}</td></tr>`).join('') : `<tr><td colspan="7" class="p-sub">No withdrawals yet.</td></tr>`}</tbody>
+    </table>${pagerBar('withdrawals', p)}</div>`;
+    content().querySelectorAll('.mk').forEach((b) => b.addEventListener('click', () => openWithdrawPaid(rs.find((r) => r.id === b.dataset.id))));
+    content().querySelectorAll('.mkfail').forEach((b) => b.addEventListener('click', () => openWithdrawReject(b.dataset.id)));
+    wirePager('withdrawals', p, render);
+  };
+  render();
 }
 
 // Approve & mark paid, with automatic 20% fee / net calculation the admin can override.
@@ -957,7 +1024,9 @@ async function tInvestments() {
   const s = data.stats || {}, plans = data.plans || [], rates = data.rates || {};
   const invs = data.investments || [];
   const sc = (st) => (st === 'completed' ? 'approved' : 'pending');
-  content().innerHTML = `
+  const render = () => {
+    const pg = paginate('investments', invs);
+    content().innerHTML = `
     <p class="page-sub">Investment statistics, live positions and per-plan interest settings.</p>
     <div class="grid g4">
       <div class="stat brand"><div class="label">Investors</div><div class="value">${s.investors || 0}</div></div>
@@ -980,9 +1049,9 @@ async function tInvestments() {
       </div><button class="btn btn-primary" type="submit">Save changes</button></form>
     </div>`}
 
-    <div class="panel"><h3>All investments</h3><table class="table">
+    <div class="panel" style="overflow-x:auto"><h3>All investments</h3><table class="table">
       <thead><tr><th>ID</th><th>Investor</th><th>Plan</th><th class="num">Principal</th><th class="num">Rate</th><th class="num">Return</th><th>Maturity</th><th>Status</th></tr></thead>
-      <tbody>${invs.length ? invs.map((i) => `<tr>
+      <tbody>${invs.length ? pg.rows.map((i) => `<tr>
         <td>${esc(i.id)}</td>
         <td>${esc(i.user ? i.user.username : '—')}<br><span class="p-sub">${esc(i.user ? i.user.email : '')}</span></td>
         <td>${esc(i.planName)}</td>
@@ -992,16 +1061,19 @@ async function tInvestments() {
         <td class="p-sub">${new Date(i.maturityDate).toLocaleDateString()}</td>
         <td><span class="st ${sc(i.status)}">${i.status === 'completed' ? 'Completed' : 'Running'}</span></td>
       </tr>`).join('') : `<tr><td colspan="8" class="p-sub">No investments yet.</td></tr>`}</tbody>
-    </table></div>`;
+    </table>${pagerBar('investments', pg)}</div>`;
 
-  const rateForm = document.getElementById('rateForm');
-  if (rateForm) rateForm.addEventListener('submit', async (e) => {
-    e.preventDefault();
-    const body = {};
-    document.querySelectorAll('#rateForm input[data-plan]').forEach((el) => { body[el.dataset.plan] = el.value; });
-    const { ok, data: d } = await api('/api/admin/investment-rates', body);
-    if (ok) { toast(d.message || 'Saved'); tInvestments(); } else toast(d.error || 'Failed', 'error');
-  });
+    const rateForm = document.getElementById('rateForm');
+    if (rateForm) rateForm.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const body = {};
+      document.querySelectorAll('#rateForm input[data-plan]').forEach((el) => { body[el.dataset.plan] = el.value; });
+      const { ok, data: d } = await api('/api/admin/investment-rates', body);
+      if (ok) { toast(d.message || 'Saved'); tInvestments(); } else toast(d.error || 'Failed', 'error');
+    });
+    wirePager('investments', pg, render);
+  };
+  render();
 }
 
 async function tSupport() {
