@@ -1,0 +1,12 @@
+User-agent: *
+Allow: /
+
+# Keep private / app areas out of search results
+Disallow: /app.html
+Disallow: /admin.html
+Disallow: /onboarding.html
+Disallow: /reset.html
+Disallow: /forgot.html
+Disallow: /api/
+
+Sitemap: https://gweno.vercel.app/sitemap.xml
