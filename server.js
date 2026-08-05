@@ -93,6 +93,10 @@ const SURVEY_DONE = 'surveysDone';
 // Separate admin credentials — NOT a client account. Set these in .env.
 const ADMIN_USERNAME = process.env.ADMIN_USERNAME || 'admin';
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || '';
+// Finance sub-role: its own login, restricted to money operations (payouts, deposits,
+// investments) — see the finance whitelist middleware below. No password => disabled.
+const FINANCE_USERNAME = process.env.FINANCE_USERNAME || 'finance';
+const FINANCE_PASSWORD = process.env.FINANCE_PASSWORD || '';
 const ADMIN_COOKIE = 'gweno_admin';
 const ADMIN_SESSION_TTL_MS = 2 * 60 * 60 * 1000; // admin sessions expire after 2h
 
@@ -668,9 +672,11 @@ function requireAdmin(req, res, next) {
 }
 
 // ---- Separate admin authentication (independent of client accounts) ----
-function createAdminSession(res) {
+// role: 'admin' (full) or 'finance' (money operations only). Old sessions with no
+// role are treated as 'admin' for back-compat.
+function createAdminSession(res, role = 'admin', username = ADMIN_USERNAME) {
   const token = rid(24);
-  const sess = { token, createdAt: now(), expiresAt: now() + ADMIN_SESSION_TTL_MS };
+  const sess = { token, role, username, createdAt: now(), expiresAt: now() + ADMIN_SESSION_TTL_MS };
   db.get().adminSessions.push(sess);
   db.save();
   res.cookie(ADMIN_COOKIE, token, {
@@ -695,6 +701,32 @@ function requireAdminSession(req, res, next) {
   if (!currentAdminSession(req)) return res.status(401).json({ error: 'Admin sign-in required.' });
   next();
 }
+// The role of the current staff session ('admin' | 'finance' | null).
+const sessionRole = (req) => { const s = currentAdminSession(req); return s ? (s.role || 'admin') : null; };
+// The acting staff member's username (for audit/attribution).
+const actorName = (req) => { const s = currentAdminSession(req); return (s && s.username) || ADMIN_USERNAME; };
+
+// Finance role: allowed ONLY on money-operations endpoints. Full admins pass through;
+// unauthenticated requests fall through to each route's own guard (which returns 401).
+// Paths are relative to the /api/admin mount point.
+const FINANCE_ALLOWED = [
+  { m: 'GET',  re: /^\/session$/ },
+  { m: 'POST', re: /^\/login$/ },
+  { m: 'POST', re: /^\/logout$/ },
+  { m: 'GET',  re: /^\/overview$/ },
+  { m: 'GET',  re: /^\/users$/ },                       // list only (to find a client)
+  { m: 'POST', re: /^\/users\/[^/]+\/withdraw$/ },      // initiate withdrawal on behalf of a client
+  { m: 'GET',  re: /^\/redemptions$/ },
+  { m: 'POST', re: /^\/redemptions\/[^/]+\/mark$/ },    // release / reject payouts
+  { m: 'GET',  re: /^\/deposits$/ },
+  { m: 'GET',  re: /^\/investments$/ },
+];
+app.use('/api/admin', (req, res, next) => {
+  if (sessionRole(req) !== 'finance') return next();    // full admin or not-signed-in
+  const ok = FINANCE_ALLOWED.some((r) => r.m === req.method && r.re.test(req.path));
+  if (ok) return next();
+  return res.status(403).json({ error: 'Finance accounts can only manage payouts (withdrawals, deposits, investments). This action needs a full admin.' });
+});
 let adminLock = { count: 0, lockedUntil: 0 };
 
 function findUserByEmail(email) {
@@ -1706,26 +1738,31 @@ app.get('/api/admin/users/:id/emails', requireAdminSession, (req, res) => {
 
 // ---- Admin sign-in (separate credentials + own cookie; not a client account) ----
 app.get('/api/admin/session', (req, res) => {
-  const authed = !!currentAdminSession(req);
-  res.json({ authed, username: authed ? ADMIN_USERNAME : null, configured: !!ADMIN_PASSWORD });
+  const sess = currentAdminSession(req);
+  res.json({ authed: !!sess, username: sess ? (sess.username || ADMIN_USERNAME) : null,
+    role: sess ? (sess.role || 'admin') : null, configured: !!(ADMIN_PASSWORD || FINANCE_PASSWORD) });
 });
 
 app.post('/api/admin/login', (req, res) => {
-  if (!ADMIN_PASSWORD) return res.status(500).json({ error: 'Admin login is not configured. Set ADMIN_PASSWORD in .env.' });
+  if (!ADMIN_PASSWORD && !FINANCE_PASSWORD) return res.status(500).json({ error: 'Admin login is not configured. Set ADMIN_PASSWORD (and optionally FINANCE_PASSWORD) in .env.' });
   if (adminLock.lockedUntil > now()) {
     const mins = Math.ceil((adminLock.lockedUntil - now()) / 60000);
     return res.status(429).json({ error: `Too many attempts. Try again in ${mins} minute(s).` });
   }
   const username = String(req.body.username || '');
   const password = String(req.body.password || '');
-  if (username !== ADMIN_USERNAME || password !== ADMIN_PASSWORD) {
+  // Match either the full admin or the finance sub-role.
+  let role = null;
+  if (ADMIN_PASSWORD && username === ADMIN_USERNAME && password === ADMIN_PASSWORD) role = 'admin';
+  else if (FINANCE_PASSWORD && username === FINANCE_USERNAME && password === FINANCE_PASSWORD) role = 'finance';
+  if (!role) {
     adminLock.count += 1;
     if (adminLock.count >= 5) { adminLock.lockedUntil = now() + 15 * 60 * 1000; adminLock.count = 0; }
-    return res.status(401).json({ error: 'Invalid admin username or password.' });
+    return res.status(401).json({ error: 'Invalid username or password.' });
   }
   adminLock = { count: 0, lockedUntil: 0 };
-  createAdminSession(res);
-  res.json({ ok: true });
+  createAdminSession(res, role, username);
+  res.json({ ok: true, role });
 });
 
 app.post('/api/admin/logout', (req, res) => {
@@ -2064,6 +2101,7 @@ async function notifyWithdrawalPaid(rec) {
 }
 
 app.post('/api/admin/redemptions/:id/mark', requireAdminSession, async (req, res) => {
+  const actor = actorName(req);
   const rec = db.get().redemptions.find((r) => r.id === req.params.id);
   if (!rec) return res.status(404).json({ error: 'Redemption not found.' });
   const status = String(req.body.status || '');
@@ -2076,7 +2114,7 @@ app.post('/api/admin/redemptions/:id/mark', requireAdminSession, async (req, res
     if (u) { ensureUserShape(u); u.usd = round2(u.usd + heldUSD); }
     rec.status = 'Failed'; rec.reviewedAt = new Date().toISOString();
     rec.reason = String(req.body.reason || '').trim() || rec.reason || '';  // rejection reason (shown to the member)
-    audit('withdrawal_rejected', { admin: ADMIN_USERNAME, userId: rec.userId, redemptionId: rec.id, amount: round2(heldUSD), reason: rec.reason });
+    audit('withdrawal_rejected', { admin: actor, userId: rec.userId, redemptionId: rec.id, amount: round2(heldUSD), reason: rec.reason });
     db.save();
     return res.json({ ok: true, redemption: rec });
   }
@@ -2096,7 +2134,7 @@ app.post('/api/admin/redemptions/:id/mark', requireAdminSession, async (req, res
       rec.provider = { type: 'mpesa', kesAmount, ...(await payments.mpesaB2C({ phone: rec.destination, amount: kesAmount, resultUrl: b2cResultUrl(req), timeoutUrl: b2cTimeoutUrl(req) })) };
       rec.status = 'Processing'; rec.reviewedAt = new Date().toISOString(); // final Paid/Failed comes on the M-Pesa result callback
       const em = await notifyWithdrawalPaid(rec);
-      audit('withdrawal_paid', { admin: ADMIN_USERNAME, userId: rec.userId, redemptionId: rec.id, amount: round2(rec.net != null ? rec.net : rec.amount) });
+      audit('withdrawal_paid', { admin: actor, userId: rec.userId, redemptionId: rec.id, amount: round2(rec.net != null ? rec.net : rec.amount) });
       db.save();
       return res.json({ ok: true, redemption: rec, email: { status: em.status, error: em.error }, message: `M-Pesa payout of ${kesAmount.toLocaleString()} KES submitted.` });
     } catch (err) {
@@ -2110,7 +2148,7 @@ app.post('/api/admin/redemptions/:id/mark', requireAdminSession, async (req, res
   if (status === 'Paid') {
     const em = await notifyWithdrawalPaid(rec);
     email = { status: em.status, error: em.error };
-    audit('withdrawal_paid', { admin: ADMIN_USERNAME, userId: rec.userId, redemptionId: rec.id, amount: round2(rec.net != null ? rec.net : rec.amount) });
+    audit('withdrawal_paid', { admin: actor, userId: rec.userId, redemptionId: rec.id, amount: round2(rec.net != null ? rec.net : rec.amount) });
   }
   db.save();
   res.json({ ok: true, redemption: rec, email });
@@ -2125,6 +2163,7 @@ app.post('/api/admin/redemptions/:id/mark', requireAdminSession, async (req, res
 //  Authorization: admin session only (the platform's privileged/finance role).
 // -----------------------------------------------------------------------------
 app.post('/api/admin/users/:id/withdraw', requireAdminSession, async (req, res) => {
+  const actor = actorName(req);
   const target = userById(req.params.id);
   if (!target) return res.status(404).json({ error: 'User not found.' });
   ensureUserShape(target);
@@ -2142,8 +2181,10 @@ app.post('/api/admin/users/:id/withdraw', requireAdminSession, async (req, res) 
   const currency = method === 'M-Pesa' ? 'KES' : 'USD';               // M-Pesa in KES, others USD
   const amountUSD = currency === 'KES' ? round2(rawAmount / FX_KES_PER_USD) : rawAmount;
 
-  if (currency === 'KES' && rawAmount < MIN_REDEEM.KES) return res.status(400).json({ error: `Minimum M-Pesa withdrawal is ${MIN_REDEEM.KES} KES.` });
-  if (currency === 'USD' && rawAmount < MIN_REDEEM.USD) return res.status(400).json({ error: `Minimum withdrawal is $${MIN_REDEEM.USD}.` });
+  // Admin-initiated withdrawals have NO platform minimum (finance/privileged action) —
+  // any amount from 1 KES upward is allowed. The member-facing MIN_REDEEM still applies to
+  // client-requested withdrawals in /api/redeem (unchanged).
+  if (currency === 'KES' && rawAmount < 1) return res.status(400).json({ error: 'Enter at least 1 KES.' });
 
   // No duplicate / in-progress withdrawal for the same client.
   if (db.get().redemptions.some((r) => r.userId === target.id && /request|process/i.test(r.status))) {
@@ -2188,7 +2229,7 @@ app.post('/api/admin/users/:id/withdraw', requireAdminSession, async (req, res) 
     amount: rawAmount, currency, amountUSD, method, destination, reference,
     status: 'Requested', createdAt: new Date().toISOString(), resultAt: null,
     provider: null, recipient, error: null,
-    source: 'admin', initiatedBy: ADMIN_USERNAME, adminNote: note || null,
+    source: 'admin', initiatedBy: actor, adminNote: note || null,
   };
   db.get().redemptions.push(rec);
 
@@ -2196,7 +2237,7 @@ app.post('/api/admin/users/:id/withdraw', requireAdminSession, async (req, res) 
   gamify.award(target, 'withdraw', `redeem:${rec.id}`, {
     event: { text: `Withdrawal initiated by admin (${currency === 'KES' ? rawAmount.toLocaleString() + ' KES' : '$' + rawAmount.toFixed(2)}) 💸`, icon: '💸' },
   });
-  audit('withdrawal_initiated_by_admin', { admin: ADMIN_USERNAME, userId: target.id, redemptionId: rec.id, method, amountUSD: round2(amountUSD), reference, note: note || null });
+  audit('withdrawal_initiated_by_admin', { admin: actor, userId: target.id, redemptionId: rec.id, method, amountUSD: round2(amountUSD), reference, note: note || null });
   db.save();
   await db.flush();
 
@@ -2215,11 +2256,11 @@ app.post('/api/admin/users/:id/withdraw', requireAdminSession, async (req, res) 
   } catch (e) { email = { status: 'Failed', error: e.message }; }
   const S = db.get();
   S.emailLog = S.emailLog || [];
-  S.emailLog.unshift({ id: rid(6), type: 'withdrawal_initiated', userId: target.id, redemptionId: rec.id, amount: round2(amountUSD), to: target.email || null, subject: 'Withdrawal initiated on your account', status: email.status, error: email.error, admin: ADMIN_USERNAME, createdAt: new Date().toISOString() });
+  S.emailLog.unshift({ id: rid(6), type: 'withdrawal_initiated', userId: target.id, redemptionId: rec.id, amount: round2(amountUSD), to: target.email || null, subject: 'Withdrawal initiated on your account', status: email.status, error: email.error, admin: actor, createdAt: new Date().toISOString() });
   if (S.emailLog.length > 2000) S.emailLog.length = 2000;
   db.save();
 
-  console.log(`[gweno] admin-initiated withdrawal ${rec.id} by=${ADMIN_USERNAME} user=${target.id} ${method} $${amountUSD} ref=${reference}`);
+  console.log(`[gweno] admin-initiated withdrawal ${rec.id} by=${actor} user=${target.id} ${method} $${amountUSD} ref=${reference}`);
   res.status(201).json({ ok: true, redemption: rec, email,
     message: `Withdrawal of ${shown} via ${method} initiated for ${target.username || target.name}. Funds are held — release the payment from the Withdrawals tab.` });
 });
