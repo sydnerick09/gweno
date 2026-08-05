@@ -2116,6 +2116,114 @@ app.post('/api/admin/redemptions/:id/mark', requireAdminSession, async (req, res
   res.json({ ok: true, redemption: rec, email });
 });
 
+// -----------------------------------------------------------------------------
+//  Admin-initiated withdrawal — create a withdrawal ON BEHALF of a client, from
+//  their profile. Holds (deducts) the balance now, records the initiating admin +
+//  optional note + a unique reference, notifies the client (in-app + email), and
+//  leaves it "Requested" so it is RELEASED from the Withdrawals tab using the same
+//  manual pay/refund flow as member-requested withdrawals. Every step is audited.
+//  Authorization: admin session only (the platform's privileged/finance role).
+// -----------------------------------------------------------------------------
+app.post('/api/admin/users/:id/withdraw', requireAdminSession, async (req, res) => {
+  const target = userById(req.params.id);
+  if (!target) return res.status(404).json({ error: 'User not found.' });
+  ensureUserShape(target);
+
+  const method = String(req.body.method || '').trim();
+  const rawAmount = round2(req.body.amount);
+  let destination = String(req.body.destination || '').trim();
+  const bankCode = String(req.body.bankCode || '').trim();
+  const accountNumber = String(req.body.accountNumber || '').replace(/\s+/g, '');
+  const note = String(req.body.note || '').trim().slice(0, 500);
+
+  if (!WITHDRAW_METHODS.includes(method)) return res.status(400).json({ error: 'Choose a payout method (M-Pesa, PayPal or Bank account).' });
+  if (!(rawAmount > 0)) return res.status(400).json({ error: 'Enter a valid amount.' });
+
+  const currency = method === 'M-Pesa' ? 'KES' : 'USD';               // M-Pesa in KES, others USD
+  const amountUSD = currency === 'KES' ? round2(rawAmount / FX_KES_PER_USD) : rawAmount;
+
+  if (currency === 'KES' && rawAmount < MIN_REDEEM.KES) return res.status(400).json({ error: `Minimum M-Pesa withdrawal is ${MIN_REDEEM.KES} KES.` });
+  if (currency === 'USD' && rawAmount < MIN_REDEEM.USD) return res.status(400).json({ error: `Minimum withdrawal is $${MIN_REDEEM.USD}.` });
+
+  // No duplicate / in-progress withdrawal for the same client.
+  if (db.get().redemptions.some((r) => r.userId === target.id && /request|process/i.test(r.status))) {
+    return res.status(409).json({ error: 'This client already has a withdrawal in progress. Complete or reject it first.' });
+  }
+
+  // Per-method destination validation (admin-entered; free-text bank details allowed).
+  if (method === 'M-Pesa') {
+    if (!/^(?:254|0)\d{9}$/.test(destination.replace(/\s+/g, ''))) return res.status(400).json({ error: 'Enter a valid M-Pesa phone number (e.g. 0712345678).' });
+  } else if (method === 'PayPal') {
+    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(destination)) return res.status(400).json({ error: 'Enter a valid PayPal email address.' });
+  } else if (method === 'Bank account') {
+    if (destination.replace(/\s+/g, '').length < 6 && accountNumber.length < 6) {
+      return res.status(400).json({ error: 'Enter the bank account details (account name, bank and account number).' });
+    }
+  }
+
+  const availableUSD = combinedUSD(target);
+  if (amountUSD > availableUSD) return res.status(400).json({ error: `Amount exceeds the client's available balance ($${availableUSD.toFixed(2)}).` });
+
+  // Build recipient details (so whoever releases the payout knows exactly where to send it).
+  let recipient = null;
+  if (method === 'M-Pesa') {
+    destination = payments.normalizePhone(destination);
+    recipient = { type: 'mobile_money', provider: 'MPESA', phone: destination };
+  } else if (method === 'PayPal') {
+    recipient = { type: 'paypal', email: destination };
+  } else if (method === 'Bank account') {
+    let name = String(req.body.accountName || '').trim();
+    try { if (bankCode && accountNumber && investPay.paystackConfigured()) { const rr = await investPay.paystackResolveAccount(accountNumber, bankCode); if (rr.accountName) name = rr.accountName; } } catch (_) {}
+    if (!name) name = target.name || '';
+    const bankName = String(req.body.bankName || '').trim();
+    recipient = { type: 'bank', name, bankCode: bankCode || null, bankName: bankName || null, accountNumber: accountNumber || null };
+    if (!destination) destination = [name, bankName, accountNumber].filter(Boolean).join(' · ');
+  }
+
+  // Hold (deduct) the funds now; released manually from the Withdrawals tab.
+  deductCombined(target, 'USD', amountUSD);
+  const reference = 'wd_adm_' + rid(10);
+  const rec = {
+    id: rid(8), userId: target.id, idempotencyKey: null,
+    amount: rawAmount, currency, amountUSD, method, destination, reference,
+    status: 'Requested', createdAt: new Date().toISOString(), resultAt: null,
+    provider: null, recipient, error: null,
+    source: 'admin', initiatedBy: ADMIN_USERNAME, adminNote: note || null,
+  };
+  db.get().redemptions.push(rec);
+
+  // In-app notification to the client (+ XP once per withdrawal).
+  gamify.award(target, 'withdraw', `redeem:${rec.id}`, {
+    event: { text: `Withdrawal initiated by admin (${currency === 'KES' ? rawAmount.toLocaleString() + ' KES' : '$' + rawAmount.toFixed(2)}) 💸`, icon: '💸' },
+  });
+  audit('withdrawal_initiated_by_admin', { admin: ADMIN_USERNAME, userId: target.id, redemptionId: rec.id, method, amountUSD: round2(amountUSD), reference, note: note || null });
+  db.save();
+  await db.flush();
+
+  // Best-effort email notice to the client (never blocks the withdrawal).
+  const shown = currency === 'KES' ? `${rawAmount.toLocaleString()} KES` : `$${rawAmount.toFixed(2)}`;
+  let email = { status: 'Skipped', error: null };
+  try {
+    if (target.email && mailer.configured()) {
+      await mailer.sendAdmin({
+        to: target.email,
+        subject: 'Withdrawal initiated on your account',
+        body: `Hi ${target.name || target.username || 'there'},\n\nA withdrawal of ${shown} via ${method} has been initiated on your Gweno account by our team and is now being processed (reference ${reference}). The amount has been held from your balance.\n\nYou'll be notified again once the payment is completed. If you did not expect this, please contact support immediately.\n\nThe Gweno Team`,
+      });
+      email = { status: 'Sent', error: null };
+    }
+  } catch (e) { email = { status: 'Failed', error: e.message }; }
+  const S = db.get();
+  S.emailLog = S.emailLog || [];
+  S.emailLog.unshift({ id: rid(6), type: 'withdrawal_initiated', userId: target.id, redemptionId: rec.id, amount: round2(amountUSD), to: target.email || null, subject: 'Withdrawal initiated on your account', status: email.status, error: email.error, admin: ADMIN_USERNAME, createdAt: new Date().toISOString() });
+  if (S.emailLog.length > 2000) S.emailLog.length = 2000;
+  db.save();
+
+  console.log(`[gweno] admin-initiated withdrawal ${rec.id} by=${ADMIN_USERNAME} user=${target.id} ${method} $${amountUSD} ref=${reference}`);
+  res.status(201).json({ ok: true, redemption: rec, email,
+    message: `Withdrawal of ${shown} via ${method} initiated for ${target.username || target.name}. Funds are held — release the payment from the Withdrawals tab.` });
+});
+
 // M-Pesa STK diagnostics — surfaces the exact Daraja error without exposing secrets.
 app.get('/api/admin/mpesa/diagnose', requireAdminSession, async (req, res) => {
   const c = payments.CFG;

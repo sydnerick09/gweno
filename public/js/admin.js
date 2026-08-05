@@ -403,6 +403,7 @@ function renderUsersTable() {
       ${act('suspend', u, u.suspended ? 'Reactivate' : 'Suspend')}
       ${act('hold', u, u.held ? 'Release hold' : 'Hold')}
       ${act('balance', u, 'Balance')}
+      ${act('withdraw', u, 'Initiate withdrawal')}
       ${act('plan', u, 'Change plan', ' data-plan="' + esc(u.planId || 'none') + '"')}
       ${act('password', u, 'Reset password')}
       ${act('gamify', u, 'XP / Badges')}
@@ -712,6 +713,9 @@ async function userAction(ds) {
     if (usdV === null) return;
     const { ok, data } = await api(base + '/balance', { balance: Number(kesV), usd: Number(usdV) });
     if (ok) { toast('Balance updated'); tUsers(); } else toast(data.error || 'Failed', 'error');
+  } else if (ds.a === 'withdraw') {
+    const u = USERS_CACHE.find((x) => x.id === id) || { id, email: ds.email, usd: Number(ds.usd), balance: Number(ds.kes) };
+    openInitiateWithdraw(u);
   } else if (ds.a === 'password') {
     const pw = prompt('Set a NEW password (8+ chars incl. a letter & a number). The member will be signed out everywhere:');
     if (!pw) return;
@@ -761,6 +765,77 @@ async function userAction(ds) {
   }
 }
 
+// Admin-initiated withdrawal on behalf of a client (from their profile). Holds the
+// balance now; the payout is released from the Withdrawals tab (real pay/refund flow).
+function openInitiateWithdraw(u) {
+  if (!u) return;
+  const name = u.name || u.username || u.email || 'this client';
+  const usdBal = Number(u.usd) || 0, kesBal = Number(u.balance) || 0;
+  const bg = adminModal(`
+    <button class="close">×</button>
+    <h3 style="margin:0 0 4px">Initiate withdrawal</h3>
+    <p class="p-sub">${esc(name)} · <span style="font-family:ui-monospace,monospace;font-size:12px">${esc(u.id)}</span></p>
+    <div class="wa-row"><span class="wa-row-l">Available balance</span><span class="wa-row-v">${usd(usdBal)} · ${kes(kesBal)}</span></div>
+    <form id="iwForm" style="margin-top:10px">
+      <div class="field"><label>Withdrawal method</label>
+        <select id="iwMethod" style="width:100%;${inputStyle}">
+          <option value="M-Pesa">M-Pesa (KES)</option>
+          <option value="Bank account">Bank account (USD)</option>
+          <option value="PayPal">PayPal (USD)</option>
+        </select></div>
+      <div id="iwMpesa"><div class="field"><label>M-Pesa phone number</label><input id="iwPhone" placeholder="e.g. 0712345678" style="width:100%;${inputStyle}"></div></div>
+      <div id="iwPaypal" style="display:none"><div class="field"><label>PayPal email</label><input id="iwPaypalEmail" placeholder="name@example.com" style="width:100%;${inputStyle}"></div></div>
+      <div id="iwBank" style="display:none">
+        <div class="grid g2">
+          <div class="field"><label>Account name</label><input id="iwAccName" style="width:100%;${inputStyle}"></div>
+          <div class="field"><label>Bank name</label><input id="iwBankName" style="width:100%;${inputStyle}"></div>
+        </div>
+        <div class="field"><label>Account number</label><input id="iwAccNo" style="width:100%;${inputStyle}"></div>
+      </div>
+      <div class="field"><label>Amount (<span id="iwCur">KES</span>)</label><input id="iwAmount" type="number" step="0.01" min="0" style="width:100%;${inputStyle}"></div>
+      <div class="field"><label>Admin notes (optional)</label><textarea id="iwNote" rows="2" style="width:100%;${inputStyle}" placeholder="Reason / context for this payout…"></textarea></div>
+      <p class="p-sub">This holds the amount from the client's balance now and notifies them. Release the actual payment from the <b>Withdrawals</b> tab.</p>
+      <button class="btn btn-primary" type="submit">Review &amp; initiate</button>
+    </form>`);
+  const methodEl = bg.querySelector('#iwMethod');
+  const sync = () => {
+    const m = methodEl.value;
+    bg.querySelector('#iwMpesa').style.display = m === 'M-Pesa' ? '' : 'none';
+    bg.querySelector('#iwPaypal').style.display = m === 'PayPal' ? '' : 'none';
+    bg.querySelector('#iwBank').style.display = m === 'Bank account' ? '' : 'none';
+    bg.querySelector('#iwCur').textContent = m === 'M-Pesa' ? 'KES' : 'USD';
+  };
+  methodEl.addEventListener('change', sync); sync();
+  bg.querySelector('#iwForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const method = methodEl.value;
+    const amount = Number(bg.querySelector('#iwAmount').value);
+    if (!(amount > 0)) return toast('Enter a valid amount', 'error');
+    const body = { method, amount, note: bg.querySelector('#iwNote').value.trim() };
+    let destLabel = '';
+    if (method === 'M-Pesa') { body.destination = bg.querySelector('#iwPhone').value.trim(); destLabel = body.destination; }
+    else if (method === 'PayPal') { body.destination = bg.querySelector('#iwPaypalEmail').value.trim(); destLabel = body.destination; }
+    else {
+      body.accountName = bg.querySelector('#iwAccName').value.trim();
+      body.bankName = bg.querySelector('#iwBankName').value.trim();
+      body.accountNumber = bg.querySelector('#iwAccNo').value.trim();
+      destLabel = [body.accountName, body.bankName, body.accountNumber].filter(Boolean).join(' · ');
+      body.destination = destLabel;
+    }
+    const cur = method === 'M-Pesa' ? 'KES' : 'USD';
+    if (!confirm(`Initiate a ${cur} ${amount.toLocaleString()} ${method} withdrawal for ${name}?\n\nTo: ${destLabel || '—'}\n\nThe amount is held from their balance now; you'll release payment from the Withdrawals tab.`)) return;
+    const btn = bg.querySelector('button[type="submit"]'); btn.disabled = true;
+    const { ok, data } = await api('/api/admin/users/' + u.id + '/withdraw', body);
+    if (ok) {
+      toast(data.message || 'Withdrawal initiated');
+      bg.remove();
+      TAB = 'withdrawals';
+      document.querySelectorAll('.tab').forEach((x) => x.classList.toggle('active', x.dataset.tab === TAB));
+      route();
+    } else { btn.disabled = false; toast(data.error || 'Failed', 'error'); }
+  });
+}
+
 async function tDeposits() {
   loading();
   const { data } = await apiGet('/api/admin/deposits');
@@ -805,10 +880,10 @@ async function tWithdrawals() {
   const rs = data.redemptions || [];
   const sc = (s) => (/paid/i.test(s) ? 'approved' : (s === 'Failed' ? 'rejected' : 'pending'));
   content().innerHTML = `
-    <p class="page-sub">Member withdrawals (M-Pesa, PayPal &amp; bank) — <b>all paid manually</b>. Send the money to the destination shown, then click <b>Mark paid</b>. Marking a payout <b>Failed</b> refunds the user's balance.</p>
-    <div class="panel"><table class="table">
-      <thead><tr><th>Date</th><th>User</th><th class="num">Amount</th><th>To</th><th>Status</th><th>Action</th></tr></thead>
-      <tbody>${rs.length ? rs.map((r) => `<tr><td class="p-sub">${new Date(r.createdAt).toLocaleString()}</td><td>${esc(r.user ? r.user.username : '—')}</td><td class="num">${r.currency === 'KES' ? kes(r.amount) : usd(r.amount)}</td><td class="p-sub"><b>${esc(r.method || '')}</b><br>${esc(r.destination || '—')}</td><td><span class="st ${sc(r.status)}">${esc(r.status)}</span>${r.status === 'Failed' && r.reason ? `<br><span class="p-sub">${esc(r.reason)}</span>` : ''}</td><td>${!/paid/i.test(r.status) ? `<button class="btn btn-primary auto mk" data-id="${r.id}" data-s="Paid">Approve (paid)</button> ` : ''}${r.status !== 'Failed' ? `<button class="btn btn-ghost auto mkfail" data-id="${r.id}">Reject</button>` : ''}</td></tr>`).join('') : `<tr><td colspan="6" class="p-sub">No withdrawals yet.</td></tr>`}</tbody>
+    <p class="page-sub">Member &amp; admin-initiated withdrawals (M-Pesa, PayPal &amp; bank) — <b>all paid manually</b>. Send the money to the destination shown, then click <b>Mark paid</b>. Marking a payout <b>Failed</b> refunds the user's balance.</p>
+    <div class="panel" style="overflow-x:auto"><table class="table">
+      <thead><tr><th>Date</th><th>User</th><th class="num">Amount</th><th>To</th><th>Initiated by</th><th>Status</th><th>Action</th></tr></thead>
+      <tbody>${rs.length ? rs.map((r) => `<tr><td class="p-sub">${new Date(r.createdAt).toLocaleString()}</td><td>${esc(r.user ? r.user.username : '—')}</td><td class="num">${r.currency === 'KES' ? kes(r.amount) : usd(r.amount)}</td><td class="p-sub"><b>${esc(r.method || '')}</b><br>${esc(r.destination || '—')}</td><td class="p-sub">${r.initiatedBy ? `<b>Admin</b> (${esc(r.initiatedBy)})${r.adminNote ? `<br><span class="p-sub">${esc(r.adminNote)}</span>` : ''}` : 'Client'}</td><td><span class="st ${sc(r.status)}">${esc(r.status)}</span>${r.status === 'Failed' && r.reason ? `<br><span class="p-sub">${esc(r.reason)}</span>` : ''}</td><td>${!/paid/i.test(r.status) ? `<button class="btn btn-primary auto mk" data-id="${r.id}" data-s="Paid">Approve (paid)</button> ` : ''}${r.status !== 'Failed' ? `<button class="btn btn-ghost auto mkfail" data-id="${r.id}">Reject</button>` : ''}</td></tr>`).join('') : `<tr><td colspan="7" class="p-sub">No withdrawals yet.</td></tr>`}</tbody>
     </table></div>`;
   content().querySelectorAll('.mk').forEach((b) => b.addEventListener('click', () => openWithdrawPaid(rs.find((r) => r.id === b.dataset.id))));
   content().querySelectorAll('.mkfail').forEach((b) => b.addEventListener('click', () => openWithdrawReject(b.dataset.id)));
