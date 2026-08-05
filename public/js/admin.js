@@ -1,6 +1,9 @@
 /* Gweno admin panel, standalone page, admins only. Uses /js/auth.js (api). */
 let ADMIN = null;
 let TAB = 'overview';
+let ROLE = 'admin';   // 'admin' (full) or 'finance' (money operations only)
+// Tabs a finance user may see (money operations only).
+const FINANCE_TABS = ['overview', 'users', 'withdrawals', 'deposits', 'investments'];
 
 const usd = (n) => '$' + (Number(n) || 0).toFixed(2);
 const kes = (n) => Math.round(Number(n) || 0).toLocaleString() + ' KES';
@@ -43,6 +46,8 @@ function toggleTheme() {
 async function boot() {
   const r = await apiGet('/api/admin/session');
   if (!r.data.authed) { renderLogin(!r.data.configured); return; }
+  ROLE = r.data.role || 'admin';
+  if (ROLE === 'finance' && !FINANCE_TABS.includes(TAB)) TAB = 'overview';
   renderShell();
   route();
 }
@@ -52,9 +57,9 @@ function renderLogin(notConfigured) {
     <div style="min-height:100vh;display:grid;place-items:center;padding:20px">
       <div class="panel" style="width:100%;max-width:380px">
         <a class="brand" href="/admin.html" style="display:inline-flex;margin-bottom:10px"><span class="dot"></span> gweno <span style="font-size:13px;color:var(--muted)">· admin</span></a>
-        <h3 style="margin:2px 0">Admin sign-in</h3>
-        <p class="p-sub">Private access, this is not a client account.</p>
-        ${notConfigured ? `<p class="msg error show" style="display:block">Set ADMIN_USERNAME and ADMIN_PASSWORD in .env, then restart.</p>` : ''}
+        <h3 style="margin:2px 0">Staff sign-in</h3>
+        <p class="p-sub">Private access for admin & finance — not a client account.</p>
+        ${notConfigured ? `<p class="msg error show" style="display:block">Set ADMIN_USERNAME and ADMIN_PASSWORD (and optionally FINANCE_USERNAME/FINANCE_PASSWORD) in .env, then restart.</p>` : ''}
         <div class="msg" id="msg"></div>
         <form id="loginForm">
           <div class="field"><label>Username</label><input id="username" autocomplete="username"></div>
@@ -76,9 +81,10 @@ function renderLogin(notConfigured) {
 }
 
 function renderShell() {
+  const tabs = ROLE === 'finance' ? TABS.filter(([k]) => FINANCE_TABS.includes(k)) : TABS;
   document.getElementById('app').innerHTML = `
     <header class="topbar">
-      <a class="brand" href="/admin.html"><span class="dot"></span> gweno <span style="font-size:13px;color:var(--muted)">· admin</span></a>
+      <a class="brand" href="/admin.html"><span class="dot"></span> gweno <span style="font-size:13px;color:var(--muted)">· ${ROLE === 'finance' ? 'finance' : 'admin'}</span></a>
       <div class="top-right">
         <button class="theme-toggle" id="themeBtn" title="Toggle dark mode" aria-label="Toggle dark mode">${curTheme() === 'dark' ? THEME_ICONS.sun : THEME_ICONS.moon}</button>
         <a class="btn btn-ghost auto" href="/" target="_blank">View site</a>
@@ -86,7 +92,8 @@ function renderShell() {
       </div>
     </header>
     <main class="view">
-      <div class="tabs" id="tabs">${TABS.map(([k, l]) => `<button class="tab ${k === TAB ? 'active' : ''}" data-tab="${k}">${l}</button>`).join('')}</div>
+      ${ROLE === 'finance' ? `<p class="p-sub" style="margin:0 0 10px">Signed in as <b>finance</b> — you can initiate and release payouts, and view deposits & investments.</p>` : ''}
+      <div class="tabs" id="tabs">${tabs.map(([k, l]) => `<button class="tab ${k === TAB ? 'active' : ''}" data-tab="${k}">${l}</button>`).join('')}</div>
       <div id="content"></div>
     </main>`;
   document.getElementById('signout').addEventListener('click', async () => { await api('/api/admin/logout', {}); boot(); });
@@ -108,6 +115,7 @@ const loading = () => { content().innerHTML = `
   </div>`; };
 
 function route() {
+  if (ROLE === 'finance' && !FINANCE_TABS.includes(TAB)) TAB = 'overview';
   ({ overview: tOverview, submissions: tSubmissions, applications: tApplications, share: tShareReview, emails: tEmails, audit: tAudit, users: tUsers, rewards: tRewards, sendemail: tSendEmail, broadcast: tBroadcast, investments: tInvestments, deposits: tDeposits, withdrawals: tWithdrawals, support: tSupport }[TAB] || tOverview)();
 }
 
@@ -398,16 +406,17 @@ function renderUsersTable() {
     <td>${badges(u)}</td>
     <td><div style="display:flex;gap:6px;flex-wrap:wrap">
       <button class="btn btn-ghost auto uview" data-id="${u.id}">View</button>
+      ${act('withdraw', u, 'Initiate withdrawal')}
+      ${ROLE === 'finance' ? '' : `
       <button class="btn btn-ghost auto uemail" data-id="${u.id}">Email</button>
       <button class="btn btn-primary auto udetails" data-id="${u.id}">Edit</button>
       ${act('suspend', u, u.suspended ? 'Reactivate' : 'Suspend')}
       ${act('hold', u, u.held ? 'Release hold' : 'Hold')}
       ${act('balance', u, 'Balance')}
-      ${act('withdraw', u, 'Initiate withdrawal')}
       ${act('plan', u, 'Change plan', ' data-plan="' + esc(u.planId || 'none') + '"')}
       ${act('password', u, 'Reset password')}
       ${act('gamify', u, 'XP / Badges')}
-      ${act('delete', u, 'Delete', ' style="border-color:var(--danger);color:#c0143c"')}
+      ${act('delete', u, 'Delete', ' style="border-color:var(--danger);color:#c0143c"')}`}
     </div></td>
   </tr>`).join('') || `<tr><td colspan="8" class="p-sub">No users match your search.</td></tr>`;
   document.getElementById('uPager').innerHTML = `
@@ -844,7 +853,7 @@ async function tDeposits() {
   content().innerHTML = `
     <p class="page-sub">Wallet top-ups (M-Pesa STK &amp; other methods).</p>
 
-    <div class="panel">
+    ${ROLE === 'finance' ? '' : `<div class="panel">
       <h3>M-Pesa STK diagnostics</h3>
       <p class="p-sub">Check that STK Push is correctly configured, then send a KES 1 test prompt to your own phone.</p>
       <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:12px">
@@ -853,25 +862,27 @@ async function tDeposits() {
         <button class="btn btn-primary auto" id="mpTest">Send KES 1 test STK</button>
       </div>
       <pre id="mpOut" style="white-space:pre-wrap;background:var(--bg-2);border:1px solid var(--line);border-radius:10px;padding:12px;font-size:13px;margin:0;display:none"></pre>
-    </div>
+    </div>`}
 
     <div class="panel"><table class="table">
       <thead><tr><th>Date</th><th>User</th><th class="num">Amount</th><th>Method</th><th>Details</th><th>Status</th><th>Ref</th></tr></thead>
       <tbody>${deps.length ? deps.map((d) => `<tr><td class="p-sub">${new Date(d.createdAt).toLocaleString()}</td><td>${esc(d.user ? d.user.username : '—')}</td><td class="num">${d.currency === 'USD' ? usd(d.amount) : kes(d.amount)}</td><td>${esc(d.method || 'M-Pesa')}</td><td class="p-sub">${esc(d.phone || d.details || '—')}</td><td><span class="st ${sc(d.status)}">${esc(d.status)}${d.demo ? ' (demo)' : ''}</span></td><td class="p-sub">${esc(d.reference || '')}</td></tr>`).join('') : `<tr><td colspan="7" class="p-sub">No deposits yet.</td></tr>`}</tbody>
     </table></div>`;
 
-  const out = document.getElementById('mpOut');
-  const show = (obj, isErr) => { out.style.display = 'block'; out.style.color = isErr ? 'var(--danger)' : 'var(--text)'; out.textContent = typeof obj === 'string' ? obj : JSON.stringify(obj, null, 2); };
-  document.getElementById('mpDiag').addEventListener('click', async () => {
-    show('Checking…');
-    const { ok, data: d } = await apiGet('/api/admin/mpesa/diagnose');
-    show(d, !ok || (d.oauth && !d.oauth.ok));
-  });
-  document.getElementById('mpTest').addEventListener('click', async () => {
-    show('Sending test STK…');
-    const { ok, data: d } = await api('/api/admin/mpesa/test-stk', { phone: document.getElementById('mpPhone').value });
-    show(ok ? d : (d.error || 'Failed'), !ok);
-  });
+  if (ROLE !== 'finance') {
+    const out = document.getElementById('mpOut');
+    const show = (obj, isErr) => { out.style.display = 'block'; out.style.color = isErr ? 'var(--danger)' : 'var(--text)'; out.textContent = typeof obj === 'string' ? obj : JSON.stringify(obj, null, 2); };
+    document.getElementById('mpDiag').addEventListener('click', async () => {
+      show('Checking…');
+      const { ok, data: d } = await apiGet('/api/admin/mpesa/diagnose');
+      show(d, !ok || (d.oauth && !d.oauth.ok));
+    });
+    document.getElementById('mpTest').addEventListener('click', async () => {
+      show('Sending test STK…');
+      const { ok, data: d } = await api('/api/admin/mpesa/test-stk', { phone: document.getElementById('mpPhone').value });
+      show(ok ? d : (d.error || 'Failed'), !ok);
+    });
+  }
 }
 
 async function tWithdrawals() {
@@ -961,13 +972,13 @@ async function tInvestments() {
       <div class="stat"><div class="label">Plans</div><div class="value">${plans.length}</div></div>
     </div>
 
-    <div class="panel">
+    ${ROLE === 'finance' ? '' : `<div class="panel">
       <h3>Interest settings</h3>
       <p class="p-sub">Annual rate per plan (0–100%). Changes apply to <b>new</b> investments only, existing ones keep the rate they opened at.</p>
       <form id="rateForm"><div class="grid g3">
         ${plans.map((p) => `<div class="field"><label>${esc(p.name)}</label><input type="number" min="0" max="100" step="0.1" data-plan="${esc(p.id)}" value="${rates[p.id] != null ? rates[p.id] : p.rate}"></div>`).join('')}
       </div><button class="btn btn-primary" type="submit">Save changes</button></form>
-    </div>
+    </div>`}
 
     <div class="panel"><h3>All investments</h3><table class="table">
       <thead><tr><th>ID</th><th>Investor</th><th>Plan</th><th class="num">Principal</th><th class="num">Rate</th><th class="num">Return</th><th>Maturity</th><th>Status</th></tr></thead>
@@ -983,7 +994,8 @@ async function tInvestments() {
       </tr>`).join('') : `<tr><td colspan="8" class="p-sub">No investments yet.</td></tr>`}</tbody>
     </table></div>`;
 
-  document.getElementById('rateForm').addEventListener('submit', async (e) => {
+  const rateForm = document.getElementById('rateForm');
+  if (rateForm) rateForm.addEventListener('submit', async (e) => {
     e.preventDefault();
     const body = {};
     document.querySelectorAll('#rateForm input[data-plan]').forEach((el) => { body[el.dataset.plan] = el.value; });
