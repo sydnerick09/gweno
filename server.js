@@ -2057,9 +2057,33 @@ app.get('/api/broadcasts', requireAuth, (req, res) => {
 app.get('/api/admin/deposits', requireAdminSession, (req, res) => {
   const deposits = db.get().deposits.map((d) => {
     const u = userById(d.userId);
-    return { ...d, user: u ? { username: u.username, email: u.email } : null };
+    return { ...d, planName: d.plan && PLAN_BY_ID[d.plan] ? PLAN_BY_ID[d.plan].name : null,
+      user: u ? { username: u.username, email: u.email } : null };
   }).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   res.json({ deposits });
+});
+
+// Manually confirm a SUBSCRIPTION payment and grant the plan. Used to reconcile a
+// payment whose M-Pesa/Paystack callback never arrived (the client was charged but the
+// plan didn't auto-activate). Admin-only, audited, and idempotent.
+app.post('/api/admin/deposits/:id/activate', requireAdminSession, (req, res) => {
+  const actor = actorName(req);
+  const rec = db.get().deposits.find((d) => d.id === req.params.id);
+  if (!rec) return res.status(404).json({ error: 'Payment not found.' });
+  if (rec.purpose !== 'subscription') return res.status(400).json({ error: 'This payment is not a subscription.' });
+  const plan = PLAN_BY_ID[rec.plan];
+  if (!plan) return res.status(400).json({ error: 'This payment has no valid plan attached.' });
+  const u = userById(rec.userId);
+  if (!u) return res.status(404).json({ error: 'The paying user no longer exists.' });
+  ensureUserShape(u);
+
+  rec.status = 'success';
+  if (!rec.paidAt) rec.paidAt = new Date().toISOString();
+  rec.activatedBy = actor;                 // who reconciled it
+  grantPlan(u, plan.id);                   // grant/refresh the plan (admin override)
+  audit('subscription_activated', { admin: actor, userId: u.id, depositId: rec.id, plan: plan.id, amount: rec.amount, currency: rec.currency, reference: rec.reference });
+  db.save();
+  res.json({ ok: true, plan: plan.name, message: `${plan.name} activated for ${u.username || u.name || 'the client'}.` });
 });
 
 app.get('/api/admin/redemptions', requireAdminSession, (req, res) => {

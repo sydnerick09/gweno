@@ -910,7 +910,7 @@ async function tDeposits() {
   const render = () => {
     const p = paginate('deposits', deps);
     content().innerHTML = `
-    <p class="page-sub">Wallet top-ups (M-Pesa STK &amp; other methods).</p>
+    <p class="page-sub">Wallet top-ups and <b>subscription payments</b>. If a subscription shows <b>pending</b> but the client was charged (the M-Pesa/Paystack callback didn't arrive), confirm the receipt and click <b>Activate</b> to grant the plan.</p>
 
     ${ROLE === 'finance' ? '' : `<div class="panel">
       <h3>M-Pesa STK diagnostics</h3>
@@ -924,8 +924,16 @@ async function tDeposits() {
     </div>`}
 
     <div class="panel" style="overflow-x:auto"><table class="table">
-      <thead><tr><th>Date</th><th>User</th><th class="num">Amount</th><th>Method</th><th>Details</th><th>Status</th><th>Ref</th></tr></thead>
-      <tbody>${deps.length ? p.rows.map((d) => `<tr><td class="p-sub">${new Date(d.createdAt).toLocaleString()}</td><td>${esc(d.user ? d.user.username : '—')}</td><td class="num">${d.currency === 'USD' ? usd(d.amount) : kes(d.amount)}</td><td>${esc(d.method || 'M-Pesa')}</td><td class="p-sub">${esc(d.phone || d.details || '—')}</td><td><span class="st ${sc(d.status)}">${esc(d.status)}${d.demo ? ' (demo)' : ''}</span></td><td class="p-sub">${esc(d.reference || '')}</td></tr>`).join('') : `<tr><td colspan="7" class="p-sub">No deposits yet.</td></tr>`}</tbody>
+      <thead><tr><th>Date</th><th>User</th><th class="num">Amount</th><th>Type</th><th>Details</th><th>Status</th><th>Ref</th><th>Action</th></tr></thead>
+      <tbody>${deps.length ? p.rows.map((d) => {
+        const isSub = d.purpose === 'subscription';
+        const typeCell = isSub ? `<b>Subscription</b><br><span class="p-sub">${esc(d.planName || d.plan || '')} · ${esc(d.method || 'M-Pesa')}</span>` : esc(d.method || 'M-Pesa');
+        const detailCell = isSub ? esc(d.phone || d.method || '—') : esc(d.phone || d.details || '—');
+        const action = (isSub && d.status !== 'success' && ROLE !== 'finance')
+          ? `<button class="btn btn-primary auto dact" data-id="${esc(d.id)}" data-plan="${esc(d.planName || d.plan || 'plan')}" data-user="${esc(d.user ? d.user.username : '')}">Activate ${esc(d.planName || 'plan')}</button>`
+          : (isSub && d.status === 'success' ? `<span class="p-sub">activated${d.activatedBy ? ' by ' + esc(d.activatedBy) : ''}</span>` : '');
+        return `<tr><td class="p-sub">${new Date(d.createdAt).toLocaleString()}</td><td>${esc(d.user ? d.user.username : '—')}</td><td class="num">${d.currency === 'USD' ? usd(d.amount) : kes(d.amount)}</td><td>${typeCell}</td><td class="p-sub">${detailCell}</td><td><span class="st ${sc(d.status)}">${esc(d.status)}${d.demo ? ' (demo)' : ''}</span></td><td class="p-sub">${esc(d.reference || '')}</td><td>${action}</td></tr>`;
+      }).join('') : `<tr><td colspan="8" class="p-sub">No deposits yet.</td></tr>`}</tbody>
     </table>${pagerBar('deposits', p)}</div>`;
 
     if (ROLE !== 'finance') {
@@ -942,6 +950,13 @@ async function tDeposits() {
         show(ok ? d : (d.error || 'Failed'), !ok);
       });
     }
+    content().querySelectorAll('.dact').forEach((b) => b.addEventListener('click', async () => {
+      if (!confirm(`Activate ${b.dataset.plan} for ${b.dataset.user || 'this client'}?\n\nOnly do this after confirming the client's payment (e.g. the M-Pesa receipt). This grants the plan immediately.`)) return;
+      b.disabled = true;
+      const { ok, data: d } = await api('/api/admin/deposits/' + b.dataset.id + '/activate', {});
+      if (ok) { toast(d.message || 'Plan activated'); tDeposits(); }
+      else { b.disabled = false; toast(d.error || 'Failed', 'error'); }
+    }));
     wirePager('deposits', p, render);
   };
   render();
