@@ -203,6 +203,34 @@ app.use('/api', (req, res, next) => {
   next();
 });
 
+// ---- Security headers (Safe Browsing hardening + anti-clickjacking/phishing) ----
+// Applied to every response, including static pages. The phishing-relevant directives
+// are strict: form-action 'self' (credentials can only post to our own backend),
+// frame-ancestors 'self' (the login page can't be embedded/clickjacked), object-src
+// 'none' and base-uri 'self'. Source lists stay https-permissive so first-party inline
+// code, Google Fonts, Turnstile and ads keep working.
+app.use((req, res, next) => {
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('X-Frame-Options', 'SAMEORIGIN');
+  res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+  res.setHeader('Permissions-Policy', 'geolocation=(), camera=(), microphone=(), payment=()');
+  res.setHeader('Strict-Transport-Security', 'max-age=63072000; includeSubDomains; preload');
+  res.setHeader('Content-Security-Policy', [
+    "default-src 'self'",
+    "base-uri 'self'",
+    "object-src 'none'",
+    "frame-ancestors 'self'",
+    "form-action 'self'",
+    "img-src 'self' data: https:",
+    "font-src 'self' https: data:",
+    "style-src 'self' 'unsafe-inline' https:",
+    "connect-src 'self' https:",
+    "script-src 'self' 'unsafe-inline' 'unsafe-eval' https:",
+    "frame-src 'self' https:",
+  ].join('; '));
+  next();
+});
+
 app.use(express.static(path.join(__dirname, 'public')));
 
 // Kick off storage init once (works both as a long-running server and on serverless).
@@ -246,6 +274,8 @@ app.use(async (req, res, next) => {
   S.investmentRates = S.investmentRates || {}; // admin per-plan interest-rate overrides
   S.adminEmails = S.adminEmails || []; // admin-sent emails (individual + broadcast) history
   S.botPool = S.botPool || []; // persistent generated/demo users (one displayName reused everywhere)
+  S.taskExtra = S.taskExtra || []; // dynamically generated replacement tasks (single-use pool)
+  if (S.taskSeq == null) S.taskSeq = 0;
 })();
 
 // One-time backfill: award XP/badges/levels for activity that happened before the
@@ -331,6 +361,39 @@ function canAccessTask(u, task) {
   if (task && task.tier === 'free') return true;
   const need = PLAN_BY_ID[task.tier] ? PLAN_BY_ID[task.tier].rank : 99;
   return userRank(u) >= need;
+}
+
+// ---- Single-use task pool (paid catalog + dynamically generated replacements) ----
+// Every paid task can be completed only ONCE across the whole platform. When a task is
+// approved it stays "consumed" (its approved submission hides it) and a fresh task in the
+// same category is generated, so the number of available tasks stays roughly constant.
+const staticTaskById = tasksMod.byId;                       // static catalog + free pool
+function serverTaskById(id) { return staticTaskById(id) || (db.get().taskExtra || []).find((t) => t.id === id) || null; }
+function activeTaskPool() { return [...TASKS, ...(db.get().taskExtra || [])]; } // paid catalog only
+// Task ids that ANY member has claimed (pending) or completed (approved) — unavailable to all.
+function globallyClaimedTaskIds() {
+  const set = new Set();
+  for (const x of (db.get().submissions || [])) if (x.status === 'pending' || x.status === 'approved') set.add(x.taskId);
+  return set;
+}
+// Clone a fresh single-use task in `category` (keeps realistic content from a template).
+function generateReplacementTask(category) {
+  const s = db.get();
+  s.taskExtra = s.taskExtra || [];
+  s.taskSeq = (s.taskSeq || 0) + 1;
+  const templates = TASKS.filter((t) => t.category === category && t.tier !== 'free');
+  const src = templates.length ? templates : TASKS;
+  const base = src[Math.floor(Math.random() * src.length)];
+  const clone = { ...base, id: 'G' + String(s.taskSeq).padStart(4, '0'), generated: true, createdAt: new Date().toISOString() };
+  s.taskExtra.push(clone);
+  // Keep the dynamic pool bounded: all still-available tasks + the most recent consumed ones.
+  if (s.taskExtra.length > 1000) {
+    const claimed = globallyClaimedTaskIds();
+    const avail = s.taskExtra.filter((t) => !claimed.has(t.id));
+    const consumedRecent = s.taskExtra.filter((t) => claimed.has(t.id)).slice(-300);
+    s.taskExtra = consumedRecent.concat(avail);
+  }
+  return clone;
 }
 const grantPlan = (u, id) => {
   const iso = new Date().toISOString();
@@ -763,7 +826,7 @@ app.get('/api/public/activity', (req, res) => {
     .slice(0, 8)
     .map((x) => {
       const u = userById(x.userId);
-      const t = tasksMod.byId(x.taskId);
+      const t = serverTaskById(x.taskId);
       return {
         username: u ? u.username : 'member',
         country: (u && u.profile && u.profile.country) || '',
@@ -1348,27 +1411,30 @@ function mySubmissions(userId) {
 app.get('/api/tasks', requireAuth, (req, res) => {
   const plan = activePlan(req.user);
   const mine = mySubmissions(req.user.id);
-  // Hide tasks that are pending or approved; rejected ones can be retried.
-  const done = new Set(mine.filter((x) => x.status !== 'rejected' && x.status !== 'correction').map((x) => x.taskId));
+  // #2 — Single-use: a paid task that ANY member has claimed (pending) or completed
+  // (approved) is unavailable to everyone. This guarantees each task is done only once.
+  const claimed = globallyClaimedTaskIds();
   // Held accounts don't receive new tasks until an admin restores them.
-  let available = (req.user.held ? [] : TASKS.filter((t) => !done.has(t.id))).map((t) => ({
+  let available = (req.user.held ? [] : activeTaskPool().filter((t) => !claimed.has(t.id))).map((t) => ({
     ...t,
     requiredPlan: PLAN_BY_ID[t.tier] ? PLAN_BY_ID[t.tier].name : t.tier,
     locked: !canAccessTask(req.user, t),
     workers: taskWorkers(t.id),   // people currently working on this task (live, synthetic)
   }));
-  // No-plan users get exactly ONE free task (Easy, $0.40). When it's done the next
-  // one from the finite pool appears; the paid catalog below stays locked as a preview.
+  // #1 — A no-plan (free) user gets exactly ONE free task. After they submit it, it's
+  // "pending"; once you approve it they're locked out of tasks until they subscribe.
   const noPlan = userRank(req.user) === 0;
   let free = null;
   if (!req.user.held && noPlan) {
-    const ft = nextFreeTask(req.user);
-    if (ft) {
-      const card = { ...ft, requiredPlan: 'Free', locked: false, workers: taskWorkers(ft.id) };
-      available = [card, ...available];
-      free = { active: true, exhausted: false, remaining: freeTasksRemaining(req.user), reward: 0.40 };
+    const freeSubs = mine.filter((x) => typeof x.taskId === 'string' && x.taskId[0] === 'F');
+    if (freeSubs.some((x) => x.status === 'approved')) {
+      free = { active: true, state: 'completed', reward: 0.40 };            // done -> must subscribe
+    } else if (freeSubs.some((x) => x.status === 'pending' || x.status === 'correction')) {
+      free = { active: true, state: 'pending', reward: 0.40 };              // under review
     } else {
-      free = { active: true, exhausted: true, remaining: 0, reward: 0.40 };
+      const ft = nextFreeTask(req.user);                                    // their single free task
+      if (ft) { available = [{ ...ft, requiredPlan: 'Free', locked: false, workers: taskWorkers(ft.id) }, ...available]; free = { active: true, state: 'available', reward: 0.40 }; }
+      else { free = { active: true, state: 'completed', reward: 0.40 }; }
     }
   }
   const accessible = available.filter((t) => !t.locked);
@@ -1395,7 +1461,7 @@ app.get('/api/tasks', requireAuth, (req, res) => {
 });
 
 app.get('/api/tasks/:id', requireAuth, (req, res) => {
-  const task = tasksMod.byId(req.params.id);
+  const task = serverTaskById(req.params.id);
   if (!task) return res.status(404).json({ error: 'Task not found.' });
   const sub = mySubmissions(req.user.id).find((x) => x.taskId === task.id && x.status !== 'rejected');
   const requiredPlan = PLAN_BY_ID[task.tier] ? PLAN_BY_ID[task.tier].name : task.tier;
@@ -1403,7 +1469,7 @@ app.get('/api/tasks/:id', requireAuth, (req, res) => {
 });
 
 app.post('/api/tasks/:id/submit', requireAuth, (req, res) => {
-  const task = tasksMod.byId(req.params.id);
+  const task = serverTaskById(req.params.id);
   if (!task) return res.status(404).json({ error: 'Task not found.' });
   if (req.user.held) return res.status(403).json({ error: 'Your account is on hold. Task submissions are paused until an admin restores your account.' });
   // Plan gate — enforced server-side so it can't be bypassed by editing the request.
@@ -1421,6 +1487,16 @@ app.post('/api/tasks/:id/submit', requireAuth, (req, res) => {
   const S = db.get();
   if (mySubmissions(req.user.id).some((x) => x.taskId === task.id && x.status !== 'rejected' && x.status !== 'correction')) {
     return res.status(409).json({ error: 'You have already submitted this task.' });
+  }
+  // #1 — a no-plan member gets exactly ONE free task total.
+  if (task.tier === 'free' && userRank(req.user) === 0
+      && mySubmissions(req.user.id).some((x) => typeof x.taskId === 'string' && x.taskId[0] === 'F' && x.status !== 'rejected')) {
+    return res.status(403).json({ error: 'You have completed your free task. Subscribe to a plan to work on more tasks.', code: 'free_used' });
+  }
+  // #2 — single-use: block if another member has already claimed or completed this task.
+  if (task.tier !== 'free'
+      && S.submissions.some((x) => x.taskId === task.id && (x.status === 'pending' || x.status === 'approved') && x.userId !== req.user.id)) {
+    return res.status(409).json({ error: 'This task was just taken by another member. Please pick another task.', code: 'task_taken' });
   }
   // Daily limit: a member can do TASKS_PER_DAY tasks per day.
   const todayUTC = new Date().toISOString().slice(0, 10);
@@ -1445,7 +1521,7 @@ app.post('/api/tasks/:id/submit', requireAuth, (req, res) => {
 
 app.get('/api/submissions', requireAuth, (req, res) => {
   const mine = mySubmissions(req.user.id)
-    .map((x) => ({ ...x, task: tasksMod.byId(x.taskId) }))
+    .map((x) => ({ ...x, task: serverTaskById(x.taskId) }))
     .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   res.json({ submissions: mine });
 });
@@ -1469,7 +1545,7 @@ app.get('/api/admin/submissions', requireAdminSession, (req, res) => {
   const all = db.get().submissions
     .map((x) => {
       const u = userById(x.userId);
-      return { ...x, task: tasksMod.byId(x.taskId), user: u ? { username: u.username, email: u.email } : null };
+      return { ...x, task: serverTaskById(x.taskId), user: u ? { username: u.username, email: u.email } : null };
     })
     .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   res.json({ submissions: all });
@@ -1566,10 +1642,20 @@ app.post('/api/admin/submissions/:id/decision', requireAdminSession, async (req,
   sub.status = decision;
   sub.reviewedAt = new Date().toISOString();
   sub.reviewNote = note;
+  // #3 — On approval the paid task is consumed (its approved submission hides it from
+  // everyone). Generate a fresh single-use replacement in the SAME category to keep the
+  // number of available tasks constant. (Free tasks 'F…' are per-user, not replaced here.)
+  if (decision === 'approved' && !wasApproved) {
+    const t = serverTaskById(sub.taskId);
+    if (t && (sub.taskId[0] === 'T' || sub.taskId[0] === 'G')) {
+      const nt = generateReplacementTask(t.category);
+      audit('task_replaced', { admin: ADMIN_USERNAME, approvedTaskId: sub.taskId, newTaskId: nt.id, category: t.category });
+    }
+  }
   audit('submission_' + decision, { admin: ADMIN_USERNAME, userId: sub.userId, taskId: sub.taskId, submissionId: sub.id, amount: decision === 'approved' ? round2(sub.reward) : 0 });
   db.save();  // commit the decision + balance BEFORE emailing (email failure never rolls back)
 
-  const emailRec = await notifyDecision(sub, owner, tasksMod.byId(sub.taskId));
+  const emailRec = await notifyDecision(sub, owner, serverTaskById(sub.taskId));
   res.json({ ok: true, submission: sub, email: { status: emailRec.status, error: emailRec.error } });
 });
 
@@ -1577,7 +1663,7 @@ app.post('/api/admin/submissions/:id/decision', requireAdminSession, async (req,
 app.get('/api/admin/emails', requireAdminSession, (req, res) => {
   const log = (db.get().emailLog || []).map((e) => {
     const u = userById(e.userId);
-    const t = tasksMod.byId(e.taskId);
+    const t = serverTaskById(e.taskId);
     return { ...e, username: u ? u.username : null, taskTitle: t ? t.title : e.taskId };
   });
   res.json({ emails: log });
@@ -1589,12 +1675,12 @@ app.post('/api/admin/emails/:id/resend', requireAdminSession, async (req, res) =
   if (rec.applicationId) {
     const appRec = (db.get().applications || []).find((a) => a.id === rec.applicationId);
     if (!appRec) return res.status(404).json({ error: 'Original application no longer exists.' });
-    const fresh = await notifyApplication(appRec, userById(appRec.userId), tasksMod.byId(appRec.taskId));
+    const fresh = await notifyApplication(appRec, userById(appRec.userId), serverTaskById(appRec.taskId));
     return res.json({ ok: true, email: { status: fresh.status, error: fresh.error } });
   }
   const sub = db.get().submissions.find((x) => x.id === rec.submissionId);
   if (!sub) return res.status(404).json({ error: 'Original submission no longer exists.' });
-  const fresh = await notifyDecision(sub, userById(sub.userId), tasksMod.byId(sub.taskId));
+  const fresh = await notifyDecision(sub, userById(sub.userId), serverTaskById(sub.taskId));
   res.json({ ok: true, email: { status: fresh.status, error: fresh.error } });
 });
 
@@ -1604,13 +1690,13 @@ app.post('/api/admin/emails/:id/resend', requireAdminSession, async (req, res) =
 app.get('/api/applications', requireAuth, requirePlan, (req, res) => {
   const mine = (db.get().applications || [])
     .filter((a) => a.userId === req.user.id)
-    .map((a) => ({ ...a, task: tasksMod.byId(a.taskId) }))
+    .map((a) => ({ ...a, task: serverTaskById(a.taskId) }))
     .sort((x, y) => String(y.createdAt).localeCompare(String(x.createdAt)));
   res.json({ applications: mine });
 });
 
 app.post('/api/tasks/:id/apply', requireAuth, (req, res) => {
-  const task = tasksMod.byId(req.params.id);
+  const task = serverTaskById(req.params.id);
   if (!task) return res.status(404).json({ error: 'Task not found.' });
   if (!canAccessTask(req.user, task)) {
     return res.status(403).json({ error: 'Upgrade your subscription to access higher-paying tasks.' });
@@ -1636,7 +1722,7 @@ app.get('/api/admin/applications', requireAdminSession, (req, res) => {
   const all = (db.get().applications || [])
     .map((a) => {
       const u = userById(a.userId);
-      return { ...a, task: tasksMod.byId(a.taskId), user: u ? { username: u.username, email: u.email } : null };
+      return { ...a, task: serverTaskById(a.taskId), user: u ? { username: u.username, email: u.email } : null };
     })
     .sort((x, y) => String(y.createdAt).localeCompare(String(x.createdAt)));
   res.json({ applications: all });
@@ -1653,7 +1739,7 @@ app.post('/api/admin/applications/:id/decision', requireAdminSession, async (req
   appRec.reviewNote = note;
   audit('application_' + decision, { admin: ADMIN_USERNAME, userId: appRec.userId, taskId: appRec.taskId, applicationId: appRec.id });
   db.save();
-  const emailRec = await notifyApplication(appRec, userById(appRec.userId), tasksMod.byId(appRec.taskId));
+  const emailRec = await notifyApplication(appRec, userById(appRec.userId), serverTaskById(appRec.taskId));
   res.json({ ok: true, application: appRec, email: { status: emailRec.status, error: emailRec.error } });
 });
 
@@ -2594,6 +2680,23 @@ app.post('/api/paystack/webhook', (req, res) => {
       rec.resultAt = new Date().toISOString();
       db.save();
     }
+  } else if (evt.event === 'charge.success') {
+    // Incoming payment confirmed by Paystack — activate the subscription / credit the top-up
+    // even if the buyer closed the tab before the return redirect. Idempotent: only acts while
+    // the record is still pending, so it can never activate or credit twice.
+    const ref = evt.data && evt.data.reference;
+    const rec = db.get().deposits.find((d) => d.reference === ref);
+    if (rec && rec.status === 'pending') {
+      rec.status = 'success'; rec.paidAt = new Date().toISOString();
+      const u = userById(rec.userId);
+      if (u) {
+        ensureUserShape(u);
+        if (rec.purpose === 'subscription') grantPlan(u, rec.plan || 'premium');
+        else u.usd = round2((u.usd || 0) + (rec.amount || 0)); // Paystack top-ups are in USD
+      }
+      audit('paystack_charge_success', { reference: ref, userId: rec.userId, purpose: rec.purpose || 'deposit', plan: rec.plan || null, amount: rec.amount });
+      db.save();
+    }
   }
   res.json({ received: true });
 });
@@ -2841,7 +2944,7 @@ app.post('/api/subscribe/manual', requireAuth, async (req, res) => {
   const priceUSD = round2(plan.priceKES / FX_KES_PER_USD);
   const ref = 'sub_' + rid(10);
   const rec = {
-    id: rid(8), userId: req.user.id, amount: priceUSD, currency: 'USD', reference: ref,
+    id: rid(8), userId: req.user.id, email: req.user.email, amount: priceUSD, currency: 'USD', reference: ref,
     purpose: 'subscription', plan: plan.id, method, status: 'pending', createdAt: new Date().toISOString(), paidAt: null, provider: null, error: null,
   };
   db.get().deposits.push(rec);

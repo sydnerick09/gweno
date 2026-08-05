@@ -77,17 +77,6 @@ function routeAfterAuth(user) {
   window.location.href = user && user.onboarded ? '/app.html#/dashboard' : '/onboarding.html';
 }
 
-/* Real OAuth: hand off to the provider via the server /start endpoint, carrying
-   the referral code and this device's id so the callback can apply both. */
-async function socialLogin(provider) {
-  const ref = new URLSearchParams(location.search).get('ref') || '';
-  const deviceId = await getDeviceId();
-  const q = new URLSearchParams();
-  if (ref) q.set('ref', ref);
-  if (deviceId) q.set('deviceId', deviceId);
-  window.location.href = `/api/oauth/${provider}/start${q.toString() ? '?' + q.toString() : ''}`;
-}
-
 /* Redirect to the right place if already signed in (used on auth pages). */
 async function redirectIfAuthed() {
   const res = await fetch('/api/me');
@@ -115,18 +104,5 @@ function attachPasswordToggles(root) {
   });
 }
 
-const SOCIAL_SVGS = {
-  google: '<svg viewBox="0 0 24 24"><path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92a5.06 5.06 0 0 1-2.2 3.32v2.77h3.57c2.08-1.92 3.27-4.74 3.27-8.1z"/><path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84A11 11 0 0 0 12 23z"/><path fill="#FBBC05" d="M5.84 14.1a6.6 6.6 0 0 1 0-4.2V7.06H2.18a11 11 0 0 0 0 9.88l3.66-2.84z"/><path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84C6.71 7.31 9.14 5.38 12 5.38z"/></svg>',
-  facebook: '<svg viewBox="0 0 24 24"><path fill="#1877F2" d="M24 12a12 12 0 1 0-13.88 11.85v-8.38H7.08V12h3.04V9.36c0-3 1.79-4.67 4.53-4.67 1.31 0 2.68.24 2.68.24v2.95h-1.51c-1.49 0-1.95.92-1.95 1.87V12h3.32l-.53 3.47h-2.79v8.38A12 12 0 0 0 24 12z"/></svg>',
-  apple: '<svg viewBox="0 0 24 24"><path fill="#fff" d="M16.36 12.6c-.02-2.2 1.8-3.26 1.88-3.31-1.03-1.5-2.62-1.7-3.19-1.73-1.36-.14-2.65.8-3.34.8-.68 0-1.75-.78-2.87-.76-1.48.02-2.84.86-3.6 2.18-1.53 2.66-.39 6.6 1.1 8.76.73 1.06 1.6 2.25 2.74 2.2 1.1-.04 1.51-.71 2.84-.71 1.32 0 1.7.71 2.86.69 1.18-.02 1.93-1.08 2.65-2.14.83-1.22 1.18-2.4 1.2-2.46-.03-.01-2.3-.88-2.32-3.5zM14.2 5.9c.6-.73 1.01-1.75.9-2.76-.87.04-1.92.58-2.55 1.3-.56.65-1.05 1.68-.92 2.67.97.08 1.96-.49 2.57-1.21z"/></svg>',
-};
-
-function socialButtons(mount, verb) {
-  mount.innerHTML = ['google', 'facebook'].map((p) => {
-    const label = p[0].toUpperCase() + p.slice(1);
-    return `<button class="btn btn-social" data-provider="${p}">${SOCIAL_SVGS[p]} ${verb} with ${label}</button>`;
-  }).join('');
-  mount.querySelectorAll('button').forEach((b) => {
-    b.addEventListener('click', () => socialLogin(b.dataset.provider));
-  });
-}
+/* Social/OAuth sign-in UI has been removed: Gweno uses first-party email + password
+   only, so the login page never imitates Google/Facebook/Apple (Safe Browsing safe). */

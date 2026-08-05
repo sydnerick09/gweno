@@ -6,17 +6,13 @@
   // validEmail + passwordIssue come from auth.js (shared with forgot/reset pages).
   const usernameIssue = (u) => (/^[a-zA-Z0-9]{6,10}$/.test(u || '') ? null : 'Username must be 6–10 letters or numbers.');
 
-  const socialRow = () => `<div class="ap-socials">${['google', 'facebook']
-    .map((p) => `<button type="button" data-provider="${p}" aria-label="Continue with ${p}">${SOCIAL_SVGS[p]}</button>`).join('')}</div>`;
-
   root.className = 'ap ap-wrap';
   root.innerHTML = `
     <div class="ap-container" id="apContainer">
       <div class="ap-form signup">
         <form id="formUp" novalidate>
-          <h1>Create Account</h1>
-          ${socialRow()}
-          <span class="ap-muted">or use your email for registration</span>
+          <h1>Create your Gweno account</h1>
+          <span class="ap-muted">Sign up with your email to start earning on Gweno.</span>
           <div class="msg" id="msgUp"></div>
           <input name="name" type="text" placeholder="Your name" autocomplete="name" />
           <input name="email" type="email" placeholder="Email" autocomplete="email" />
@@ -33,9 +29,8 @@
 
       <div class="ap-form signin">
         <form id="formIn" novalidate>
-          <h1>Sign In</h1>
-          ${socialRow()}
-          <span class="ap-muted">or use your email password</span>
+          <h1>Sign in to Gweno</h1>
+          <span class="ap-muted">Enter your Gweno email and password.</span>
           <div class="msg" id="msgIn"></div>
           <input name="email" type="email" placeholder="Email" autocomplete="email" />
           <div class="pw-wrap"><input name="password" type="password" placeholder="Password" autocomplete="current-password" id="siPassword" /><button type="button" class="pw-toggle" data-pwtoggle="siPassword" aria-label="Show password"></button></div>
@@ -88,17 +83,12 @@
     suPhone.focus();
   });
   attachPasswordToggles(root);
-  root.querySelectorAll('.ap-socials [data-provider]').forEach((b) => b.addEventListener('click', () => socialLogin(b.dataset.provider)));
 
-  // Surface OAuth errors from the provider callback on the sign-in side.
+  // Surface sign-in errors (e.g. device limit, expired magic link) on the sign-in side.
   const oerr = new URLSearchParams(location.search).get('error');
   if (oerr) {
     const map = {
       device_limit: 'An account already exists on this device.',
-      oauth_no_email: "That provider didn't share an email. Try another method.",
-      google_unavailable: 'Google sign-in is not available yet.',
-      facebook_unavailable: 'Facebook sign-in is not available yet.',
-      apple_unavailable: 'Apple sign-in is not available yet.',
       magic_invalid: 'That sign-in link is invalid or has expired. Please request a new one.',
     };
     showMsg(document.getElementById('msgIn'), map[oerr] || 'Sign-in could not be completed. Please try again.', 'error');
