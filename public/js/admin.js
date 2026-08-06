@@ -52,10 +52,10 @@ function wirePager(key, p, rerender) {
 }
 
 // Lightweight modal for admin forms (reuses .modal styles from app.css).
-function adminModal(html) {
+function adminModal(html, cls) {
   const bg = document.createElement('div');
   bg.className = 'modal-bg';
-  bg.innerHTML = `<div class="modal">${html}</div>`;
+  bg.innerHTML = `<div class="modal ${cls || ''}">${html}</div>`;
   bg.addEventListener('click', (e) => { if (e.target === bg || e.target.classList.contains('close')) bg.remove(); });
   document.body.appendChild(bg);
   return bg;
@@ -187,27 +187,21 @@ async function tSubmissions() {
   const render = () => {
     const p = paginate('submissions', subs);
     content().innerHTML = `
-    <p class="page-sub">Every task submission and exactly what the member submitted. Approving credits the user's USD balance.</p>
+    <p class="page-sub">Every task submission. Click <b>Review</b> to see the full task and the user's response side by side, then Approve or Reject. Approving credits the user's USD balance.</p>
     <div class="panel"><table class="table">
-      <thead><tr><th>User</th><th>Task</th><th class="num">Reward</th><th>What they submitted</th><th>Submitted</th><th>Status</th><th>Action</th></tr></thead>
+      <thead><tr><th>User</th><th>Task</th><th class="num">Reward</th><th>Answer preview</th><th>Submitted</th><th>Status</th><th>Action</th></tr></thead>
       <tbody>${subs.length ? p.rows.map((sm) => `
         <tr>
           <td>${esc(sm.user ? sm.user.username : '—')}<br><span class="p-sub">${esc(sm.user ? sm.user.email : '')}</span></td>
           <td>${esc(sm.task ? sm.task.title : sm.taskId)}${sm.task ? `<br><span class="p-sub">${esc(sm.task.category || '')}</span>` : ''}</td>
           <td class="num">${usd(sm.reward)}</td>
-          <td class="p-sub" style="max-width:280px;word-break:break-word">${proofCell(sm.proof)}${sm.dispute ? `<br><b style="color:var(--danger)">Dispute:</b> ${esc(sm.dispute.message)}` : ''}</td>
+          <td class="p-sub" style="max-width:240px;max-height:60px;overflow:hidden;word-break:break-word">${proofCell(sm.proof)}${sm.dispute ? `<br><b style="color:var(--danger)">Dispute:</b> ${esc(sm.dispute.message)}` : ''}</td>
           <td class="p-sub">${sm.createdAt ? new Date(sm.createdAt).toLocaleString() : '—'}</td>
           <td><span class="st ${sm.status}">${statusLabel(sm.status)}</span>${(sm.status === 'correction' || sm.status === 'rejected') && sm.reviewNote ? `<br><span class="p-sub">${esc(sm.reviewNote)}</span>` : ''}</td>
-          <td><div style="display:flex;gap:6px;flex-wrap:wrap">
-            ${sm.status !== 'approved' ? `<button class="btn btn-primary auto adm-approve" data-id="${sm.id}">Approve</button>` : ''}
-            ${sm.status !== 'correction' ? `<button class="btn btn-ghost auto adm-correct" data-id="${sm.id}">Correction</button>` : ''}
-            ${sm.status !== 'rejected' ? `<button class="btn btn-ghost auto adm-reject" data-id="${sm.id}">Reject</button>` : ''}
-          </div></td>
+          <td><button class="btn btn-primary auto adm-review" data-id="${sm.id}">Review</button></td>
         </tr>`).join('') : `<tr><td colspan="7" class="p-sub">No submissions yet.</td></tr>`}</tbody>
     </table>${pagerBar('submissions', p)}</div>`;
-    content().querySelectorAll('.adm-approve').forEach((b) => b.addEventListener('click', () => decideSubmission(b.dataset.id, 'approved')));
-    content().querySelectorAll('.adm-reject').forEach((b) => b.addEventListener('click', () => decideSubmission(b.dataset.id, 'rejected')));
-    content().querySelectorAll('.adm-correct').forEach((b) => b.addEventListener('click', () => openCorrection(b.dataset.id)));
+    content().querySelectorAll('.adm-review').forEach((b) => b.addEventListener('click', () => openReviewSubmission(subs.find((x) => x.id === b.dataset.id))));
     wirePager('submissions', p, render);
   };
   render();
@@ -221,6 +215,64 @@ async function decideSubmission(id, decision, note) {
   const failed = em.status === 'Failed';
   toast(`${statusLabel(decision)} · email ${em.status || '—'}${failed ? ' — resend from Email log' : ''}`, failed ? 'error' : 'ok');
   tSubmissions();
+}
+
+// Human-readable answer requirements for a task (so the admin can verify the response).
+function taskRequirements(t) {
+  if (!t) return [];
+  const PT = { text: 'Written answer', data: 'Data rows (comma/colon separated)', url: 'A valid link (URL)', photo: 'An uploaded image link', social: 'A social profile/post link or @username', code: 'An exact confirmation code', email: 'A valid email address', match: 'Must closely match the given text' };
+  const out = ['Proof type: ' + (PT[t.proofType] || t.proofType || 'text')];
+  if (t.minWords) out.push('Minimum words: ' + t.minWords);
+  if (t.minChars) out.push('Minimum characters: ' + t.minChars);
+  if (t.minLines) out.push('Minimum rows: ' + t.minLines);
+  if (t.expected) out.push('Expected answer: “' + t.expected + '”');
+  if (t.code) out.push('Required code: ' + t.code);
+  return out;
+}
+
+// Full side-by-side review: the task assigned vs. the user's actual response. Approve is
+// disabled until the admin confirms they've reviewed both (prevents rubber-stamping).
+function openReviewSubmission(sm) {
+  if (!sm) return;
+  const t = sm.task || {};
+  const proof = String(sm.proof == null ? '' : sm.proof).trim();
+  const proofHtml = !proof ? '<span class="p-sub">— no answer was submitted —</span>'
+    : /^https?:\/\//i.test(proof) ? `<a href="${esc(proof)}" target="_blank" rel="noopener">${esc(proof)}</a>`
+    : `<div class="review-proof">${esc(proof)}</div>`;
+  const reqs = taskRequirements(t);
+  const bg = adminModal(`
+    <button class="close">×</button>
+    <h3>Review submission</h3>
+    <div class="review-grid">
+      <div class="review-col">
+        <h4>📋 Task assigned</h4>
+        <p class="review-title">${esc(t.title || sm.taskId)}</p>
+        <p class="p-sub">${esc(t.category || '')}${t.difficulty ? ' · ' + esc(t.difficulty) : ''} · reward ${usd(sm.reward)}</p>
+        ${t.description ? `<p>${esc(t.description)}</p>` : ''}
+        ${Array.isArray(t.instructions) && t.instructions.length ? `<p class="review-label">What the task asked:</p><ol class="instr">${t.instructions.map((s) => `<li>${esc(s)}</li>`).join('')}</ol>` : '<p class="p-sub">(Original task details are no longer available.)</p>'}
+        ${reqs.length ? `<p class="review-label">Answer requirements:</p><ul class="review-reqs">${reqs.map((r) => `<li>${esc(r)}</li>`).join('')}</ul>` : ''}
+      </div>
+      <div class="review-col">
+        <h4>✍️ User's response</h4>
+        <p class="p-sub">${esc(sm.user ? sm.user.username : '')}${sm.user && sm.user.email ? ' · ' + esc(sm.user.email) : ''}</p>
+        <p class="p-sub">Submitted ${sm.createdAt ? new Date(sm.createdAt).toLocaleString() : '—'} · <span class="st ${sm.status}">${statusLabel(sm.status)}</span></p>
+        <p class="review-label">Their answer / proof:</p>
+        ${proofHtml}
+        ${sm.dispute ? `<p class="review-label" style="color:var(--danger)">Dispute raised:</p><div class="review-proof">${esc(sm.dispute.message)}</div>` : ''}
+      </div>
+    </div>
+    <label class="review-ack"><input type="checkbox" id="revAck"> I have reviewed the full task and the user's response, and the answer is relevant and complete.</label>
+    <div class="review-actions">
+      ${sm.status !== 'approved' ? `<button class="btn btn-primary" id="revApprove" disabled>Approve &amp; pay ${usd(sm.reward)}</button>` : ''}
+      ${sm.status !== 'correction' ? `<button class="btn btn-ghost" id="revCorrect">Request correction</button>` : ''}
+      ${sm.status !== 'rejected' ? `<button class="btn btn-ghost" id="revReject">Reject</button>` : ''}
+    </div>`, 'modal-wide');
+  const ack = bg.querySelector('#revAck');
+  const approveBtn = bg.querySelector('#revApprove');
+  if (approveBtn) ack.addEventListener('change', () => { approveBtn.disabled = !ack.checked; });
+  if (approveBtn) approveBtn.addEventListener('click', () => { if (!ack.checked) return; bg.remove(); decideSubmission(sm.id, 'approved'); });
+  const rej = bg.querySelector('#revReject'); if (rej) rej.addEventListener('click', () => { bg.remove(); decideSubmission(sm.id, 'rejected'); });
+  const corr = bg.querySelector('#revCorrect'); if (corr) corr.addEventListener('click', () => { bg.remove(); openCorrection(sm.id); });
 }
 
 // The "Reason for Correction" is composed by the admin and emailed to the member.
