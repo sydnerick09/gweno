@@ -438,6 +438,7 @@ function freeActivityCount(u) {
 // True when a no-plan user has already used their single free earning opportunity.
 function freeActivityUsed(u) { return userRank(u) === 0 && freeActivityCount(u) >= 1; }
 const FREE_LIMIT_MSG = 'You have completed your free earning opportunity. Upgrade your subscription to unlock more earning opportunities.';
+const FREE_QUIZ_REWARD = 0.10; // a no-plan user's single free questionnaire pays a flat $0.10 (paid plans keep tiered rewards)
 
 // Gate for earning modules that require an active subscription (surveys, referral,
 // apply-for-tasks, future paid clicks/games). Share & Earn is intentionally NOT gated
@@ -3340,7 +3341,7 @@ app.get('/api/questionnaires', requireAuth, (req, res) => {
     const usedTask = mySubmissions(req.user.id).some((x) => x.status !== 'rejected');
     if (quizNonRej.length) { list = []; free = { active: true, state: quizNonRej.some((x) => x.status === 'approved') ? 'completed' : 'pending', via: 'questionnaire' }; }
     else if (usedTask) { list = []; free = { active: true, state: 'completed', via: 'task' }; }
-    else { list = list.slice(0, 1); free = { active: true, state: 'available' }; }
+    else { list = list.slice(0, 1).map((z) => ({ ...z, reward: FREE_QUIZ_REWARD })); free = { active: true, state: 'available', reward: FREE_QUIZ_REWARD }; }
   }
 
   res.json({
@@ -3379,9 +3380,11 @@ app.post('/api/questionnaires/:id/submit', requireAuth, rateLimit('quiz', 30, 60
     return res.status(400).json({ error: 'Please answer all questions before submitting.' });
   }
   const result = quizMod.score(z, answers);   // automatic scoring
+  // A no-plan user's single free questionnaire pays a flat $0.10; paid plans keep tiered rewards.
+  const reward = userRank(req.user) === 0 ? FREE_QUIZ_REWARD : z.reward;
   const rec = {
     id: rid(8), userId: req.user.id, quizId: z.id, title: z.title, category: z.category, tier: z.tier,
-    reward: z.reward, score: result.correct, total: result.total, pct: result.pct, passed: result.passed,
+    reward, score: result.correct, total: result.total, pct: result.pct, passed: result.passed,
     status: 'pending', reviewNote: '', createdAt: new Date().toISOString(), reviewedAt: null, reviewedBy: null,
   };
   S.quizSubmissions.unshift(rec);
@@ -3390,8 +3393,8 @@ app.post('/api/questionnaires/:id/submit', requireAuth, rateLimit('quiz', 30, 60
   res.status(201).json({
     ok: true,
     result: { correct: result.correct, total: result.total, pct: result.pct, passed: result.passed },
-    submission: { id: rec.id, status: 'pending', reward: z.reward },
-    message: `Submitted — you scored ${result.correct}/${result.total} (${result.pct}%). Your $${z.reward.toFixed(2)} reward will be credited once an admin approves it.`,
+    submission: { id: rec.id, status: 'pending', reward },
+    message: `Submitted — you scored ${result.correct}/${result.total} (${result.pct}%). Your $${reward.toFixed(2)} reward will be credited once an admin approves it.`,
   });
 });
 
