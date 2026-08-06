@@ -1566,9 +1566,11 @@ app.get('/api/dashboard', requireAuth, (req, res) => {
   let remainingQuiz = quizMod.QUESTIONNAIRES.filter((z) => quizMod.tierUnlocked(planId, z.tier) && !takenQuiz.has(z.id)).length;
   if (noPlan) remainingQuiz = freeActivityUsed(u) ? 0 : Math.min(1, remainingQuiz);
 
-  // Social sharing tasks still open (no pending/approved submission for that platform)
+  // Social sharing tasks still open. Free users get ONE total; paid = one per platform.
   const blockedShare = new Set(shares.filter((s) => s.status !== 'rejected').map((s) => s.platform));
-  const socialAvailable = SHARE_TASKS.filter((t) => !blockedShare.has(t.key)).length;
+  const socialAvailable = noPlan
+    ? (shares.some((s) => s.status !== 'rejected') ? 0 : 1)
+    : SHARE_TASKS.filter((t) => !blockedShare.has(t.key)).length;
 
   const pendingUSD = mineTasks.filter((x) => x.status === 'pending').reduce((a, x) => a + (x.reward || 0), 0)
     + mineQuiz.filter((x) => x.status === 'pending').reduce((a, x) => a + (x.reward || 0), 0)
@@ -3484,12 +3486,28 @@ app.get('/api/share', requireAuth, (req, res) => {
       reward: s.reward, status: s.status, reviewNote: s.reviewNote || '',
       createdAt: s.createdAt, reviewedAt: s.reviewedAt,
     }));
-  // A platform is open to submit only if there's no pending/approved submission for it.
-  const blocked = new Set(mine.filter((s) => s.status !== 'rejected').map((s) => s.platform));
+  // Active (pending/approved) submissions block re-submitting that platform.
+  const activeByPlatform = {};
+  mine.filter((s) => s.status !== 'rejected').forEach((s) => { activeByPlatform[s.platform] = s.status; });
   const earnedUSD = round2(mine.filter((s) => s.status === 'approved').reduce((a, s) => a + (s.reward || 0), 0));
+
+  // Free (no-plan) users may complete only ONE social sharing task total. Once they have
+  // any active submission, every OTHER category locks. Paid plans allow one per platform.
+  const noPlan = userRank(req.user) === 0;
+  const usedFreeShare = noPlan && Object.keys(activeByPlatform).length >= 1;
+
+  const tasks = SHARE_TASKS.map((t) => {
+    let status;
+    if (activeByPlatform[t.key]) status = activeByPlatform[t.key];   // 'pending' | 'approved'
+    else if (usedFreeShare) status = 'locked';                       // free user used their one on another platform
+    else status = 'available';
+    return { ...t, status, canSubmit: status === 'available' };
+  });
+
   res.json({
     link, reward: SHARE_REWARD, maxBytes: 5 * 1024 * 1024, earnedUSD,
-    tasks: SHARE_TASKS.map((t) => ({ ...t, canSubmit: !blocked.has(t.key) })),
+    free: { active: noPlan, used: !!usedFreeShare, limit: 1 },   // free-tier one-task state
+    tasks,
     submissions: mine,
   });
 });
@@ -3514,6 +3532,10 @@ app.post('/api/share/submit', requireAuth, rateLimit('share', 20, 60_000), async
   // Repeats aren't allowed: one active (pending/approved) submission per platform.
   if (mine.some((s) => s.platform === platform && s.status !== 'rejected')) {
     return res.status(409).json({ error: `You already have a ${task.name} submission under review or approved.` });
+  }
+  // Free (no-plan) users may complete only ONE social sharing task total (any platform).
+  if (userRank(req.user) === 0 && mine.some((s) => s.status !== 'rejected')) {
+    return res.status(403).json({ error: 'Free members can complete one social sharing task. Upgrade your plan to unlock more sharing tasks.', code: 'free_share_used' });
   }
   // Anti-abuse: reject a screenshot that's already been submitted (by anyone).
   const hash = imageHash(img);

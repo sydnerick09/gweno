@@ -1269,15 +1269,36 @@ function compressDataUrl(dataUrl, maxDim, quality) {
   });
 }
 
+const SHARE_STATUS = { available: 'Available', inprogress: 'In Progress', pending: 'Pending Review', approved: 'Approved', rejected: 'Rejected', locked: 'Locked' };
+const SHARE_ICON = { tiktok: '🎵', whatsapp: '💬', google: '⭐' };
+
 async function pageShare() {
+  if (PAGE_POLL) { try { PAGE_POLL(); } catch (_) {} PAGE_POLL = null; }
   loading();
   const { data } = await apiGet('/api/share');
+  renderShare(data);
+  // Live refresh: reflect admin approvals + status changes without a page reload.
+  PAGE_POLL = Data.poll(async () => {
+    if (document.querySelector('.modal-bg')) return;          // don't disrupt an open upload modal
+    const r = await Data.get('/api/share');
+    if (r.ok) { Data.setCache('/api/share', r.data); renderShare(r.data); }
+  }, 15000);
+}
+
+function renderShare(data) {
   const tasks = data.tasks || [];
   const subs = data.submissions || [];
-  const platIcon = { tiktok: '🎵', whatsapp: '💬', google: '⭐' };
+  const free = data.free || {};
   view().innerHTML = `
     <p class="page-sub">Promote Gweno and earn <b>$0.10–$0.40</b> per approved task. Every screenshot is reviewed before the reward is paid.</p>
-    ${data.earnedUSD ? `<div class="panel premium-active"><p class="p-sub" style="margin:0">You've earned <b>${usd(data.earnedUSD)}</b> from Share &amp; Earn so far. Keep sharing!</p></div>` : ''}
+    ${free.active ? `<div class="panel ${free.used ? 'upgrade' : 'premium-active'}">
+      <h3 style="margin:0">🎁 FREE — one social sharing task</h3>
+      <p class="p-sub" style="margin:6px 0 0">${free.used
+        ? 'You’ve used your free social sharing task. <b>Upgrade your plan</b> to unlock all sharing tasks.'
+        : 'As a free member you can complete <b>one</b> social sharing task. Choose WhatsApp, TikTok or Google — once you start one, the others lock. Upgrade to unlock all three.'}</p>
+      ${free.used ? '<a class="btn btn-primary auto" href="#/tasks" style="margin-top:10px">See plans</a>' : ''}
+    </div>` : ''}
+    ${data.earnedUSD ? `<div class="panel premium-active"><p class="p-sub" style="margin:0">You've earned <b>${usd(data.earnedUSD)}</b> from social sharing so far. Keep it up!</p></div>` : ''}
     <div class="panel">
       <h3>Your Gweno link</h3>
       <p class="p-sub">Post this link when you share — it also credits you any referrals.</p>
@@ -1285,13 +1306,15 @@ async function pageShare() {
     </div>
     <div class="share-cards">
       ${tasks.map((t) => {
-        const active = subs.find((s) => s.platform === t.key && s.status !== 'rejected');
-        return `<div class="share-card">
+        const st = t.status || 'available';
+        return `<div class="share-card" data-platform="${t.key}">
           <div class="sh-top"><span class="sh-ico">${t.icon}</span><h4>${esc(t.name)}</h4><span class="tc-reward">${usd(t.reward)}</span></div>
+          <div class="sh-badge"><span class="st ${st}">${SHARE_STATUS[st] || st}</span></div>
           <ol class="instr">${t.steps.map((s) => `<li>${esc(s)}</li>`).join('')}</ol>
           ${t.link ? `<a class="btn btn-ghost auto" href="${esc(t.link)}" target="_blank" rel="noopener" style="margin-bottom:8px">${t.key === 'google' ? 'Open Google' : 'Open our TikTok'} →</a>` : ''}
-          ${active
-            ? `<div class="sh-status"><span class="st ${active.status}">${statusLabel(active.status)}</span> <span class="p-sub">${active.status === 'approved' ? 'Reward credited to your wallet.' : 'Under review — usually within a few hours.'}</span></div>`
+          ${st === 'pending' ? `<p class="p-sub" style="margin:0">Under review — usually within a few hours.</p>`
+            : st === 'approved' ? `<p class="p-sub" style="margin:0">Reward credited to your wallet.</p>`
+            : st === 'locked' ? `<button class="btn btn-primary auto" disabled>🔒 Locked</button>`
             : `<button class="btn btn-primary auto share-upload" data-platform="${t.key}" data-name="${esc(t.name)}"><span class="bico">${ICON.upload || ''}</span> Upload screenshot</button>`}
         </div>`;
       }).join('')}
@@ -1302,17 +1325,32 @@ async function pageShare() {
         <thead><tr><th>Platform</th><th>Screenshot</th><th class="num">Reward</th><th>Status</th><th>Submitted</th></tr></thead>
         <tbody>${subs.length ? subs.map((s) => `
           <tr>
-            <td>${platIcon[s.platform] || ''} ${esc(s.platformName || s.platform)}</td>
+            <td>${SHARE_ICON[s.platform] || ''} ${esc(s.platformName || s.platform)}</td>
             <td><a href="/api/share/image/${s.id}" target="_blank" rel="noopener" title="Open full size"><img class="sh-thumb" src="/api/share/image/${s.id}" alt="screenshot" loading="lazy"></a></td>
             <td class="num">${usd(s.reward)}</td>
-            <td><span class="st ${s.status}">${statusLabel(s.status)}</span>${s.reviewNote ? `<br><span class="p-sub">${esc(s.reviewNote)}</span>` : ''}</td>
+            <td><span class="st ${s.status}">${SHARE_STATUS[s.status] || statusLabel(s.status)}</span>${s.reviewNote ? `<br><span class="p-sub">${esc(s.reviewNote)}</span>` : ''}</td>
             <td class="p-sub">${new Date(s.createdAt).toLocaleDateString()}</td>
           </tr>`).join('') : `<tr><td colspan="5" class="p-sub">No shares yet. Upload a screenshot above to get started.</td></tr>`}</tbody>
       </table>
     </div>`;
   const copyBtn = document.getElementById('copyShare');
   if (copyBtn) copyBtn.addEventListener('click', () => copyText(data.link));
-  view().querySelectorAll('.share-upload').forEach((b) => b.addEventListener('click', () => openShareUpload(b.dataset.platform, b.dataset.name)));
+  const lockOthers = free.active && !free.used;   // free user: starting one locks the rest
+  view().querySelectorAll('.share-upload').forEach((b) => b.addEventListener('click', () => {
+    if (lockOthers) markShareInProgress(b.dataset.platform);
+    openShareUpload(b.dataset.platform, b.dataset.name);
+  }));
+}
+
+// Free tier: the moment a user starts a category, show it "In Progress" and lock the rest.
+function markShareInProgress(platform) {
+  view().querySelectorAll('.share-card').forEach((card) => {
+    const same = card.dataset.platform === platform;
+    const badge = card.querySelector('.sh-badge .st');
+    const btn = card.querySelector('.share-upload');
+    if (badge) { badge.className = 'st ' + (same ? 'inprogress' : 'locked'); badge.textContent = same ? 'In Progress' : 'Locked'; }
+    if (!same && btn) { btn.disabled = true; btn.textContent = '🔒 Locked'; }
+  });
 }
 
 function openShareUpload(platform, name) {
