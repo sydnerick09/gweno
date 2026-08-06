@@ -196,8 +196,29 @@ async function sendAdmin({ to, bcc, subject, body }) {
   return send({ to: to || CFG.from, bcc, subject, text: body, html: adminHtml(subject, body) });
 }
 
+async function sendSubscriptionActivated({ to, name, plan, expires }) {
+  const text =
+`Hello ${name},
+
+Your ${plan} subscription has been activated successfully. Your payment was confirmed and your plan is now unlocked — no further action is needed.
+
+Plan: ${plan}
+Status: Active
+${expires ? `Renews / expires: ${expires}` : 'Access: does not expire'}
+
+You can now access the tasks, questionnaires and features included in your plan.
+
+Dashboard:
+${DASHBOARD_URL}
+
+Thank you for being part of gweno.
+
+gweno Team`;
+  return send({ to, subject: `Your ${plan} subscription is active`, text });
+}
+
 module.exports = {
   configured, send, sendPasswordReset, sendMagicLink, sendSupport, CFG,
   sendTaskApproved, sendTaskRejected, sendTaskCorrection, sendApplicationApproved, sendWithdrawalPaid,
-  sendAdmin,
+  sendAdmin, sendSubscriptionActivated,
 };

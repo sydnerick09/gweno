@@ -26,6 +26,8 @@ const REWARDS = {
   withdraw: { xp: 30,  coins: 5,  stat: 'withdrawals' },
   referral: { xp: 80,  coins: 15, stat: 'referrals' },
   share:    { xp: 25,  coins: 6,  stat: 'shares' },
+  quiz:     { xp: 40,  coins: 10, stat: 'quizzes' },
+  subscription: { xp: 15, coins: 3, stat: null },
   login:    { xp: 10,  coins: 2,  stat: null },
   profile:  { xp: 40,  coins: 10, stat: null },
 };

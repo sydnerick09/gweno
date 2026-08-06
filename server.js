@@ -17,6 +17,7 @@ const bcrypt = require('bcryptjs');
 const db = require('./db');
 const tasksMod = require('./tasks');
 const surveysMod = require('./surveys');
+const quizMod = require('./questionnaires');
 const investmentsMod = require('./investments');
 const { currencyFor } = require('./currencies');
 const payments = require('./payments');
@@ -74,9 +75,11 @@ function investMethodConfigured(method) {
 }
 const investMethodsInfo = () => INVEST_METHODS.map((key) => ({ key, configured: investMethodConfigured(key) }));
 const USERNAME_COOLDOWN_MS = 30 * 24 * 60 * 60 * 1000;   // username changeable once / 30 days
-const MIN_REDEEM = { KES: 194, USD: 1.5 };       // minimum cash-out: $1.50 (M-Pesa ≈ 194 KES)
+const MIN_REDEEM_KES = 10;                               // minimum cash-out: KES 10 (USD derived from FX below)
 const DEPOSIT_MIN_KES = 10;                              // DEPOSITS via M-Pesa STK Push (KES)
 const FX_KES_PER_USD = Number(process.env.FX_KES_PER_USD) || 129; // conversion rate (configurable)
+// USD minimum is DERIVED from the KES minimum at the live/configured rate — never hardcoded.
+const MIN_REDEEM = { KES: MIN_REDEEM_KES, USD: Math.round((MIN_REDEEM_KES / FX_KES_PER_USD) * 100) / 100 };
 const SUBSCRIPTION_DAYS = 30;
 // Three subscription tiers. A member can work on any task whose required tier rank
 // is <= their plan rank (higher plans unlock the lower bands too).
@@ -276,6 +279,9 @@ app.use(async (req, res, next) => {
   S.botPool = S.botPool || []; // persistent generated/demo users (one displayName reused everywhere)
   S.taskExtra = S.taskExtra || []; // dynamically generated replacement tasks (single-use pool)
   if (S.taskSeq == null) S.taskSeq = 0;
+  S.shareSubmissions = S.shareSubmissions || []; // Share & Earn (social sharing) proofs
+  S.quizSubmissions = S.quizSubmissions || [];   // questionnaire submissions (auto-scored, admin-approved)
+  S.transactions = S.transactions || [];         // lightweight earnings ledger
 })();
 
 // One-time backfill: award XP/badges/levels for activity that happened before the
@@ -422,6 +428,17 @@ function freeTasksRemaining(u) {
   return FREE_TASKS.filter((t) => !takenFree.has(t.id)).length;
 }
 
+// ---- Free tier: ONE earning activity total (task OR questionnaire, never both) ----
+function myQuizSubs(userId) { return (db.get().quizSubmissions || []).filter((x) => x.userId === userId); }
+function freeActivityCount(u) {
+  const taskCount = mySubmissions(u.id).filter((x) => x.status !== 'rejected').length; // free users only ever have free-task subs
+  const quizCount = myQuizSubs(u.id).filter((x) => x.status !== 'rejected').length;
+  return taskCount + quizCount;
+}
+// True when a no-plan user has already used their single free earning opportunity.
+function freeActivityUsed(u) { return userRank(u) === 0 && freeActivityCount(u) >= 1; }
+const FREE_LIMIT_MSG = 'You have completed your free earning opportunity. Upgrade your subscription to unlock more earning opportunities.';
+
 // Gate for earning modules that require an active subscription (surveys, referral,
 // apply-for-tasks, future paid clicks/games). Share & Earn is intentionally NOT gated
 // (it drives growth), and the single free task lives on the Tasks page.
@@ -515,15 +532,43 @@ async function verifyTurnstile(token, ip) {
   } catch (e) { console.error('[gweno] turnstile verify failed:', e.message); return false; }
 }
 
+// Username rules: 6–20 chars; letters, numbers, and . _ - only; stored lowercase & trimmed.
+const normalizeUsername = (u) => String(u || '').trim().toLowerCase();
 function usernameProblem(username) {
-  if (!/^[a-zA-Z0-9]{6,10}$/.test(username || '')) {
-    return 'Username must be 6–10 characters, letters and numbers only.';
-  }
+  const u = normalizeUsername(username);
+  if (u.length < 6) return 'Username must be at least 6 characters.';
+  if (u.length > 20) return 'Username must be at most 20 characters.';
+  if (!/^[a-z0-9._-]+$/.test(u)) return 'Username can only use letters, numbers, and . _ -';
   return null;
 }
 function usernameTaken(username, exceptId) {
-  const lo = String(username).toLowerCase();
+  const lo = normalizeUsername(username);
   return db.get().users.some((u) => u.username && u.username.toLowerCase() === lo && u.id !== exceptId);
+}
+// Alternative handles when a username is taken (all validated + available).
+function usernameSuggestions(base, n = 6) {
+  const stem = (normalizeUsername(base).replace(/[^a-z0-9._-]/g, '') || 'user').slice(0, 14);
+  const cands = [stem + '254', stem + '2026', stem + '_work', stem + 'hub', 'official' + stem,
+    stem + '001', stem + 'online', 'workwith' + stem, stem + '2025', stem + '_pro'];
+  const out = [];
+  for (const c of cands) {
+    const v = c.slice(0, 20);
+    if (v.length >= 6 && /^[a-z0-9._-]+$/.test(v) && !usernameTaken(v) && !out.includes(v)) out.push(v);
+    if (out.length >= n) break;
+  }
+  return out;
+}
+// Random "professional" username for the Generate button (e.g. swiftlion12, digitalhawk).
+const GEN_ADJ = ['swift', 'digital', 'clever', 'blue', 'smart', 'alpha', 'next', 'rapid', 'prime', 'bright', 'bold', 'mega', 'turbo', 'ace', 'elite', 'online', 'urban', 'royal', 'nova', 'quick'];
+const GEN_NOUN = ['lion', 'hawk', 'fox', 'falcon', 'genius', 'worker', 'earner', 'pilot', 'master', 'wolf', 'tiger', 'eagle', 'ninja', 'guru', 'wizard', 'coder', 'builder', 'maker', 'star', 'panda'];
+function generateUsername() {
+  const rnd = (a) => a[Math.floor(Math.random() * a.length)];
+  for (let i = 0; i < 60; i++) {
+    const num = Math.random() < 0.5 ? String(Math.floor(10 + Math.random() * 90)) : '';
+    const name = (rnd(GEN_ADJ) + rnd(GEN_NOUN) + num).slice(0, 20);
+    if (name.length >= 6 && !usernameTaken(name)) return name;
+  }
+  return 'worker' + Math.floor(1000 + Math.random() * 9000);
 }
 function genUsername(base) {
   let b = String(base || 'user').toLowerCase().replace(/[^a-z0-9]/g, '');
@@ -864,6 +909,19 @@ app.get('/api/config', (req, res) => {
   res.json({ turnstileSiteKey: process.env.TURNSTILE_SITE_KEY || '' });
 });
 
+// Live username availability (used by the signup form). Public + rate-limited.
+app.get('/api/username/check', rateLimit('uname', 150, 5 * 60 * 1000), (req, res) => {
+  const u = normalizeUsername(req.query.u);
+  const problem = usernameProblem(u);
+  if (problem) return res.json({ username: u, valid: false, available: false, error: problem, suggestions: [] });
+  const taken = usernameTaken(u);
+  res.json({ username: u, valid: true, available: !taken, error: taken ? 'Username already taken.' : null, suggestions: taken ? usernameSuggestions(u) : [] });
+});
+// Suggest a random professional username (for the "Generate" button).
+app.get('/api/username/generate', rateLimit('unamegen', 80, 5 * 60 * 1000), (req, res) => {
+  res.json({ username: generateUsername() });
+});
+
 // =============================================================================
 //  SIGN UP  (email + password)                     — guards #2 (duplicate email)
 // =============================================================================
@@ -871,7 +929,7 @@ app.post('/api/signup', rateLimit('signup', 15, 10 * 60 * 1000), async (req, res
   try {
     const name = String(req.body.name || '').trim();
     const email = normEmail(req.body.email);
-    const username = String(req.body.username || '').trim();
+    const username = normalizeUsername(req.body.username);
     const password = req.body.password;
     const country = String(req.body.country || '').trim();
     const phone = String(req.body.phone || '').trim();
@@ -1269,17 +1327,29 @@ const LB_LAST = ['Kamau', 'Otieno', 'Mwangi', 'Achieng', 'Njoroge', 'Wanjala', '
 // under different names. Real registered users are never touched. An admin can rename a
 // generated user via /api/admin/generated-users/:id/rename.
 const GEN_POOL_SIZE = 260;
+// Force a generated handle to satisfy the username rules (lowercase, valid chars, 6–20).
+function botHandle(nm, rng) {
+  let n = String(nm || '').trim().toLowerCase().replace(/[^a-z0-9._-]/g, '');
+  while (n.length < 6) n += Math.floor((rng ? rng() : Math.random()) * 10);
+  return n.slice(0, 20);
+}
 function ensureBotPool() {
   const s = db.get();
-  if (Array.isArray(s.botPool) && s.botPool.length) return s.botPool;
+  if (Array.isArray(s.botPool) && s.botPool.length) {
+    // Migrate any legacy names to the username format (lowercase, valid chars, min 6).
+    let changed = false;
+    for (const b of s.botPool) { const h = botHandle(b.displayName); if (h !== b.displayName) { b.displayName = h; changed = true; } }
+    if (changed) db.save();
+    return s.botPool;
+  }
   const rng = mulberry32(770077);
   const pick = (a) => a[Math.floor(rng() * a.length)];
   const used = new Set();
   const pool = [];
   for (let i = 0; i < GEN_POOL_SIZE; i++) {
     let name, tries = 0;
-    // Username-style handle: first name + a 2-digit number, e.g. "Wycliffe12".
-    do { name = `${pick(LB_FIRST)}${String(10 + Math.floor(rng() * 90))}`; tries++; } while (used.has(name) && tries < 40);
+    // Username-style handle: lowercase first name + a 2-digit number, e.g. "wycliffe12".
+    do { name = botHandle(`${pick(LB_FIRST)}${String(10 + Math.floor(rng() * 90))}`, rng); tries++; } while (used.has(name) && tries < 40);
     used.add(name);
     const r = rng();
     const verification = r < 0.03 ? 'diamond' : r < 0.12 ? 'gold' : r < 0.34 ? 'blue' : null;
@@ -1427,7 +1497,12 @@ app.get('/api/tasks', requireAuth, (req, res) => {
   let free = null;
   if (!req.user.held && noPlan) {
     const freeSubs = mine.filter((x) => typeof x.taskId === 'string' && x.taskId[0] === 'F');
-    if (freeSubs.some((x) => x.status === 'approved')) {
+    // A free user may complete only ONE earning activity total — a task OR a questionnaire.
+    // If they've already used it on a questionnaire, tasks are locked (never both).
+    const quizUsed = myQuizSubs(req.user.id).some((x) => x.status !== 'rejected');
+    if (quizUsed) {
+      free = { active: true, state: 'completed', via: 'questionnaire', reward: 0.40 };
+    } else if (freeSubs.some((x) => x.status === 'approved')) {
       free = { active: true, state: 'completed', reward: 0.40 };            // done -> must subscribe
     } else if (freeSubs.some((x) => x.status === 'pending' || x.status === 'correction')) {
       free = { active: true, state: 'pending', reward: 0.40 };              // under review
@@ -1468,6 +1543,52 @@ app.get('/api/tasks/:id', requireAuth, (req, res) => {
   res.json({ task: { ...task, requiredPlan, locked: !canAccessTask(req.user, task), workers: taskWorkers(task.id) }, submission: sub || null });
 });
 
+// Consolidated dashboard statistics — everything the home screen shows, in one call.
+app.get('/api/dashboard', requireAuth, (req, res) => {
+  const u = req.user;
+  const plan = activePlan(u);
+  const planId = plan ? plan.id : 'free';
+  const noPlan = userRank(u) === 0;
+  const mineTasks = mySubmissions(u.id);
+  const mineQuiz = myQuizSubs(u.id);
+  const shares = (db.get().shareSubmissions || []).filter((s) => s.userId === u.id);
+
+  // Remaining tasks
+  const claimed = globallyClaimedTaskIds();
+  const doneTaskIds = new Set(mineTasks.filter((x) => x.status !== 'rejected').map((x) => x.taskId));
+  let remainingTasks;
+  if (noPlan) remainingTasks = (!freeActivityUsed(u) && nextFreeTask(u)) ? 1 : 0;
+  else remainingTasks = activeTaskPool().filter((t) => canAccessTask(u, t) && !claimed.has(t.id) && !doneTaskIds.has(t.id)).length;
+
+  // Remaining questionnaires (tier-unlocked, not yet taken)
+  const takenQuiz = new Set(mineQuiz.filter((x) => x.status !== 'rejected').map((x) => x.quizId));
+  let remainingQuiz = quizMod.QUESTIONNAIRES.filter((z) => quizMod.tierUnlocked(planId, z.tier) && !takenQuiz.has(z.id)).length;
+  if (noPlan) remainingQuiz = freeActivityUsed(u) ? 0 : Math.min(1, remainingQuiz);
+
+  // Social sharing tasks still open (no pending/approved submission for that platform)
+  const blockedShare = new Set(shares.filter((s) => s.status !== 'rejected').map((s) => s.platform));
+  const socialAvailable = SHARE_TASKS.filter((t) => !blockedShare.has(t.key)).length;
+
+  const pendingUSD = mineTasks.filter((x) => x.status === 'pending').reduce((a, x) => a + (x.reward || 0), 0)
+    + mineQuiz.filter((x) => x.status === 'pending').reduce((a, x) => a + (x.reward || 0), 0)
+    + shares.filter((s) => s.status === 'pending').reduce((a, s) => a + (s.reward || 0), 0);
+
+  res.json({
+    subscription: { active: userRank(u) > 0, plan: plan ? plan.name : 'Free', planId, expires: (u.plan && u.plan.expires) || null },
+    remainingTasks,
+    remainingQuestionnaires: remainingQuiz,
+    completedTasks: mineTasks.filter((x) => x.status === 'approved').length,
+    completedQuestionnaires: mineQuiz.filter((x) => x.status === 'approved').length,
+    socialSharingAvailable: socialAvailable,
+    balanceUSD: round2(u.usd || 0),
+    balanceKES: round2(u.balance || 0),
+    withdrawBalanceUSD: round2(combinedUSD(u)),
+    pendingRewardsUSD: round2(pendingUSD),
+    minWithdraw: MIN_REDEEM,       // { KES, USD } — USD derived from FX
+    fx: FX_KES_PER_USD,
+  });
+});
+
 app.post('/api/tasks/:id/submit', requireAuth, (req, res) => {
   const task = serverTaskById(req.params.id);
   if (!task) return res.status(404).json({ error: 'Task not found.' });
@@ -1488,10 +1609,12 @@ app.post('/api/tasks/:id/submit', requireAuth, (req, res) => {
   if (mySubmissions(req.user.id).some((x) => x.taskId === task.id && x.status !== 'rejected' && x.status !== 'correction')) {
     return res.status(409).json({ error: 'You have already submitted this task.' });
   }
-  // #1 — a no-plan member gets exactly ONE free task total.
+  // #1 — a no-plan member gets exactly ONE free earning activity total: a task OR a
+  // questionnaire, never both. Block the free task if either has already been used.
   if (task.tier === 'free' && userRank(req.user) === 0
-      && mySubmissions(req.user.id).some((x) => typeof x.taskId === 'string' && x.taskId[0] === 'F' && x.status !== 'rejected')) {
-    return res.status(403).json({ error: 'You have completed your free task. Subscribe to a plan to work on more tasks.', code: 'free_used' });
+      && (mySubmissions(req.user.id).some((x) => typeof x.taskId === 'string' && x.taskId[0] === 'F' && x.status !== 'rejected')
+          || myQuizSubs(req.user.id).some((x) => x.status !== 'rejected'))) {
+    return res.status(403).json({ error: FREE_LIMIT_MSG, code: 'free_used' });
   }
   // #2 — single-use: block if another member has already claimed or completed this task.
   if (task.tier !== 'free'
@@ -1923,8 +2046,8 @@ app.post('/api/admin/users/:id/details', requireAdminSession, (req, res) => {
   if (name) u.name = name;
 
   if (b.username !== undefined) {
-    const nu = String(b.username).trim();
-    if (nu && nu.toLowerCase() !== String(u.username || '').toLowerCase()) {
+    const nu = normalizeUsername(b.username);
+    if (nu && nu !== String(u.username || '').toLowerCase()) {
       const pe = usernameProblem(nu);
       if (pe) return res.status(400).json({ error: pe });
       if (usernameTaken(nu, u.id)) return res.status(409).json({ error: 'That username is already taken.' });
@@ -2051,8 +2174,8 @@ app.get('/api/admin/generated-users', requireAdminSession, (req, res) => {
 app.post('/api/admin/generated-users/:id/rename', requireAdminSession, (req, res) => {
   const b = ensureBotPool().find((x) => x.id === req.params.id);
   if (!b) return res.status(404).json({ error: 'Generated user not found.' });
-  const name = String(req.body.displayName || '').trim();
-  if (!name || name.length > 30) return res.status(400).json({ error: 'Enter a display name (max 30 characters).' });
+  const name = botHandle(req.body.displayName);   // enforce username format (lowercase, valid, 6–20)
+  if (!name || name.length < 6) return res.status(400).json({ error: 'Enter a valid handle (6–20 chars: letters, numbers, . _ -).' });
   const old = b.displayName;
   b.displayName = name;
   audit('generated_user_rename', { admin: ADMIN_USERNAME, id: b.id, from: old, to: name });
@@ -2525,6 +2648,10 @@ app.get('/api/redeem', requireAuth, (req, res) => {
 // Rejecting a withdrawal refunds the held balance.
 app.post('/api/redeem', rateLimit('redeem', 15, 10 * 60 * 1000), requireAuth, async (req, res) => {
   if (req.user.held) return res.status(403).json({ error: 'Your account is on hold, so withdrawals are paused. Please contact support.' });
+  // Policy: total balance must be at least the KES 10 minimum before any withdrawal.
+  if (combinedKES(req.user) < MIN_REDEEM_KES) {
+    return res.status(400).json({ error: `Your balance is below the minimum withdrawal of KES ${MIN_REDEEM_KES}. Earn a little more, then try again.` });
+  }
   const method = String(req.body.method || '').trim();
   const rawAmount = round2(req.body.amount);
   let destination = String(req.body.destination || '').trim();
@@ -2691,7 +2818,7 @@ app.post('/api/paystack/webhook', (req, res) => {
       const u = userById(rec.userId);
       if (u) {
         ensureUserShape(u);
-        if (rec.purpose === 'subscription') grantPlan(u, rec.plan || 'premium');
+        if (rec.purpose === 'subscription') activateSubscription(u, rec, 'auto:paystack'); // grants + notifies + emails
         else u.usd = round2((u.usd || 0) + (rec.amount || 0)); // Paystack top-ups are in USD
       }
       audit('paystack_charge_success', { reference: ref, userId: rec.userId, purpose: rec.purpose || 'deposit', plan: rec.plan || null, amount: rec.amount });
@@ -2876,13 +3003,47 @@ function handleStkCallback(cb) {
     const u = userById(rec.userId);
     if (u) {
       ensureUserShape(u);
-      if (rec.purpose === 'subscription') grantPlan(u, rec.plan || 'premium');
-      else u.balance = round2((u.balance || 0) + rec.amount);
+      if (rec.purpose === 'subscription') {
+        // Verify the amount paid matches the plan price before activating (anti-tamper).
+        const amtItem = items.find((i) => i.Name === 'Amount');
+        const paidKES = amtItem ? Number(amtItem.Value) : Number(rec.amount);
+        const planObj = PLAN_BY_ID[rec.plan || 'premium'];
+        if (planObj && paidKES >= planObj.priceKES) {
+          activateSubscription(u, rec, 'auto:mpesa');            // grants plan + notifies + emails
+        } else {
+          rec.error = `Subscription amount mismatch (paid ${paidKES}, expected ${planObj ? planObj.priceKES : '?'}) — needs admin review.`;
+        }
+      } else {
+        u.balance = round2((u.balance || 0) + rec.amount);
+      }
     }
   } else {
     rec.status = 'failed'; rec.error = cb.ResultDesc;
   }
   db.save();
+}
+
+// Activate a paid subscription automatically (NO admin approval). Grants/refreshes the
+// plan, records the source, sends an in-app notification and a confirmation email.
+// Called only from CONFIRMED-payment paths (verified M-Pesa/Paystack callbacks & returns).
+function activateSubscription(u, rec, source) {
+  const planId = (rec && rec.plan) || 'premium';
+  const planObj = PLAN_BY_ID[planId] || PLAN_BY_ID.premium;
+  grantPlan(u, planId);                          // sets/refreshes plan + expiry, audited
+  if (rec) rec.activatedBy = source || 'auto';
+  try {
+    gamify.award(u, 'subscription', `sub:${(rec && rec.id) || planId}`, {
+      event: { text: `${planObj.name} subscription activated`, icon: '⭐' },
+    });
+  } catch (_) {}
+  // Best-effort confirmation email — never blocks activation.
+  (async () => {
+    try {
+      if (!u.email || !mailer.configured()) return;
+      const expires = (u.plan && u.plan.expires) ? new Date(u.plan.expires).toLocaleDateString() : null;
+      await mailer.sendSubscriptionActivated({ to: u.email, name: u.name || u.username || 'there', plan: planObj.name, expires });
+    } catch (e) { console.error('[gweno] subscription email failed:', e.message); }
+  })();
 }
 
 // =============================================================================
@@ -2970,9 +3131,9 @@ app.get('/api/subscribe/pay/return', async (req, res) => {
   if (!rec || !rec.provider) return res.redirect('/app.html#/tasks');
   try {
     if (rec.status === 'pending' && await investPay.verify(rec.provider.method, rec.provider.providerRef)) {
-      rec.status = 'success'; rec.paidAt = new Date().toISOString();
+      rec.status = 'success'; rec.paidAt = new Date().toISOString();     // Paystack verify() confirms txn + amount + reference
       const u = userById(rec.userId);
-      if (u) { ensureUserShape(u); grantPlan(u, rec.plan || 'premium'); } // <-- only after confirmed payment
+      if (u) { ensureUserShape(u); activateSubscription(u, rec, 'auto:paystack'); } // grants + notifies + emails (no admin approval)
       db.save();
     }
   } catch (_) { /* leave pending; plan stays locked */ }
@@ -3034,7 +3195,7 @@ app.post('/api/settings/email', requireAuth, async (req, res) => {
 
 app.post('/api/settings/username', requireAuth, (req, res) => {
   const u = req.user;
-  const nu = String(req.body.newUsername || '').trim();
+  const nu = normalizeUsername(req.body.newUsername);
   const pe = usernameProblem(nu);
   if (pe) return res.status(400).json({ error: pe });
   if (u.usernameChangedAt) {
@@ -3155,17 +3316,145 @@ app.post('/api/surveys/:id/complete', requireAuth, requirePlan, (req, res) => {
 });
 
 // =============================================================================
-//  SHARE & EARN  —  social-sharing rewards (TikTok / WhatsApp)
+//  QUESTIONNAIRES  —  professional earning quizzes, tier-gated, auto-scored,
+//  admin-approved. Reward is credited ONLY on approval, then the questionnaire
+//  rotates out (never shown to that user again). Free users get ONE total.
+// =============================================================================
+app.get('/api/questionnaires', requireAuth, (req, res) => {
+  const plan = activePlan(req.user);
+  const planId = plan ? plan.id : 'free';
+  const mineSubs = myQuizSubs(req.user.id);
+  const completedIds = new Set(mineSubs.filter((x) => x.status !== 'rejected').map((x) => x.quizId)); // rotate out pending/approved
+  const approvedCount = mineSubs.filter((x) => x.status === 'approved').length;
+  const pendingCount = mineSubs.filter((x) => x.status === 'pending').length;
+  const noPlan = userRank(req.user) === 0;
+
+  let list = quizMod.QUESTIONNAIRES
+    .filter((z) => quizMod.tierUnlocked(planId, z.tier) && !completedIds.has(z.id))
+    .map((z) => quizMod.publicView(z));
+
+  // Free users: exactly ONE questionnaire, and only if their single free activity is unused.
+  let free = null;
+  if (noPlan) {
+    const quizNonRej = mineSubs.filter((x) => x.status !== 'rejected');
+    const usedTask = mySubmissions(req.user.id).some((x) => x.status !== 'rejected');
+    if (quizNonRej.length) { list = []; free = { active: true, state: quizNonRej.some((x) => x.status === 'approved') ? 'completed' : 'pending', via: 'questionnaire' }; }
+    else if (usedTask) { list = []; free = { active: true, state: 'completed', via: 'task' }; }
+    else { list = list.slice(0, 1); free = { active: true, state: 'available' }; }
+  }
+
+  res.json({
+    plan: plan ? { id: plan.id, name: plan.name, rank: plan.rank } : null,
+    planId,
+    tierNames: quizMod.TIER_NAME,
+    questionnaires: list,
+    completed: approvedCount,
+    pending: pendingCount,
+    free,
+    lockedMessage: noPlan && (!free || free.state !== 'available') ? FREE_LIMIT_MSG : null,
+    mySubmissions: mineSubs.slice(0, 20).map((s) => ({ id: s.id, title: s.title, category: s.category, reward: s.reward, pct: s.pct, status: s.status, reviewNote: s.reviewNote || '', createdAt: s.createdAt })),
+  });
+});
+
+app.post('/api/questionnaires/:id/submit', requireAuth, rateLimit('quiz', 30, 60 * 1000), (req, res) => {
+  const z = quizMod.byId(req.params.id);
+  if (!z) return res.status(404).json({ error: 'Questionnaire not found.' });
+  if (req.user.held) return res.status(403).json({ error: 'Your account is on hold. Questionnaires are paused until an admin restores your account.' });
+  const plan = activePlan(req.user);
+  const planId = plan ? plan.id : 'free';
+  if (!quizMod.tierUnlocked(planId, z.tier)) {
+    return res.status(403).json({ error: 'Upgrade your subscription to access this questionnaire.', code: 'no_plan' });
+  }
+  // Free users: ONE earning activity total (task OR questionnaire, never both).
+  if (userRank(req.user) === 0 && freeActivityUsed(req.user)) {
+    return res.status(403).json({ error: FREE_LIMIT_MSG, code: 'free_used' });
+  }
+  const S = db.get();
+  S.quizSubmissions = S.quizSubmissions || [];
+  if (S.quizSubmissions.some((x) => x.userId === req.user.id && x.quizId === z.id && x.status !== 'rejected')) {
+    return res.status(409).json({ error: 'You have already completed this questionnaire.' });
+  }
+  const answers = req.body.answers || {};
+  if (typeof answers !== 'object' || Object.keys(answers).length < z.questions.length) {
+    return res.status(400).json({ error: 'Please answer all questions before submitting.' });
+  }
+  const result = quizMod.score(z, answers);   // automatic scoring
+  const rec = {
+    id: rid(8), userId: req.user.id, quizId: z.id, title: z.title, category: z.category, tier: z.tier,
+    reward: z.reward, score: result.correct, total: result.total, pct: result.pct, passed: result.passed,
+    status: 'pending', reviewNote: '', createdAt: new Date().toISOString(), reviewedAt: null, reviewedBy: null,
+  };
+  S.quizSubmissions.unshift(rec);
+  audit('quiz_submitted', { userId: req.user.id, quizId: z.id, pct: result.pct });
+  db.save();
+  res.status(201).json({
+    ok: true,
+    result: { correct: result.correct, total: result.total, pct: result.pct, passed: result.passed },
+    submission: { id: rec.id, status: 'pending', reward: z.reward },
+    message: `Submitted — you scored ${result.correct}/${result.total} (${result.pct}%). Your $${z.reward.toFixed(2)} reward will be credited once an admin approves it.`,
+  });
+});
+
+// ---- Admin: review questionnaire submissions ------------------------------
+app.get('/api/admin/questionnaires', requireAdminSession, (req, res) => {
+  const all = (db.get().quizSubmissions || []).map((s) => {
+    const u = userById(s.userId);
+    return { ...s, user: u ? { username: u.username, email: u.email } : { username: 'User', email: null } };
+  }).sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)));
+  res.json({ submissions: all });
+});
+
+app.post('/api/admin/questionnaires/:id/decision', requireAdminSession, (req, res) => {
+  const actor = actorName(req);
+  const rec = (db.get().quizSubmissions || []).find((x) => x.id === req.params.id);
+  if (!rec) return res.status(404).json({ error: 'Submission not found.' });
+  const decision = String(req.body.decision || '');
+  const note = String(req.body.note || '').trim();
+  if (!['approved', 'rejected'].includes(decision)) return res.status(400).json({ error: 'Invalid decision.' });
+  const owner = userById(rec.userId);
+  if (owner) ensureUserShape(owner);
+  const wasApproved = rec.status === 'approved';
+  const S = db.get();
+  if (decision === 'approved' && !wasApproved && owner) {
+    owner.usd = round2((owner.usd || 0) + rec.reward);                       // credit ONLY on approval
+    S.transactions = S.transactions || [];
+    S.transactions.unshift({ id: rid(8), userId: owner.id, type: 'quiz_reward', quizId: rec.quizId, amountUSD: round2(rec.reward), ref: rec.id, createdAt: new Date().toISOString() });
+    if (S.transactions.length > 5000) S.transactions.length = 5000;
+    gamify.award(owner, 'quiz', `quiz:${rec.id}`, {
+      earnedUSD: round2(rec.reward),
+      event: { text: `Questionnaire approved (+$${round2(rec.reward).toFixed(2)})`, icon: '📝' },
+    });
+  }
+  if (decision !== 'approved' && wasApproved && owner) {
+    owner.usd = round2(Math.max(0, (owner.usd || 0) - rec.reward));          // reverse a prior approval
+  }
+  rec.status = decision; rec.reviewNote = note; rec.reviewedAt = new Date().toISOString(); rec.reviewedBy = actor;
+  audit('quiz_' + decision, { admin: actor, userId: rec.userId, quizId: rec.quizId, submissionId: rec.id, amount: decision === 'approved' ? round2(rec.reward) : 0 });
+  db.save();
+  res.json({ ok: true, submission: { id: rec.id, status: rec.status, reviewNote: rec.reviewNote } });
+});
+
+// =============================================================================
+//  SHARE & EARN  —  social-sharing rewards (TikTok / WhatsApp / Google review)
 //  Open to every signed-in user (drives growth). Each submission is admin-reviewed;
-//  the $0.30 reward is credited ONLY on approval. Screenshots are stored OUTSIDE the
+//  the reward is credited ONLY on approval. Screenshots are stored OUTSIDE the
 //  hot JSONB state (db.putImage) so per-request reload/persist stays fast.
 // =============================================================================
-const SHARE_REWARD = 0.30;
+const SHARE_REWARD = 0.30; // default/display only; each task carries its own reward ($0.10–$0.40)
+const TIKTOK_OFFICIAL = process.env.TIKTOK_OFFICIAL_URL || 'https://www.tiktok.com/@gweno.com';
 const SHARE_TASKS = [
-  { key: 'tiktok',   name: 'TikTok Share',        reward: SHARE_REWARD, icon: '🎵',
-    steps: ['Share your Gweno link on TikTok (a post or story).', 'Take a screenshot of the published post.', 'Upload the screenshot below as proof.'] },
-  { key: 'whatsapp', name: 'WhatsApp Group Share', reward: SHARE_REWARD, icon: '💬',
-    steps: ['Share your Gweno link in a WhatsApp group.', 'Take a screenshot of the message in the group.', 'Upload the screenshot below as proof.'] },
+  { key: 'whatsapp', name: 'WhatsApp Group Share', reward: 0.20, icon: '💬', link: null,
+    steps: ['Share your Gweno link (shown above) to at least 3 WhatsApp groups.',
+            'Take a screenshot showing the message shared in the groups.',
+            'Upload the screenshot below as proof.'] },
+  { key: 'tiktok', name: 'TikTok Repost', reward: 0.30, icon: '🎵', link: TIKTOK_OFFICIAL,
+    steps: ['Open our official TikTok account (link below) and choose a video.',
+            'Share the video and repost it to your own profile.',
+            'Screenshot your repost and upload it below as proof.'] },
+  { key: 'google', name: 'Review Our Website', reward: 0.40, icon: '⭐', link: 'https://www.google.com/search?q=gweno',
+    steps: ['Open Google and search for “Gweno”.',
+            'Leave an honest review about your experience using Gweno.',
+            'Screenshot your published review and upload it below as proof.'] },
 ];
 const SHARE_BY_KEY = Object.fromEntries(SHARE_TASKS.map((t) => [t.key, t]));
 

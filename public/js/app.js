@@ -356,7 +356,7 @@ const NAV = [
 ];
 const TITLES = {
   dashboard: 'Dashboard', stats: 'Stats', earn: 'Earn', tasks: 'Tasks', submissions: 'My submissions',
-  referral: 'Refer & earn', applications: 'Applications', share: 'Share & Earn', invest: 'Investments', advertise: 'Advertise', learn: 'Learn', redeem: 'Redeem',
+  referral: 'Refer & earn', applications: 'Applications', share: 'Share & Earn', questionnaires: 'Questionnaires', invest: 'Investments', advertise: 'Advertise', learn: 'Learn', redeem: 'Redeem',
   rewards: 'Rewards', leaderboard: 'Leaderboard',
   settings: 'Settings', chat: 'Chat', support: 'Support', admin: 'Admin review', profile: 'Profile',
 };
@@ -423,7 +423,7 @@ async function refreshMe() {
 
 function setActive(routeKey) {
   // Side nav groups tasks/submissions/referral under "Earn".
-  const sideKey = ['tasks', 'submissions', 'referral', 'applications', 'share'].includes(routeKey) ? 'earn' : routeKey;
+  const sideKey = ['tasks', 'submissions', 'referral', 'applications', 'share', 'questionnaires'].includes(routeKey) ? 'earn' : routeKey;
   document.querySelectorAll('.nav-item').forEach((a) => {
     const on = a.dataset.route === sideKey;
     a.classList.toggle('active', on);
@@ -441,7 +441,7 @@ function router() {
   setActive(key);
   const map = {
     dashboard: pageDashboard, stats: pageStats, earn: pageEarn, tasks: pageTasks,
-    submissions: pageSubmissions, referral: pageReferral, applications: pageApplications, share: pageShare,
+    submissions: pageSubmissions, referral: pageReferral, applications: pageApplications, share: pageShare, questionnaires: pageQuestionnaires,
     invest: pageInvest, advertise: pageAdvertise,
     learn: pageLearn, redeem: pageRedeem, settings: pageSettings, chat: pageChat,
     support: pageSupport, admin: pageAdmin, profile: pageProfile,
@@ -474,6 +474,38 @@ function skeletonView() {
 }
 const loading = () => { view().innerHTML = skeletonView(); };
 
+// Live "recent task completions" ticker: a new completion slides in every few seconds so
+// the feed feels alive. The pool is refreshed from the API (real completions mix in).
+let FEED_STATE = null;
+function startFeed(items) {
+  const el = document.getElementById('dFeed'); if (!el) return;
+  const pool = (items || []).slice();
+  if (!pool.length) {
+    el.innerHTML = `<p class="p-sub">No completions yet, be the first to finish a task!</p>`;
+    if (FEED_STATE && FEED_STATE.timer) clearInterval(FEED_STATE.timer);
+    FEED_STATE = null; return;
+  }
+  const rowHtml = (f, isNew) => `<div class="task-row${isNew ? ' feed-new' : ''}">
+      <div class="t-ico">${esc((f.username || '?').slice(0, 2).toUpperCase())}</div>
+      <div class="t-main"><h4>${esc(f.username)}${f.country ? ` · ${esc(f.country)}` : ''}</h4><p>completed “${esc(f.task)}”</p></div>
+      <div class="t-reward">+${usd(f.reward)}</div>
+    </div>`;
+  // Already running for this element? Just refresh the pool so new completions get included.
+  if (FEED_STATE && FEED_STATE.el === el && document.body.contains(el)) { FEED_STATE.pool = pool; FEED_STATE.rowHtml = rowHtml; return; }
+  if (FEED_STATE && FEED_STATE.timer) clearInterval(FEED_STATE.timer);
+  const VISIBLE = 6;
+  el.innerHTML = pool.slice(0, VISIBLE).map((f) => rowHtml(f, false)).join('');
+  const st = { el, pool, rowHtml, idx: VISIBLE % pool.length, timer: null };
+  st.timer = setInterval(() => {
+    if (!document.body.contains(el)) { clearInterval(st.timer); if (FEED_STATE === st) FEED_STATE = null; return; }
+    const f = st.pool[st.idx % st.pool.length];
+    st.idx = (st.idx + 1) % st.pool.length;
+    el.insertAdjacentHTML('afterbegin', st.rowHtml(f, true));
+    while (el.children.length > VISIBLE) el.removeChild(el.lastElementChild);
+  }, 3200);
+  FEED_STATE = st;
+}
+
 // =====================================================================
 //  DASHBOARD
 // =====================================================================
@@ -502,8 +534,15 @@ async function pageDashboard() {
       <p class="p-sub">Jump straight into earning.</p>
       <div class="tiles">
         <a class="tile" href="#/tasks"><div class="ico">${ICON.edit}</div><h4>Do tasks</h4><p id="dQsTasks">Loading available tasks…</p><span class="tag">Start earning →</span></a>
-        <a class="tile" href="#/earn"><div class="ico">${ICON.clipboard}</div><h4>Take surveys</h4><p>Share your opinion and earn in minutes.</p><span class="tag">View surveys →</span></a>
-        <a class="tile" href="#/referral"><div class="ico">${ICON.userplus}</div><h4>Refer & earn</h4><p>Earn 5 KES for every friend who joins.</p><span class="tag">Get your link →</span></a>
+        <a class="tile" href="#/questionnaires"><div class="ico">${ICON.clipboard}</div><h4>Questionnaires</h4><p>Answer professional quizzes and earn per approval.</p><span class="tag">Open →</span></a>
+        <a class="tile" href="#/share"><div class="ico">${ICON.userplus}</div><h4>Social sharing</h4><p>Share or review us for $0.10–$0.40 per task.</p><span class="tag">Open →</span></a>
+      </div>
+    </div>
+
+    <div class="panel" id="dashStats">
+      <h3>Your activity at a glance</h3>
+      <div class="grid g4" id="dashStatsGrid">
+        <div class="sk sk-stat"></div><div class="sk sk-stat"></div><div class="sk sk-stat"></div><div class="sk sk-stat"></div>
       </div>
     </div>
 
@@ -550,29 +589,37 @@ async function pageDashboard() {
     const stats = document.getElementById('dRefStats'); if (stats) stats.innerHTML = `Referrals: <b>${r.count || 0}</b> · Earned: <b>${kes(r.earningsKES)}</b>`;
     const copy = document.getElementById('copyRef'); if (copy) copy.onclick = () => copyText(r.link);
   };
-  const renderFeed = (d) => {
-    const el = document.getElementById('dFeed'); if (!el || !d) return;
-    const feed = d.items || [];
-    el.innerHTML = feed.length ? feed.map((f) => `
-      <div class="task-row">
-        <div class="t-ico">${esc((f.username || '?').slice(0, 2).toUpperCase())}</div>
-        <div class="t-main"><h4>${esc(f.username)}${f.country ? ` · ${esc(f.country)}` : ''}</h4><p>completed “${esc(f.task)}”</p></div>
-        <div class="t-reward">+${usd(f.reward)}</div>
-      </div>`).join('') : `<p class="p-sub">No completions yet, be the first to finish a task!</p>`;
+  const renderFeed = (d) => { if (d) startFeed(d.items || []); };
+
+  // Consolidated dashboard statistics (remaining/completed/plan/pending/balance/social).
+  const renderDash = (s) => {
+    const grid = document.getElementById('dashStatsGrid'); if (!grid || !s) return;
+    const tile = (label, value, sub) => `<div class="stat"><div class="label">${label}</div><div class="value">${value}</div>${sub ? `<div class="p-sub">${sub}</div>` : ''}</div>`;
+    grid.innerHTML =
+      tile('Subscription', s.subscription.active ? esc(s.subscription.plan) : 'Free', s.subscription.active ? (s.subscription.expires ? 'until ' + new Date(s.subscription.expires).toLocaleDateString() : 'active') : 'upgrade to earn more') +
+      tile('Remaining tasks', s.remainingTasks ?? '—', 'available to you') +
+      tile('Remaining questionnaires', s.remainingQuestionnaires ?? '—', 'in your plan') +
+      tile('Social sharing', s.socialSharingAvailable ?? '—', 'tasks open') +
+      tile('Completed tasks', s.completedTasks ?? 0, '') +
+      tile('Completed questionnaires', s.completedQuestionnaires ?? 0, '') +
+      tile('Pending rewards', usd(s.pendingRewardsUSD), 'awaiting approval') +
+      tile('Withdrawal balance', usd(s.withdrawBalanceUSD), `min KES ${s.minWithdraw ? s.minWithdraw.KES : 10}`);
   };
 
   // Stale-while-revalidate (pattern 4): on repeat visits the cached values paint
   // instantly, then each section revalidates in the background.
   Data.swr('/api/tasks', (d) => renderTasks(d));
+  Data.swr('/api/dashboard', (d) => renderDash(d));
   Data.swr('/api/referral', (d) => renderRef(d));
   Data.swr('/api/public/activity', (d) => renderFeed(d));
 
   // Smart polling (pattern 5): keep the live sections + balance fresh while the
   // tab is visible; auto-pauses when the tab is hidden, resumes on focus.
   PAGE_POLL = Data.poll(async () => {
-    const [tasks, feed] = await Promise.all([Data.get('/api/tasks'), Data.get('/api/public/activity')]);
+    const [tasks, feed, dash] = await Promise.all([Data.get('/api/tasks'), Data.get('/api/public/activity'), Data.get('/api/dashboard')]);
     if (tasks.ok) { Data.setCache('/api/tasks', tasks.data); renderTasks(tasks.data); }
     if (feed.ok) { Data.setCache('/api/public/activity', feed.data); renderFeed(feed.data); }
+    if (dash.ok) { Data.setCache('/api/dashboard', dash.data); renderDash(dash.data); }
     await refreshMe(); renderBal();
   }, 20000);
 }
@@ -633,8 +680,8 @@ async function pageEarn() {
     <p class="page-sub">Every way to earn on Gweno, in one place.</p>
     <div class="tiles">
       <a class="tile" href="#/tasks"><div class="ico">${ICON.edit}</div><h4>Tasks</h4><p>Complete microtasks for cash rewards.</p><span class="tag">Open →</span></a>
-      <a class="tile" href="#/earn/surveys" id="surveysTile"><div class="ico">${ICON.clipboard}</div><h4>Surveys</h4><p>Answer surveys and earn in minutes.</p><span class="tag">Open →</span></a>
-      <a class="tile" href="#/share"><div class="ico">${ICON.userplus}</div><h4>Share &amp; earn</h4><p>Share Gweno on TikTok or WhatsApp for $0.30.</p><span class="tag">Open →</span></a>
+      <a class="tile" href="#/questionnaires"><div class="ico">${ICON.clipboard}</div><h4>Questionnaires</h4><p>Professional quizzes across 10 categories — earn per approved questionnaire.</p><span class="tag">Open →</span></a>
+      <a class="tile" href="#/share"><div class="ico">${ICON.userplus}</div><h4>Social sharing</h4><p>Share on WhatsApp/TikTok or review us on Google for $0.10–$0.40.</p><span class="tag">Open →</span></a>
       <a class="tile" href="#/referral"><div class="ico">${ICON.userplus}</div><h4>Refer & earn</h4><p>5 KES per friend who joins.</p><span class="tag">Open →</span></a>
       <a class="tile" href="#/applications"><div class="ico">${ICON.clipboard}</div><h4>Apply for tasks</h4><p>Send a proposal and get approved to work.</p><span class="tag">Open →</span></a>
       <a class="tile" href="#/submissions"><div class="ico">${ICON.submissions}</div><h4>My submissions</h4><p>Track approvals, rejections & disputes.</p><span class="tag">Open →</span></a>
@@ -655,7 +702,6 @@ async function pageEarn() {
         }).join('')}</tbody>
       </table>
     </div>`;
-  document.getElementById('surveysTile').addEventListener('click', (e) => { e.preventDefault(); pageSurveys(); });
 }
 
 // Shown in place of a gated earning page when the user has no active subscription.
@@ -672,50 +718,68 @@ function upgradeGateHTML(msg, back) {
     </div>`;
 }
 
-async function pageSurveys() {
-  document.getElementById('pageTitle').textContent = 'Surveys';
+const TIER_BADGE = { basic: 'Basic', premium: 'Premium', pro: 'Pro' };
+
+async function pageQuestionnaires() {
+  document.getElementById('pageTitle').textContent = 'Questionnaires';
   loading();
-  const { data } = await apiGet('/api/surveys');
-  if (data && data.code === 'no_plan') { view().innerHTML = upgradeGateHTML(data.error, true); return; }
-  const list = data.surveys || [];
+  const { data } = await apiGet('/api/questionnaires');
+  const list = data.questionnaires || [];
+  const mine = data.mySubmissions || [];
+  const plan = data.plan;
+  const lockedMsg = data.lockedMessage;
+
+  const planLine = plan
+    ? `<b>${esc(plan.name)} plan</b> — access to ${plan.rank >= 3 ? 'every' : plan.rank >= 2 ? 'Basic + Premium' : 'Basic'} questionnaire.`
+    : 'Free — you may complete <b>one</b> questionnaire or one task, then subscribe to unlock more.';
+
   view().innerHTML = `
-    <p class="page-sub"><a href="#/earn">← Back to Earn</a></p>
-    <div class="panel">
-      <h3>Available surveys</h3>
-      <p class="p-sub">Each survey pays once. Answer honestly to keep earning.</p>
-      ${list.map((s) => `
-        <div class="task-row">
-          <div class="t-ico">${ICON.survey}</div>
-          <div class="t-main"><h4>${esc(s.title)}</h4><p>${s.questions.length} questions · ~${s.minutes} min</p></div>
-          <div class="t-reward">${usd(s.reward)}</div>
-          ${s.done ? `<span class="st approved">Completed</span>` : `<button class="btn btn-primary auto start-survey" data-id="${s.id}">Start</button>`}
-        </div>`).join('')}
-    </div>`;
-  view().querySelectorAll('.start-survey').forEach((b) => b.addEventListener('click', () => openSurvey(list.find((x) => x.id === b.dataset.id))));
+    <p class="page-sub">Professional earning questionnaires. Answer all questions — an admin reviews your score, then your reward is paid and a new questionnaire appears.</p>
+    <div class="panel"><p class="p-sub" style="margin:0">${planLine}</p></div>
+    ${lockedMsg ? `<div class="panel upgrade"><h3 style="margin:0">🔒 Free opportunity used</h3><p class="p-sub" style="margin:6px 0 12px">${esc(lockedMsg)}</p><a class="btn btn-primary auto" href="#/tasks">See plans</a></div>` : ''}
+    ${list.length ? `<div class="q-grid">${list.map((z) => `
+      <div class="q-card">
+        <div class="q-top"><span class="q-ico">${z.icon}</span><span class="tier-badge ${z.tier}">${TIER_BADGE[z.tier] || z.tier}</span></div>
+        <h4>${esc(z.title)}</h4>
+        <p class="p-sub">${esc(z.category)} · ${z.count} questions</p>
+        <div class="q-foot"><span class="t-reward">${usd(z.reward)}</span><button class="btn btn-primary auto start-quiz" data-id="${esc(z.id)}">Start</button></div>
+      </div>`).join('')}</div>`
+      : (lockedMsg ? '' : `<div class="panel"><p class="p-sub" style="margin:0">No questionnaires available right now. ${plan ? 'You’ve completed all in your plan — check back soon or upgrade for more.' : ''}</p></div>`)}
+
+    ${mine.length ? `<div class="panel"><h3>Your questionnaires</h3>
+      <table class="table"><thead><tr><th>Title</th><th>Category</th><th class="num">Score</th><th class="num">Reward</th><th>Status</th><th>Date</th></tr></thead>
+      <tbody>${mine.map((s) => `<tr>
+        <td>${esc(s.title)}</td><td class="p-sub">${esc(s.category)}</td>
+        <td class="num">${s.pct != null ? s.pct + '%' : '—'}</td><td class="num">${usd(s.reward)}</td>
+        <td><span class="st ${s.status}">${statusLabel(s.status)}</span>${s.reviewNote ? `<br><span class="p-sub">${esc(s.reviewNote)}</span>` : ''}</td>
+        <td class="p-sub">${new Date(s.createdAt).toLocaleDateString()}</td>
+      </tr>`).join('')}</tbody></table></div>` : ''}`;
+
+  view().querySelectorAll('.start-quiz').forEach((b) => b.addEventListener('click', () => openQuiz(list.find((x) => x.id === b.dataset.id))));
 }
 
-function openSurvey(s) {
+function openQuiz(z) {
+  if (!z) return;
   const bg = openModal(`
     <button class="close">×</button>
-    <h3>${esc(s.title)}</h3>
-    <p class="p-sub">Reward: ${usd(s.reward)} · answer all questions.</p>
-    <form id="svForm">
-      ${s.questions.map((qq, i) => `
-        <div class="field"><label>${i + 1}. ${esc(qq.q)}</label>
-          <select data-q="${i}" required>
-            <option value="">Select…</option>
-            ${qq.options.map((o) => `<option>${esc(o)}</option>`).join('')}
-          </select></div>`).join('')}
-      <button class="btn btn-primary" type="submit">Submit survey</button>
+    <h3>${esc(z.title)}</h3>
+    <p class="p-sub">${esc(z.category)} · ${TIER_BADGE[z.tier] || z.tier} · reward ${usd(z.reward)} · answer all ${z.count} questions.</p>
+    <form id="qzForm" class="qz-form">
+      ${z.questions.map((qq, i) => `
+        <div class="qz-q"><p class="qz-qtext">${i + 1}. ${esc(qq.q)}</p>
+          ${qq.options.map((o, oi) => `<label class="qz-opt"><input type="radio" name="q${i}" value="${oi}"> <span>${esc(o)}</span></label>`).join('')}
+        </div>`).join('')}
+      <button class="btn btn-primary" type="submit">Submit questionnaire</button>
     </form>`);
-  bg.querySelector('#svForm').addEventListener('submit', async (e) => {
+  bg.querySelector('#qzForm').addEventListener('submit', async (e) => {
     e.preventDefault();
     const answers = {};
-    bg.querySelectorAll('select[data-q]').forEach((sel) => { if (sel.value) answers[sel.dataset.q] = sel.value; });
-    if (Object.keys(answers).length < s.questions.length) return toast('Please answer all questions', 'error');
-    const { ok, data } = await api('/api/surveys/' + s.id + '/complete', { answers });
-    if (ok) { toast(data.message); bg.remove(); await refreshMe(); pageSurveys(); }
-    else toast(data.error || 'Could not submit', 'error');
+    z.questions.forEach((qq, i) => { const sel = bg.querySelector(`input[name="q${i}"]:checked`); if (sel) answers[i] = Number(sel.value); });
+    if (Object.keys(answers).length < z.questions.length) return toast('Please answer all questions', 'error');
+    const btn = bg.querySelector('button[type="submit"]'); btn.disabled = true;
+    const { ok, data } = await api('/api/questionnaires/' + z.id + '/submit', { answers });
+    if (ok) { toast(data.message || 'Submitted for review'); bg.remove(); await refreshMe(); pageQuestionnaires(); }
+    else { btn.disabled = false; toast(data.error || 'Could not submit', 'error'); }
   });
 }
 
@@ -748,10 +812,16 @@ async function pageTasks() {
     return '';
   })();
   // Free-trial task banner (only for users with no active plan).
-  const freeBanner = (data.free && data.free.active) ? (data.free.exhausted
-    ? `<div class="panel upgrade"><h3 style="margin:0">🎁 Free tasks used up</h3><p class="p-sub" style="margin:4px 0 8px">You've completed all your free trial tasks. Subscribe to a plan below to keep earning.</p><button class="btn btn-primary auto" id="freeSub">See plans</button></div>`
-    : `<div class="panel premium-active"><h3 style="margin:0">🎁 Your free task is ready</h3><p class="p-sub" style="margin:4px 0 0">Complete the free task below to earn <b>${usd(data.free.reward || 0.40)}</b>. <b>${data.free.remaining}</b> free task${data.free.remaining === 1 ? '' : 's'} left — subscribe to a plan to unlock the full marketplace.</p></div>`)
-    : '';
+  const fst = data.free && data.free.active ? data.free.state : null;
+  const viaQuiz = data.free && data.free.via === 'questionnaire';
+  const freeBanner =
+      fst === 'completed'
+        ? `<div class="panel upgrade"><h3 style="margin:0">🎁 You've used your free earning opportunity${viaQuiz ? ' (questionnaire)' : ''}</h3><p class="p-sub" style="margin:4px 0 8px">You can complete only one free activity — a task or a questionnaire. Upgrade to a subscription plan to unlock more tasks and questionnaires.</p><button class="btn btn-primary auto" id="freeSub">See plans</button></div>`
+    : fst === 'pending'
+        ? `<div class="panel premium-active"><h3 style="margin:0">🕓 Your free task is under review</h3><p class="p-sub" style="margin:4px 0 0">We're reviewing your submission. Once it's approved your earnings are credited — then subscribe to a plan to keep working on more tasks.</p></div>`
+    : fst === 'available'
+        ? `<div class="panel premium-active"><h3 style="margin:0">🎁 Your free task is ready</h3><p class="p-sub" style="margin:4px 0 0">Complete the free task below to earn <b>${usd(data.free.reward || 0.40)}</b>. After it's approved, subscribe to a plan to unlock the full marketplace.</p></div>`
+        : '';
   const cats = data.categories || [];      // [{ name, icon }]
   const q = (TASK_STATE.search || '').toLowerCase();
   const filtered = all.filter((t) =>
@@ -1028,7 +1098,11 @@ function openTask(t) {
     if (err) return toast(err, 'error');
     const { ok, data } = await api('/api/tasks/' + t.id + '/submit', { proof });
     if (ok) { toast(data.message); bg.remove(); pageTasks(); }
-    else toast(data.error || 'Could not submit', 'error');
+    else {
+      toast(data.error || 'Could not submit', 'error');
+      // If the task was just taken by someone else, refresh so it disappears from the list.
+      if (data.code === 'task_taken') { bg.remove(); pageTasks(); }
+    }
   });
 }
 
@@ -1200,9 +1274,9 @@ async function pageShare() {
   const { data } = await apiGet('/api/share');
   const tasks = data.tasks || [];
   const subs = data.submissions || [];
-  const platIcon = { tiktok: '🎵', whatsapp: '💬' };
+  const platIcon = { tiktok: '🎵', whatsapp: '💬', google: '⭐' };
   view().innerHTML = `
-    <p class="page-sub">Promote Gweno and earn <b>${usd(data.reward || 0.30)}</b> per approved share. Every screenshot is reviewed before the reward is paid.</p>
+    <p class="page-sub">Promote Gweno and earn <b>$0.10–$0.40</b> per approved task. Every screenshot is reviewed before the reward is paid.</p>
     ${data.earnedUSD ? `<div class="panel premium-active"><p class="p-sub" style="margin:0">You've earned <b>${usd(data.earnedUSD)}</b> from Share &amp; Earn so far. Keep sharing!</p></div>` : ''}
     <div class="panel">
       <h3>Your Gweno link</h3>
@@ -1215,6 +1289,7 @@ async function pageShare() {
         return `<div class="share-card">
           <div class="sh-top"><span class="sh-ico">${t.icon}</span><h4>${esc(t.name)}</h4><span class="tc-reward">${usd(t.reward)}</span></div>
           <ol class="instr">${t.steps.map((s) => `<li>${esc(s)}</li>`).join('')}</ol>
+          ${t.link ? `<a class="btn btn-ghost auto" href="${esc(t.link)}" target="_blank" rel="noopener" style="margin-bottom:8px">${t.key === 'google' ? 'Open Google' : 'Open our TikTok'} →</a>` : ''}
           ${active
             ? `<div class="sh-status"><span class="st ${active.status}">${statusLabel(active.status)}</span> <span class="p-sub">${active.status === 'approved' ? 'Reward credited to your wallet.' : 'Under review — usually within a few hours.'}</span></div>`
             : `<button class="btn btn-primary auto share-upload" data-platform="${t.key}" data-name="${esc(t.name)}"><span class="bico">${ICON.upload || ''}</span> Upload screenshot</button>`}
@@ -1685,6 +1760,7 @@ async function pageRedeem() {
     <div class="panel">
       <h3>Withdraw to cash out</h3>
       <p class="p-sub"><b>M-Pesa</b> is entered and paid in <b>KES</b>; PayPal and bank in <b>USD</b>. Withdrawals are usually verified by our team within 2 hours before funds are sent.</p>
+      <p class="p-sub" style="margin-top:-4px">Minimum withdrawal: <b>KES ${(data.min && data.min.KES) || 10}</b> (≈ ${usd(minUSD)}).</p>
       <div id="wdMethods"></div>
       <form id="rForm" style="margin-top:14px">
         <div id="wdFields"><p class="p-sub">Select a method above to continue.</p></div>
@@ -2370,11 +2446,11 @@ async function pageLeaderboard() {
     const rows = (ok && data.top || []);
     const medal = (r) => r === 1 ? '🥇' : r === 2 ? '🥈' : r === 3 ? '🥉' : `<span class="lb-rank">${r}</span>`;
     view().innerHTML = `
-      <p class="page-sub">Compete with other members. Rankings are by XP earned in the period.</p>
+      <p class="page-sub">Compete with other members — rankings update live, by XP earned in the period. <span class="lb-live">LIVE</span></p>
       <div class="tabs">${tabs}</div>
       <div class="panel">
-        ${rows.length ? `<div class="lb">${rows.map((u) => `
-          <div class="lb-row ${u.me ? 'me' : ''}">
+        ${rows.length ? `<div class="lb">${rows.map((u, i) => `
+          <div class="lb-row ${u.me ? 'me' : ''}" style="animation-delay:${Math.min(i * 45, 1000)}ms">
             <div class="lb-pos">${medal(u.rank)}</div>
             <div class="lb-av">${avatarHTML(u, 'avatar-sm')}</div>
             <div class="lb-name">${esc(u.name)} ${verifBadge(u.verification, 'sm')}<div class="lb-lvl">${esc(u.level)}</div></div>
@@ -2384,6 +2460,12 @@ async function pageLeaderboard() {
     view().querySelectorAll('.tab').forEach((b) => b.addEventListener('click', () => { period = b.dataset.p; LEADERBOARD_PERIOD = period; load(); }));
   }
   await load();
+  // Live refresh: re-pull the board every 30s while the page is open (auto-stops on leave).
+  const timer = setInterval(() => {
+    if ((location.hash.replace(/^#\/?/, '').split('/')[0] || '') === 'leaderboard') load();
+    else clearInterval(timer);
+  }, 30000);
+  PAGE_POLL = () => clearInterval(timer);
 }
 
 // Show toasts for new level-ups / badges / rewards, then mark them read so they

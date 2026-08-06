@@ -18,6 +18,7 @@ const EMPTY = {
   submissions: [], campaigns: [], redemptions: [], support: [], deposits: [], devices: [],
   adminSessions: [], investments: [], investmentRates: {}, adminEmails: [], broadcasts: [], emailLog: [],
   applications: [], auditLog: [], botPool: [],
+  taskExtra: [], taskSeq: 0,
   // Share & Earn (social sharing) submissions — screenshots live in the separate
   // share_images store (NOT here) so the hot JSONB state stays small. `transactions`
   // is a lightweight ledger of credited earnings (share rewards, etc.).

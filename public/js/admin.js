@@ -18,7 +18,7 @@ function toast(msg, type = 'ok') {
   setTimeout(() => { t.classList.remove('show'); setTimeout(() => t.remove(), 250); }, 3000);
 }
 
-const TABS = [['overview', 'Overview'], ['submissions', 'Submissions'], ['applications', 'Applications'], ['share', 'Social Share'], ['emails', 'Email log'], ['audit', 'Audit log'], ['users', 'Users'], ['rewards', 'Rewards'], ['sendemail', 'Send Email'], ['broadcast', 'Broadcast'], ['investments', 'Investments'], ['deposits', 'Deposits'], ['withdrawals', 'Withdrawals'], ['support', 'Support']];
+const TABS = [['overview', 'Overview'], ['submissions', 'Submissions'], ['questionnaires', 'Questionnaires'], ['applications', 'Applications'], ['share', 'Social Share'], ['emails', 'Email log'], ['audit', 'Audit log'], ['users', 'Users'], ['rewards', 'Rewards'], ['sendemail', 'Send Email'], ['broadcast', 'Broadcast'], ['investments', 'Investments'], ['deposits', 'Deposits'], ['withdrawals', 'Withdrawals'], ['support', 'Support']];
 
 // ---- Reusable client-side pagination for admin tables ----
 const PAGE_STATE = {};        // key -> current page (1-based); reset to 1 on tab switch
@@ -148,7 +148,7 @@ const loading = () => { content().innerHTML = `
 
 function route() {
   if (ROLE === 'finance' && !FINANCE_TABS.includes(TAB)) TAB = 'overview';
-  ({ overview: tOverview, submissions: tSubmissions, applications: tApplications, share: tShareReview, emails: tEmails, audit: tAudit, users: tUsers, rewards: tRewards, sendemail: tSendEmail, broadcast: tBroadcast, investments: tInvestments, deposits: tDeposits, withdrawals: tWithdrawals, support: tSupport }[TAB] || tOverview)();
+  ({ overview: tOverview, submissions: tSubmissions, questionnaires: tQuestionnaires, applications: tApplications, share: tShareReview, emails: tEmails, audit: tAudit, users: tUsers, rewards: tRewards, sendemail: tSendEmail, broadcast: tBroadcast, investments: tInvestments, deposits: tDeposits, withdrawals: tWithdrawals, support: tSupport }[TAB] || tOverview)();
 }
 
 async function tOverview() {
@@ -301,6 +301,65 @@ function openShareDecision(id, decision) {
     const note = bg.querySelector('#shrNote').value.trim();
     bg.remove();
     decideShare(id, decision, note);
+  });
+}
+
+// ---- Questionnaire submissions (auto-scored, admin-approved) ----------------
+async function tQuestionnaires() {
+  loading();
+  const { data } = await apiGet('/api/admin/questionnaires');
+  const subs = data.submissions || [];
+  const pending = subs.filter((s) => s.status === 'pending').length;
+  const render = () => {
+    const p = paginate('quiz', subs);
+    content().innerHTML = `
+      <p class="page-sub">Completed questionnaires (auto-scored). Approve to credit the reward + rotate a new questionnaire in for the member, or reject. ${pending ? `<b>${pending}</b> awaiting review.` : ''}</p>
+      <div class="panel" style="overflow-x:auto"><table class="table">
+        <thead><tr><th>User</th><th>Questionnaire</th><th>Tier</th><th class="num">Score</th><th class="num">Reward</th><th>Submitted</th><th>Status</th><th>Action</th></tr></thead>
+        <tbody>${subs.length ? p.rows.map((s) => `
+          <tr>
+            <td>${esc(s.user ? s.user.username : 'User')}<br><span class="p-sub">${esc(s.user && s.user.email ? s.user.email : '')}</span></td>
+            <td>${esc(s.title)}<br><span class="p-sub">${esc(s.category)}</span></td>
+            <td>${esc(s.tier)}</td>
+            <td class="num">${s.pct != null ? s.pct + '%' : '—'}${s.total ? `<br><span class="p-sub">${s.score}/${s.total}</span>` : ''}</td>
+            <td class="num">${usd(s.reward)}</td>
+            <td class="p-sub">${s.createdAt ? new Date(s.createdAt).toLocaleString() : '—'}</td>
+            <td><span class="st ${s.status}">${statusLabel(s.status)}</span>${s.reviewNote ? `<br><span class="p-sub">${esc(s.reviewNote)}</span>` : ''}${s.reviewedBy ? `<br><span class="p-sub">by ${esc(s.reviewedBy)}</span>` : ''}</td>
+            <td><div style="display:flex;gap:6px;flex-wrap:wrap">
+              ${s.status !== 'approved' ? `<button class="btn btn-primary auto qz-approve" data-id="${s.id}">Approve</button>` : ''}
+              ${s.status !== 'rejected' ? `<button class="btn btn-ghost auto qz-reject" data-id="${s.id}">Reject</button>` : ''}
+            </div></td>
+          </tr>`).join('') : `<tr><td colspan="8" class="p-sub">No questionnaire submissions yet.</td></tr>`}</tbody>
+      </table>${pagerBar('quiz', p)}</div>`;
+    content().querySelectorAll('.qz-approve').forEach((b) => b.addEventListener('click', () => decideQuiz(b.dataset.id, 'approved')));
+    content().querySelectorAll('.qz-reject').forEach((b) => b.addEventListener('click', () => openQuizReject(b.dataset.id)));
+    wirePager('quiz', p, render);
+  };
+  render();
+}
+
+async function decideQuiz(id, decision, note) {
+  const { ok, data: d } = await api('/api/admin/questionnaires/' + id + '/decision', { decision, note: note || '' });
+  if (!ok) return toast(d.error || 'Failed', 'error');
+  toast(decision === 'approved' ? 'Approved — reward credited.' : 'Rejected.', 'ok');
+  tQuestionnaires();
+}
+
+function openQuizReject(id) {
+  const bg = adminModal(`
+    <button class="close">×</button>
+    <h3>Reject questionnaire</h3>
+    <p class="p-sub">No payment is made. The member can retake this questionnaire.</p>
+    <form id="qzrForm">
+      <div class="field"><label>Reason (optional, shown to the member)</label>
+        <textarea id="qzrNote" rows="3" style="width:100%;border:1px solid var(--line);border-radius:10px;padding:10px;font:inherit;background:var(--bg-2);color:var(--text)" placeholder="e.g. Score too low / answers look random."></textarea></div>
+      <button class="btn btn-ghost" type="submit">Reject submission</button>
+    </form>`);
+  bg.querySelector('#qzrForm').addEventListener('submit', (e) => {
+    e.preventDefault();
+    const note = bg.querySelector('#qzrNote').value.trim();
+    bg.remove();
+    decideQuiz(id, 'rejected', note);
   });
 }
 
