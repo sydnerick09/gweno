@@ -341,6 +341,7 @@ const NAV = [
   ['dashboard', 'Dashboard', ICON.home],
   ['stats', 'Stats', ICON.chart],
   ['earn', 'Earn', ICON.money],
+  ['executive', 'Executive Plan', ICON.star],
   ['rewards', 'Rewards', ICON.trophy],
   ['leaderboard', 'Leaderboard', ICON.award],
   ['invest', 'Investments', ICON.invest],
@@ -357,7 +358,7 @@ const NAV = [
 const TITLES = {
   dashboard: 'Dashboard', stats: 'Stats', earn: 'Earn', tasks: 'Tasks', submissions: 'My submissions',
   referral: 'Refer & earn', applications: 'Applications', share: 'Share & Earn', questionnaires: 'Questionnaires', invest: 'Investments', advertise: 'Advertise', learn: 'Learn', redeem: 'Redeem',
-  rewards: 'Rewards', leaderboard: 'Leaderboard',
+  rewards: 'Rewards', leaderboard: 'Leaderboard', executive: 'Executive Plan',
   settings: 'Settings', chat: 'Chat', support: 'Support', admin: 'Admin review', profile: 'Profile',
 };
 
@@ -445,7 +446,7 @@ function router() {
     invest: pageInvest, advertise: pageAdvertise,
     learn: pageLearn, redeem: pageRedeem, settings: pageSettings, chat: pageChat,
     support: pageSupport, admin: pageAdmin, profile: pageProfile,
-    rewards: pageRewards, leaderboard: pageLeaderboard,
+    rewards: pageRewards, leaderboard: pageLeaderboard, executive: pageExecutive,
   };
   (map[key] || pageDashboard)();
   window.scrollTo(0, 0);
@@ -509,6 +510,41 @@ function startFeed(items) {
 // =====================================================================
 //  DASHBOARD
 // =====================================================================
+// ---- Agent account ----
+const meIsAgent = () => !!(ME && ME.agent && ME.agent.isAgent);
+
+// Professional "AGENT ACCOUNT" banner shown on the dashboard (and profile) for agents.
+function agentBannerHTML() {
+  if (!meIsAgent()) return '';
+  const a = ME.agent;
+  const active = a.status === 'active';
+  return `
+    <div class="panel agent-banner">
+      <div class="agent-top">
+        <span class="agent-badge">${ICON.shield} AGENT ACCOUNT</span>
+        <span class="st ${active ? 'approved' : 'pending'}">${active ? 'Active' : 'Inactive'}</span>
+      </div>
+      <p class="p-sub" style="margin:10px 0 12px">You are currently registered as an official platform agent. Your role is to refer and assist new users through your permanent referral link. Agent accounts can view available tasks but cannot complete or submit tasks.</p>
+      <div class="agent-metrics"><div><div class="p-sub">Users referred</div><b>${a.referred || 0}</b></div></div>
+      <label class="p-sub" style="display:block;margin:12px 0 4px">Your permanent agent referral link</label>
+      <div class="copybox">
+        <input id="agentLink" readonly value="${esc(a.link || '')}">
+        <button class="btn btn-primary auto" id="agentCopy">Copy</button>
+      </div>
+      <button class="btn btn-ghost auto" id="agentShare" style="margin-top:8px">Share link</button>
+    </div>`;
+}
+function wireAgentBanner() {
+  const copy = document.getElementById('agentCopy');
+  if (copy) copy.onclick = () => copyText(ME.agent.link);
+  const share = document.getElementById('agentShare');
+  if (share) share.onclick = async () => {
+    const url = ME.agent.link;
+    if (navigator.share) { try { await navigator.share({ title: 'Join Gweno', text: 'Join Gweno using my referral link', url }); return; } catch (_) {} }
+    copyText(url);
+  };
+}
+
 async function pageDashboard() {
   // Streaming UI (pattern 3): paint the full structure immediately (with tiny
   // shimmers), then fill each section the moment its own request resolves, no
@@ -516,6 +552,7 @@ async function pageDashboard() {
   const skv = (w) => `<span class="sk sk-line" style="display:inline-block;width:${w};height:22px;vertical-align:middle"></span>`;
   view().innerHTML = `
     <p class="page-sub">Welcome back, <b>${esc(ME.username || ME.name)}</b>. Here's your activity.</p>
+    ${agentBannerHTML()}
     ${gameStripHTML()}
 
     <div class="grid g4">
@@ -572,6 +609,7 @@ async function pageDashboard() {
   };
   renderBal();
   attachLongPress(document.getElementById('balCard'), () => { showUsd = !showUsd; renderBal(); toast(showUsd ? 'Showing USD' : 'Showing KES'); });
+  wireAgentBanner();
 
   // Section renderers (reused by SWR and the smart poller). Each is null-safe in
   // case the user has already navigated away.
@@ -895,9 +933,11 @@ async function pageTasks() {
           </div>
           <div class="tc-bottom">
             <span class="tc-reward">${usd(t.reward)}</span>
-            ${t.locked
-              ? `<button class="btn btn-ghost auto sub-lock" data-plan="${t.tier}"><span class="bico">${ICON.lock}</span> Upgrade</button>`
-              : `<button class="btn btn-primary auto open-task" data-id="${t.id}">Start</button>`}
+            ${meIsAgent()
+              ? `<button class="btn btn-ghost auto open-task" data-id="${t.id}">View only</button>`
+              : t.locked
+                ? `<button class="btn btn-ghost auto sub-lock" data-plan="${t.tier}"><span class="bico">${ICON.lock}</span> Upgrade</button>`
+                : `<button class="btn btn-primary auto open-task" data-id="${t.id}">Start</button>`}
           </div>
           <div style="margin-top:8px"><span class="st ${t.locked ? 'pending' : 'approved'}">${t.locked ? `Locked — needs ${esc(t.requiredPlan || t.tier)}` : 'Available now'}</span></div>
         </div>`).join('') : `<p class="p-sub">No tasks match your filters. <button class="btn btn-ghost auto" id="clearFilters">Clear filters</button></p>`}
@@ -988,6 +1028,36 @@ function openSubscribe(data, preselectId) {
   });
 }
 
+// Executive Plan — accessed from the hamburger menu (not shown on the home screen).
+async function pageExecutive() {
+  loading();
+  const { data } = await apiGet('/api/subscription');
+  const exec = (data.plans || []).find((p) => p.id === 'executive');
+  const cur = data.plan;
+  const isExec = cur && cur.id === 'executive';
+  if (!exec) { view().innerHTML = `<div class="panel">The Executive Plan is unavailable right now. Please check back soon.</div>`; return; }
+  view().innerHTML = `
+    <p class="page-sub">Our highest tier — unlocks exclusive, top-paying tasks.</p>
+    <div class="panel level-hero">
+      <div class="lh-level">${ICON.star} <span>Executive Plan</span></div>
+      <div class="lh-sub">${kes(exec.priceKES)} / month · tasks paying ${usd(exec.minUSD)}–${usd(exec.maxUSD)} each</div>
+    </div>
+    <div class="panel">
+      <h3>What you get</h3>
+      <div class="check"><span class="box">✓</span><span>Access to exclusive <b>Executive tasks paying ${usd(exec.minUSD)}–${usd(exec.maxUSD)}</b> each</span></div>
+      <div class="check"><span class="box">✓</span><span><b>No per-cycle task limit</b> — work within the normal daily rules</span></div>
+      <div class="check"><span class="box">✓</span><span>Priority Executive status shown on your profile</span></div>
+      <div class="check"><span class="box">✓</span><span>Buy it directly here — no need to progress through the lower plans first</span></div>
+      <div style="margin-top:16px">
+        ${isExec
+          ? `<p class="pill-note">✅ Your Executive Plan is active${data.expires ? ' until ' + fmtDate(data.expires) : ''}.</p>`
+          : `<button class="btn btn-primary auto" id="execSub">Subscribe for ${kes(exec.priceKES)}</button>`}
+      </div>
+    </div>`;
+  const b = document.getElementById('execSub');
+  if (b) b.addEventListener('click', () => openSubscribe({ plans: [exec], plan: cur }, 'executive'));
+}
+
 // Per-type proof field + a short hint describing exactly what's expected.
 function proofFieldFor(t) {
   const cfg = {
@@ -1073,12 +1143,20 @@ function openTask(t) {
     ${(t.skills && t.skills.length) ? `<div class="tc-skills" style="margin-top:8px">${t.skills.map((s) => `<span class="skill">${esc(s)}</span>`).join('')}</div>` : ''}
     <h4 style="margin:16px 0 6px">How to complete this task</h4>
     <ol class="instr${noPaste ? ' no-copy' : ''}">${t.instructions.map((s) => `<li>${esc(s)}</li>`).join('')}</ol>
-    ${noPaste ? '<p class="p-sub">This is a typing task — please type the text yourself. Copy and paste are disabled.</p>' : ''}
-    <form id="taskForm">
-      ${proofFieldFor(t)}
-      <p class="p-sub">Submissions are usually reviewed within 5 hours.</p>
-      <button class="btn btn-primary" type="submit">Submit for review</button>
-    </form>`);
+    ${noPaste && !meIsAgent() ? '<p class="p-sub">This is a typing task — please type the text yourself. Copy and paste are disabled.</p>' : ''}
+    ${meIsAgent()
+      ? `<div class="agent-restrict">
+           <h4>Agent Account Restriction</h4>
+           <p>Your account is registered as an Agent. Agents can view available tasks but cannot complete or submit them. Your role is to refer new users using your permanent agent referral link.</p>
+           <button class="btn btn-ghost auto" disabled>View Only — Agent Account</button>
+         </div>`
+      : `<form id="taskForm">
+           ${proofFieldFor(t)}
+           <p class="p-sub">Submissions are usually reviewed within 5 hours.</p>
+           <button class="btn btn-primary" type="submit">Submit for review</button>
+         </form>`}`);
+
+  if (meIsAgent()) return; // view-only: no proof form / handlers for agents
 
   if (noPaste) {
     const pasteMsg = 'Please type the text manually. Copying and pasting is not allowed for this task.';
@@ -1204,22 +1282,29 @@ async function pageReferral() {
   loading();
   const { data } = await apiGet('/api/referral');
   if (data && data.code === 'no_plan') { view().innerHTML = upgradeGateHTML(data.error, true); return; }
+  const isAgent = !!data.agent;
   view().innerHTML = `
-    <p class="page-sub">Invite friends and earn <b>${data.perReferralKES} KES</b> for each one who joins.</p>
+    <p class="page-sub">${isAgent
+      ? 'As an official agent, invite unlimited new users with your <b>permanent</b> referral link.'
+      : `Invite friends and earn <b>${data.perReferralKES} KES</b> for each one who joins.`}</p>
     <div class="grid g2">
       <div class="panel">
-        <h3>Your referral link</h3>
-        <p class="p-sub">This link works <b>once</b>. After a friend joins with it, copy a fresh link here to invite the next person.</p>
+        <h3>${isAgent ? 'Your permanent agent link' : 'Your referral link'}</h3>
+        <p class="p-sub">${isAgent
+          ? 'This is your <b>permanent</b> agent link. It never expires and can be used by unlimited people — every user who joins through it is tracked to you.'
+          : 'This link works <b>once</b>. After a friend joins with it, copy a fresh link here to invite the next person.'}</p>
         <div class="copybox">
           <input id="refLink" readonly value="${esc(data.link)}">
           <button class="btn btn-primary auto" id="copyBtn">Copy</button>
         </div>
-        <div style="display:flex;gap:10px;margin-top:12px">
+        ${isAgent ? '' : `<div style="display:flex;gap:10px;margin-top:12px">
           <button class="btn btn-ghost auto" id="regen">Generate new link</button>
-        </div>
+        </div>`}
         <div class="grid g2" style="margin-top:16px">
-          <div class="stat"><div class="label">Successful referrals</div><div class="value">${data.count}</div></div>
-          <div class="stat brand"><div class="label">Referral earnings</div><div class="value">${kes(data.earningsKES)}</div></div>
+          <div class="stat"><div class="label">${isAgent ? 'Users referred' : 'Successful referrals'}</div><div class="value">${data.count}</div></div>
+          ${isAgent
+            ? `<div class="stat"><div class="label">Agent status</div><div class="value" style="font-size:18px">${data.agentStatus === 'active' ? 'Active' : 'Inactive'}</div></div>`
+            : `<div class="stat brand"><div class="label">Referral earnings</div><div class="value">${kes(data.earningsKES)}</div></div>`}
         </div>
       </div>
 
@@ -1232,11 +1317,12 @@ async function pageReferral() {
     </div>
 
     <div class="panel">
-      <h3>People you've referred</h3>
+      <h3>${isAgent ? 'Users you\'ve referred' : "People you've referred"}</h3>
       ${data.referred && data.referred.length ? `<table class="table"><thead><tr><th>Username</th><th>Joined</th></tr></thead><tbody>${data.referred.map((r) => `<tr><td>${esc(r.username || '—')}</td><td class="p-sub">${new Date(r.joinedAt).toLocaleDateString()}</td></tr>`).join('')}</tbody></table>` : `<p class="p-sub">No referrals yet. Share your link to get started.</p>`}
     </div>`;
   document.getElementById('copyBtn').addEventListener('click', () => copyText(data.link));
-  document.getElementById('regen').addEventListener('click', async () => {
+  const regenBtn = document.getElementById('regen');
+  if (regenBtn) regenBtn.addEventListener('click', async () => {
     const { ok } = await api('/api/referral/regenerate', {});
     if (ok) { toast('New referral link generated'); pageReferral(); }
   });
@@ -1779,25 +1865,14 @@ async function pageRedeem() {
   // The wallet is one balance shown in both currencies, kept in sync via the live FX rate.
   const bal = totals();
   view().innerHTML = `
-    <p class="page-sub">Your wallet, deposit and withdraw worldwide.</p>
+    <p class="page-sub">Withdraw your earnings, or deposit to top up your wallet.</p>
     <div class="grid g2">
       <div class="stat brand"><div class="label">KES balance</div><div class="value">${kes(bal.kes)}</div></div>
       <div class="stat"><div class="label">USD balance</div><div class="value">${usd(bal.usd)}</div></div>
     </div>
 
     <div class="panel">
-      <h3>Deposit to top up your wallet</h3>
-      <p class="p-sub">Choose how you'd like to add money. Available worldwide.</p>
-      <div id="depMethods"></div>
-      <form id="dForm" style="margin-top:14px">
-        <div id="depFields"><p class="p-sub">Select a method above to continue.</p></div>
-        <button class="btn btn-primary" type="submit" id="dBtn">Deposit</button>
-      </form>
-      ${deposits.length ? `<table class="table" style="margin-top:14px"><thead><tr><th>Date</th><th class="num">Amount</th><th>Method</th><th>Status</th></tr></thead><tbody>${deposits.slice(0, 5).map((d) => `<tr><td class="p-sub">${fmtDate(d.createdAt)}</td><td class="num">${d.currency === 'USD' ? usd(d.amount) : kes(d.amount)}</td><td>${esc(d.method || 'M-Pesa')}</td><td><span class="st ${statusClass(d.status)}">${esc(d.status)}</span></td></tr>`).join('')}</tbody></table>` : ''}
-    </div>
-
-    <div class="panel">
-      <h3>Withdraw to cash out</h3>
+      <h3>Withdraw (cash out your earnings)</h3>
       <p class="p-sub"><b>M-Pesa</b> is entered and paid in <b>KES</b>; PayPal and bank in <b>USD</b>. Withdrawals are usually verified by our team within 2 hours before funds are sent.</p>
       <p class="p-sub" style="margin-top:-4px">Minimum withdrawal: <b>KES ${(data.min && data.min.KES) || 10}</b> (≈ ${usd(minUSD)}).</p>
       <div id="wdMethods"></div>
@@ -1812,6 +1887,17 @@ async function pageRedeem() {
       <h3>Payout history</h3>
       <table class="table"><thead><tr><th>Date</th><th class="num">Amount</th><th>Method</th><th>Destination</th><th>Status</th></tr></thead>
       <tbody>${data.history.length ? data.history.map((h) => `<tr><td class="p-sub">${fmtDate(h.createdAt)}</td><td class="num">${h.currency === 'KES' ? kes(h.amount) : usd(h.amount)}</td><td>${esc(h.method)}</td><td class="p-sub">${esc(h.destination || '—')}</td><td><span class="st ${statusClass(h.status)}">${esc(h.status)}</span>${h.reason ? `<br><span class="p-sub">${esc(h.reason)}</span>` : ''}</td></tr>`).join('') : `<tr><td colspan="5" class="p-sub">No payouts yet.</td></tr>`}</tbody></table>
+    </div>
+
+    <div class="panel">
+      <h3>Deposit (top up your wallet)</h3>
+      <p class="p-sub">Choose how you'd like to add money. Available worldwide.</p>
+      <div id="depMethods"></div>
+      <form id="dForm" style="margin-top:14px">
+        <div id="depFields"><p class="p-sub">Select a method above to continue.</p></div>
+        <button class="btn btn-primary" type="submit" id="dBtn">Deposit</button>
+      </form>
+      ${deposits.length ? `<table class="table" style="margin-top:14px"><thead><tr><th>Date</th><th class="num">Amount</th><th>Method</th><th>Status</th></tr></thead><tbody>${deposits.slice(0, 5).map((d) => `<tr><td class="p-sub">${fmtDate(d.createdAt)}</td><td class="num">${d.currency === 'USD' ? usd(d.amount) : kes(d.amount)}</td><td>${esc(d.method || 'M-Pesa')}</td><td><span class="st ${statusClass(d.status)}">${esc(d.status)}</span></td></tr>`).join('')}</tbody></table>` : ''}
     </div>`;
 
   // ---------- Deposit ----------
@@ -2029,6 +2115,8 @@ function pageProfile() {
         ${secondary ? `<p class="wa-sub">${esc(secondary)}</p>` : ''}
       </div>
 
+      ${agentBannerHTML()}
+
       <div class="panel wa-list">
         ${waRow('Full name', ME.name)}
         ${waRow('Username', ME.username ? '@' + ME.username : '')}
@@ -2051,6 +2139,7 @@ function pageProfile() {
       </div>
     </div>`;
 
+  wireAgentBanner();
   document.getElementById('waEdit').addEventListener('click', openProfileEdit);
   document.getElementById('waSearch').addEventListener('click', () => toast('Profile search is coming soon.'));
   document.getElementById('waQr').addEventListener('click', openReferralQr);

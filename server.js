@@ -642,9 +642,37 @@ function ensureUserShape(u) {
   if (!u.tour) u.tour = { done: false, skips: 0, lastSkipAt: null }; // first-login guided tour
   if (u.suspended === undefined) u.suspended = false; // admin: blocks sign-in
   if (u.held === undefined) u.held = false;           // admin: pauses withdrawals
+  // ---- Agent role (admin-assigned). Agents refer/assist but cannot do tasks. ----
+  if (u.isAgent === undefined) u.isAgent = false;
+  if (u.role === undefined) u.role = u.isAdmin ? 'admin' : (u.isAgent ? 'agent' : 'user');
+  if (u.agentStatus === undefined) u.agentStatus = u.isAgent ? 'active' : 'inactive';
+  if (u.agentReferralCode === undefined) u.agentReferralCode = null; // permanent once assigned
+  if (u.agentAssignedAt === undefined) u.agentAssignedAt = null;
   gamify.ensureGameShape(u);                           // XP / level / badges / streak / coins
   return u;
 }
+
+// ---- Agent referral helpers -------------------------------------------------
+const APP_URL = process.env.APP_URL || 'https://gweno.vercel.app';
+// Permanent, unique agent code — prefixed AG so it never collides with single-use ref codes.
+function uniqueAgentCode() {
+  let code;
+  do { code = 'AG' + crypto.randomBytes(4).toString('hex').toUpperCase(); }
+  while (db.get().users.some((u) => u.agentReferralCode === code));
+  return code;
+}
+const agentLinkFor = (code) => `${APP_URL}/signup.html?ref=${code}`;
+// Find the ACTIVE agent that owns a referral code (permanent, unlimited-use).
+function findActiveAgentByCode(code) {
+  const c = String(code || '').trim().toUpperCase();
+  if (!c.startsWith('AG')) return null;
+  return db.get().users.find((u) => u.isAgent && u.agentStatus === 'active'
+    && u.agentReferralCode && u.agentReferralCode.toUpperCase() === c) || null;
+}
+// How many users an agent has referred (live count of attributed registrations).
+const agentReferredCount = (agentId) => db.get().users.filter((u) => u.referredBy === agentId).length;
+// Restriction message shown to agents who try to work on a task (frontend + API).
+const AGENT_TASK_MSG = 'Your account is registered as an Agent. Agents can view available tasks but cannot complete or submit them. Your role is to refer new users using your permanent agent referral link.';
 
 // Credit the referrer 5 KES and burn their single-use link.
 // At signup: burn the single-use link and remember who referred this user. The
@@ -653,6 +681,16 @@ function ensureUserShape(u) {
 function creditReferral(refCode, newUser) {
   const code = String(refCode || '').trim();
   if (!code) return;
+  // Agent referral link: permanent + unlimited-use. Attribute the new user to the agent
+  // WITHOUT burning any link and WITHOUT the 5 KES single-use bonus.
+  const agent = findActiveAgentByCode(code);
+  if (agent && agent.id !== newUser.id) {
+    newUser.referredBy = agent.id;
+    newUser.referredByAgent = true;
+    newUser.referralCredited = true;   // no onboarding payout for agent referrals
+    return;
+  }
+  // Normal single-use referral (unchanged for regular users).
   const owner = db.get().users.find((u) => u.referral && u.referral.code === code && !u.referral.used && u.id !== newUser.id);
   if (!owner) return;
   owner.referral.used = true;          // link is single-use — a fresh one is issued next load
@@ -685,6 +723,11 @@ function publicUser(u) {
     referral: { code: u.referral.code, count: u.referralCount || 0, earningsKES: u.referralEarningsKES || 0 },
     notifications: u.notifications, payment: { method: u.payment.method || '', details: u.payment.details || '' },
     avatar: u.avatar || null, isAdmin: !!u.isAdmin, usernameChangedAt: u.usernameChangedAt || null,
+    role: u.role || (u.isAdmin ? 'admin' : (u.isAgent ? 'agent' : 'user')),
+    agent: u.isAgent
+      ? { isAgent: true, status: u.agentStatus || 'active', code: u.agentReferralCode,
+          link: agentLinkFor(u.agentReferralCode), assignedAt: u.agentAssignedAt || null, referred: agentReferredCount(u.id) }
+      : { isAgent: false },
     premium: { active: isPremium(u), expires: u.premium.expires || null },
     plan: (() => { const p = activePlan(u); return p ? { id: p.id, name: p.name, rank: p.rank, maxUSD: p.maxUSD, expires: u.plan && u.plan.expires } : null; })(),
     tour: u.tour || { done: false, skips: 0, lastSkipAt: null },
@@ -1633,6 +1676,7 @@ app.get('/api/dashboard', requireAuth, (req, res) => {
 app.post('/api/tasks/:id/submit', requireAuth, (req, res) => {
   const task = serverTaskById(req.params.id);
   if (!task) return res.status(404).json({ error: 'Task not found.' });
+  if (req.user.isAgent) return res.status(403).json({ error: AGENT_TASK_MSG, code: 'agent' }); // agents can't complete tasks
   if (req.user.held) return res.status(403).json({ error: 'Your account is on hold. Task submissions are paused until an admin restores your account.' });
   // Plan gate — enforced server-side so it can't be bypassed by editing the request.
   if (!canAccessTask(req.user, task)) {
@@ -1871,6 +1915,7 @@ app.get('/api/applications', requireAuth, requirePlan, (req, res) => {
 app.post('/api/tasks/:id/apply', requireAuth, (req, res) => {
   const task = serverTaskById(req.params.id);
   if (!task) return res.status(404).json({ error: 'Task not found.' });
+  if (req.user.isAgent) return res.status(403).json({ error: AGENT_TASK_MSG, code: 'agent' }); // agents can't take tasks
   if (!canAccessTask(req.user, task)) {
     return res.status(403).json({ error: 'Upgrade your subscription to access higher-paying tasks.' });
   }
@@ -2074,6 +2119,13 @@ app.get('/api/admin/users', requireAdminSession, (req, res) => {
       completedTasks: mine.filter((x) => x.status === 'approved').length,
       pendingTasks: mine.filter((x) => x.status === 'pending').length,
       hasPassword: !!u.passwordHash,                      // whether a password is set (never the value)
+      role: u.role || (u.isAdmin ? 'admin' : (u.isAgent ? 'agent' : 'user')),
+      isAgent: !!u.isAgent,
+      agentStatus: u.agentStatus || 'inactive',
+      agentReferralCode: u.agentReferralCode || null,
+      agentLink: u.agentReferralCode ? agentLinkFor(u.agentReferralCode) : null,
+      agentAssignedAt: u.agentAssignedAt || null,
+      agentReferred: u.isAgent ? agentReferredCount(u.id) : 0,
       gender: (u.profile && u.profile.gender) || '',
       country: (u.profile && u.profile.country) || '',
       phone: (u.profile && u.profile.phone) || '',
@@ -2083,6 +2135,55 @@ app.get('/api/admin/users', requireAdminSession, (req, res) => {
     };
   }).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   res.json({ users });
+});
+
+// ---- Agent management (assign / remove / activate / deactivate / regenerate) ----
+app.post('/api/admin/users/:id/agent', requireAdminSession, (req, res) => {
+  const u = userById(req.params.id);
+  if (!u) return res.status(404).json({ error: 'User not found.' });
+  ensureUserShape(u);
+  const action = String(req.body.action || '').trim();
+  switch (action) {
+    case 'assign':
+      u.isAgent = true; u.role = 'agent'; u.agentStatus = 'active';
+      if (!u.agentReferralCode) u.agentReferralCode = uniqueAgentCode(); // permanent — set once
+      if (!u.agentAssignedAt) u.agentAssignedAt = new Date().toISOString();
+      break;
+    case 'remove':
+      u.isAgent = false; u.role = u.isAdmin ? 'admin' : 'user'; u.agentStatus = 'inactive';
+      break; // keep agentReferralCode stored but the link stops working (inactive)
+    case 'activate':
+      if (!u.isAgent) return res.status(400).json({ error: 'This user is not an agent.' });
+      u.agentStatus = 'active';
+      break;
+    case 'deactivate':
+      if (!u.isAgent) return res.status(400).json({ error: 'This user is not an agent.' });
+      u.agentStatus = 'inactive';
+      break;
+    case 'regenerate':
+      if (!u.isAgent) return res.status(400).json({ error: 'This user is not an agent.' });
+      u.agentReferralCode = uniqueAgentCode();
+      break;
+    default:
+      return res.status(400).json({ error: 'Invalid agent action.' });
+  }
+  audit('agent_' + action, { admin: ADMIN_USERNAME, userId: u.id, agentCode: u.agentReferralCode });
+  db.save();
+  res.json({ ok: true, isAgent: !!u.isAgent, agentStatus: u.agentStatus,
+    agentReferralCode: u.agentReferralCode, agentLink: u.agentReferralCode ? agentLinkFor(u.agentReferralCode) : null });
+});
+
+// List all agents for the admin Agents tab.
+app.get('/api/admin/agents', requireAdminSession, (req, res) => {
+  const agents = db.get().users.filter((u) => u.isAgent).map((u) => ({
+    id: u.id, name: u.name, username: u.username, email: u.email,
+    status: u.agentStatus || 'inactive',
+    code: u.agentReferralCode || null,
+    link: u.agentReferralCode ? agentLinkFor(u.agentReferralCode) : null,
+    referred: agentReferredCount(u.id),
+    assignedAt: u.agentAssignedAt || null,
+  })).sort((a, b) => String(b.assignedAt || '').localeCompare(String(a.assignedAt || '')));
+  res.json({ agents });
 });
 
 // Edit a member's full details (admin-only). Admins may change everything, including the
@@ -2630,12 +2731,26 @@ app.post('/api/admin/support/:id/reply', requireAdminSession, async (req, res) =
 // =============================================================================
 //  REFERRALS  —  single-use link, 5 KES per successful referral, + QR
 // =============================================================================
-app.get('/api/referral', requireAuth, requirePlan, (req, res) => {
-  const u = req.user; // ensureUserShape already issued a fresh code if the last was used
-  const link = `${baseUrl(req)}/signup.html?ref=${u.referral.code}`;
+app.get('/api/referral', requireAuth, (req, res) => {
+  const u = req.user;
   const referred = db.get().users
     .filter((x) => x.referredBy === u.id)
     .map((x) => ({ username: x.username, joinedAt: x.createdAt }));
+  // Agents use a PERMANENT, unlimited-use referral link (no plan required, no per-referral bonus).
+  if (u.isAgent) {
+    if (!u.agentReferralCode) { u.agentReferralCode = uniqueAgentCode(); db.save(); }
+    const link = agentLinkFor(u.agentReferralCode);
+    return res.json({
+      agent: true, agentStatus: u.agentStatus || 'active', code: u.agentReferralCode, link,
+      qr: `https://api.qrserver.com/v1/create-qr-code/?size=220x220&data=${encodeURIComponent(link)}`,
+      perReferralKES: 0, count: referred.length, earningsKES: 0, referred,
+    });
+  }
+  // Regular users need an active plan for the referral feature (unchanged behaviour).
+  if (userRank(u) === 0) {
+    return res.status(403).json({ error: 'This earning feature needs an active subscription. Try the free task on the Tasks page, then subscribe to unlock surveys, referrals and more.', code: 'no_plan', upgrade: true });
+  }
+  const link = `${baseUrl(req)}/signup.html?ref=${u.referral.code}`;
   res.json({
     code: u.referral.code,
     link,

@@ -55,6 +55,17 @@
 .bcast-x { flex: 0 0 auto; background: transparent; border: none; color: var(--muted); font-size: 22px; line-height: 1; cursor: pointer; padding: 0 2px; }
 .bcast-x:hover { color: var(--text); }
 
+/* ---------- Agent account ---------- */
+.agent-banner { border-color: var(--brand); box-shadow: var(--shadow-sm); }
+.agent-top { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+.agent-badge { display: inline-flex; align-items: center; gap: 8px; font-family: var(--font-display); font-weight: 800; letter-spacing: .6px; font-size: 15px; }
+.agent-badge svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.agent-metrics { display: flex; gap: 24px; }
+.agent-metrics b { font-size: 22px; font-weight: 800; }
+.agent-restrict { margin-top: 14px; border: 1px solid var(--danger); background: rgba(229,57,53,.06); border-radius: var(--radius); padding: 14px 16px; }
+.agent-restrict h4 { margin: 0 0 4px; color: var(--danger); font-size: 15px; }
+.agent-restrict p { margin: 0 0 10px; color: var(--muted); font-size: 14px; line-height: 1.5; }
+
 /* Skeleton loaders (YouTube-style shimmer) shown instantly while data loads. */
 @keyframes sk-shimmer { 0% { background-position: 200% 0; } 100% { background-position: -200% 0; } }
 .sk { background: #e9eef5; border-radius: 10px; background-image: linear-gradient(90deg, #e9eef5 0%, #f4f7fb 20%, #e9eef5 40%); background-size: 200% 100%; animation: sk-shimmer 1.25s ease-in-out infinite; }

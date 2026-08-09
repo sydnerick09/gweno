@@ -18,7 +18,7 @@ function toast(msg, type = 'ok') {
   setTimeout(() => { t.classList.remove('show'); setTimeout(() => t.remove(), 250); }, 3000);
 }
 
-const TABS = [['overview', 'Overview'], ['submissions', 'Submissions'], ['questionnaires', 'Questionnaires'], ['applications', 'Applications'], ['share', 'Social Share'], ['emails', 'Email log'], ['audit', 'Audit log'], ['users', 'Users'], ['rewards', 'Rewards'], ['sendemail', 'Send Email'], ['broadcast', 'Broadcast'], ['investments', 'Investments'], ['deposits', 'Deposits'], ['withdrawals', 'Withdrawals'], ['support', 'Support']];
+const TABS = [['overview', 'Overview'], ['submissions', 'Submissions'], ['questionnaires', 'Questionnaires'], ['applications', 'Applications'], ['share', 'Social Share'], ['emails', 'Email log'], ['audit', 'Audit log'], ['users', 'Users'], ['agents', 'Agents'], ['rewards', 'Rewards'], ['sendemail', 'Send Email'], ['broadcast', 'Broadcast'], ['investments', 'Investments'], ['deposits', 'Deposits'], ['withdrawals', 'Withdrawals'], ['support', 'Support']];
 
 // ---- Reusable client-side pagination for admin tables ----
 const PAGE_STATE = {};        // key -> current page (1-based); reset to 1 on tab switch
@@ -148,7 +148,7 @@ const loading = () => { content().innerHTML = `
 
 function route() {
   if (ROLE === 'finance' && !FINANCE_TABS.includes(TAB)) TAB = 'overview';
-  ({ overview: tOverview, submissions: tSubmissions, questionnaires: tQuestionnaires, applications: tApplications, share: tShareReview, emails: tEmails, audit: tAudit, users: tUsers, rewards: tRewards, sendemail: tSendEmail, broadcast: tBroadcast, investments: tInvestments, deposits: tDeposits, withdrawals: tWithdrawals, support: tSupport }[TAB] || tOverview)();
+  ({ overview: tOverview, submissions: tSubmissions, questionnaires: tQuestionnaires, applications: tApplications, share: tShareReview, emails: tEmails, audit: tAudit, users: tUsers, agents: tAgents, rewards: tRewards, sendemail: tSendEmail, broadcast: tBroadcast, investments: tInvestments, deposits: tDeposits, withdrawals: tWithdrawals, support: tSupport }[TAB] || tOverview)();
 }
 
 async function tOverview() {
@@ -584,6 +584,7 @@ function renderUsersTable() {
       ${act('plan', u, 'Change plan', ' data-plan="' + esc(u.planId || 'none') + '"')}
       ${act('password', u, 'Reset password')}
       ${act('gamify', u, 'XP / Badges')}
+      ${u.isAgent ? act('agent-remove', u, '✕ Agent', ' style="border-color:var(--brand-2);color:var(--brand-2)"') : act('agent-assign', u, '★ Make agent', ' style="border-color:var(--brand-2);color:var(--brand-2)"')}
       ${act('delete', u, 'Delete', ' style="border-color:var(--danger);color:#c0143c"')}`}
     </div></td>
   </tr>`).join('') || `<tr><td colspan="8" class="p-sub">No users match your search.</td></tr>`;
@@ -598,6 +599,61 @@ function renderUsersTable() {
   content().querySelectorAll('.udetails').forEach((b) => b.addEventListener('click', () => openDetailsForm(find(b.dataset.id))));
   content().querySelectorAll('.uview').forEach((b) => b.addEventListener('click', () => openUserView(find(b.dataset.id))));
   content().querySelectorAll('.uemail').forEach((b) => b.addEventListener('click', () => openUserEmail(find(b.dataset.id))));
+}
+
+// ---- Agents tab: manage all platform agents ----
+let AGENTS_CACHE = [];
+async function tAgents() {
+  loading();
+  const { data } = await apiGet('/api/admin/agents');
+  AGENTS_CACHE = data.agents || [];
+  content().innerHTML = `
+    <p class="page-sub">${AGENTS_CACHE.length} agent(s). Agents refer &amp; assist new users through a permanent link; they can view tasks but cannot complete them. Assign an agent from the <b>Users</b> tab.</p>
+    <div class="panel" style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:12px">
+      <input id="agSearch" placeholder="Search agent name, email or username…" style="flex:1;min-width:220px;${inputStyle}">
+      <span class="p-sub" id="agCount"></span>
+    </div>
+    <div class="panel" style="overflow-x:auto"><table class="table">
+      <thead><tr><th>Agent</th><th>Status</th><th class="num">Referred</th><th>Assigned</th><th>Referral link</th><th>Actions</th></tr></thead>
+      <tbody id="agBody"></tbody>
+    </table></div>`;
+  document.getElementById('agSearch').addEventListener('input', renderAgentsTable);
+  renderAgentsTable();
+}
+
+function renderAgentsTable() {
+  const q = (document.getElementById('agSearch').value || '').trim().toLowerCase();
+  const list = AGENTS_CACHE.filter((a) => !q || [a.name, a.username, a.email].some((v) => String(v || '').toLowerCase().includes(q)));
+  document.getElementById('agCount').textContent = `${list.length} shown`;
+  document.getElementById('agBody').innerHTML = list.map((a) => `<tr>
+    <td>${esc(a.name || a.username || '—')}<br><span class="p-sub">${esc(a.email || '')}</span></td>
+    <td><span class="st ${a.status === 'active' ? 'approved' : 'pending'}">${a.status === 'active' ? 'Active' : 'Inactive'}</span></td>
+    <td class="num">${a.referred}</td>
+    <td class="p-sub">${a.assignedAt ? new Date(a.assignedAt).toLocaleDateString() : '—'}</td>
+    <td class="p-sub" style="max-width:240px;word-break:break-all">${esc(a.link || '—')}</td>
+    <td><div style="display:flex;gap:6px;flex-wrap:wrap">
+      <button class="btn btn-ghost auto agcopy" data-link="${esc(a.link || '')}">Copy link</button>
+      ${a.status === 'active'
+        ? `<button class="btn btn-ghost auto agact" data-id="${a.id}" data-x="deactivate">Deactivate</button>`
+        : `<button class="btn btn-primary auto agact" data-id="${a.id}" data-x="activate">Activate</button>`}
+      <button class="btn btn-ghost auto agact" data-id="${a.id}" data-x="regenerate">Regenerate</button>
+      <button class="btn btn-ghost auto agact" data-id="${a.id}" data-x="remove" style="border-color:var(--danger);color:#c0143c">Remove agent</button>
+    </div></td>
+  </tr>`).join('') || `<tr><td colspan="6" class="p-sub">No agents yet. Assign one from the Users tab.</td></tr>`;
+  content().querySelectorAll('.agcopy').forEach((b) => b.addEventListener('click', () => { if (navigator.clipboard) navigator.clipboard.writeText(b.dataset.link); toast('Referral link copied'); }));
+  content().querySelectorAll('.agact').forEach((b) => b.addEventListener('click', () => agentAction(b.dataset.id, b.dataset.x)));
+}
+
+async function agentAction(id, action) {
+  const labels = {
+    activate: 'Activate this agent? Their referral link will work again.',
+    deactivate: 'Deactivate this agent? Their link stops working until reactivated.',
+    regenerate: 'Generate a NEW referral code? The old link will stop working.',
+    remove: 'Remove agent status? Their normal task permissions are restored.',
+  };
+  if (!confirm(labels[action] || 'Proceed?')) return;
+  const { ok, data } = await api('/api/admin/users/' + id + '/agent', { action });
+  if (ok) { toast('Agent updated'); tAgents(); } else toast(data.error || 'Failed', 'error');
 }
 
 // Reusable email templates ({name} is replaced with the recipient's name).
@@ -877,7 +933,15 @@ async function tBroadcast() {
 
 async function userAction(ds) {
   const id = ds.id, base = '/api/admin/users/' + id;
-  if (ds.a === 'suspend') {
+  if (ds.a === 'agent-assign') {
+    if (!confirm(`Assign ${ds.email} as an AGENT?\n\nThey get a permanent referral link, and can no longer complete or submit tasks.`)) return;
+    const { ok, data } = await api(base + '/agent', { action: 'assign' });
+    if (ok) { toast('User is now an agent'); tUsers(); } else toast(data.error || 'Failed', 'error');
+  } else if (ds.a === 'agent-remove') {
+    if (!confirm(`Remove agent status from ${ds.email}?\n\nTheir task permissions are restored and their agent link is disabled.`)) return;
+    const { ok, data } = await api(base + '/agent', { action: 'remove' });
+    if (ok) { toast('Agent status removed'); tUsers(); } else toast(data.error || 'Failed', 'error');
+  } else if (ds.a === 'suspend') {
     const { ok, data } = await api(base + '/suspend', {});
     if (ok) { toast(data.suspended ? 'Account suspended' : 'Account unsuspended'); tUsers(); } else toast(data.error || 'Failed', 'error');
   } else if (ds.a === 'hold') {
