@@ -419,6 +419,7 @@ const EMAIL_TYPE = {
   approved: 'Task approved', rejected: 'Task rejected', correction: 'Correction requested',
   application_approved: 'Application approved', application_rejected: 'Application rejected',
   withdrawal_paid: 'Withdrawal paid', email_direct: 'Direct email', email_broadcast: 'Broadcast email',
+  plan_updated: 'Plan updated',
 };
 const emailTypeLabel = (t) => EMAIL_TYPE[t] || String(t || '').replace(/_/g, ' ');
 const CAN_RESEND = new Set(['approved', 'rejected', 'correction', 'application_approved', 'application_rejected']);
@@ -995,10 +996,20 @@ async function userAction(ds) {
         <select id="planSel">${opts.map(([v, l]) => `<option value="${v}" ${v === cur ? 'selected' : ''}>${l}</option>`).join('')}</select></div>
       <p class="p-sub">Paid plans activate for 30 days from now.</p>
       <button class="btn btn-primary" id="planSave">Save plan</button>`);
-    bg.querySelector('#planSave').addEventListener('click', async () => {
+    bg.querySelector('#planSave').addEventListener('click', async (e) => {
+      const btn = e.currentTarget;
+      if (btn.disabled) return;
+      btn.disabled = true;                       // prevent double-submit / duplicate emails
       const plan = bg.querySelector('#planSel').value;
       const { ok, data } = await api(base + '/plan', { plan });
-      if (ok) { bg.remove(); toast('Plan set to ' + (data.plan || plan)); tUsers(); } else toast(data.error || 'Failed', 'error');
+      if (!ok) { btn.disabled = false; return toast(data.error || 'Failed', 'error'); }
+      bg.remove();
+      const name = data.plan || plan;
+      const em = data.email;                      // null when the plan didn't actually change
+      if (!em) toast('Plan set to ' + name);
+      else if (em.status === 'Sent') toast('Plan set to ' + name + ' · client notified by email', 'ok');
+      else toast('Plan updated successfully, but the email notification could not be sent.', 'error');
+      tUsers();
     });
   } else if (ds.a === 'delete') {
     if (!confirm('Permanently delete ' + ds.email + ' and all their data? This cannot be undone.')) return;

@@ -247,9 +247,52 @@ gweno Team`;
   return send({ to, subject: `Your ${plan} subscription is active`, text });
 }
 
+// Sent when an ADMIN manually changes a client's subscription plan (not a payment).
+// Shows the previous and new plan; works dynamically for any valid plan.
+async function sendPlanUpdated({ to, name, oldPlan, newPlan }) {
+  const text =
+`Dear ${name},
+
+We are pleased to inform you that your subscription plan has been successfully updated.
+
+Previous Plan: ${oldPlan}
+New Plan: ${newPlan}
+
+Your account has now been updated, and you can access the features, tasks, and benefits available under your new subscription plan.
+
+Thank you for being part of GWENO.
+
+Best regards,
+GWENO Team`;
+  return send({ to, subject: 'Your Subscription Plan Has Been Updated', text, html: adminHtml('Your Subscription Plan Has Been Updated', text) });
+}
+
+// Sent automatically when an admin promotes a Client to Regional Agent.
+async function sendAgentPromotion({ to, name }) {
+  const who = name || 'Client';
+  const text =
+`Dear ${who},
+
+Congratulations!
+
+We are pleased to inform you that, due to your hard work, commitment, and progress on the platform, your account has been upgraded from Client to Regional Agent in your respective region.
+
+This is an important achievement, and we appreciate the effort and dedication that helped you reach this position. We encourage you to continue working hard, remaining active, and building trust within the platform.
+
+Your journey does not end here. Just as your hard work and commitment helped you progress from being a Client to becoming a Regional Agent, continued dedication and strong performance may open further opportunities for advancement, including consideration for a higher-level or Replying Agent role.
+
+We believe in your potential and encourage you to continue demonstrating responsibility, professionalism, trust, and commitment in your new role.
+
+Congratulations once again on becoming a Regional Agent. We look forward to seeing your continued growth and success.
+
+Best regards,
+Gweno Team`;
+  return send({ to, subject: 'Congratulations — You are now a Regional Agent 🎉', text, html: adminHtml('Congratulations — You are now a Regional Agent 🎉', text) });
+}
+
 module.exports = {
   configured, send, sendPasswordReset, sendMagicLink, sendSupport, CFG,
   sendTaskApproved, sendTaskRejected, sendTaskCorrection, sendApplicationApproved, sendWithdrawalPaid,
   sendWithdrawalSuccess, sendShareYourSuccess,
-  sendAdmin, sendSubscriptionActivated,
+  sendAdmin, sendSubscriptionActivated, sendAgentPromotion, sendPlanUpdated,
 };

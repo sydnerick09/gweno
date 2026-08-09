@@ -2262,22 +2262,60 @@ app.post('/api/admin/users/:id/hold', requireAdminSession, (req, res) => {
   res.json({ ok: true, held: !!u.held });
 });
 
-// Set a member's subscription plan: 'none' (Free), 'basic', 'premium' or 'premiumpro'.
-app.post('/api/admin/users/:id/plan', requireAdminSession, (req, res) => {
+// Email the client that an admin changed their plan (old -> new). Logged + audited,
+// never rolls back the plan change. Returns { status, error } for the admin UI.
+async function notifyPlanChange(u, oldPlan, newPlan) {
+  const rec = {
+    id: rid(6), type: 'plan_updated', userId: u.id, oldPlan, newPlan,
+    to: u.email || null, subject: 'Your Subscription Plan Has Been Updated',
+    status: 'Failed', error: null, admin: ADMIN_USERNAME, createdAt: new Date().toISOString(),
+  };
+  try {
+    if (!u.email) throw new Error('User has no email on file');
+    if (!mailer.configured()) throw new Error('Email is not configured (set SMTP_* env vars)');
+    await mailer.sendPlanUpdated({ to: u.email, name: u.name || u.username || 'there', oldPlan, newPlan });
+    rec.status = 'Sent';
+  } catch (e) { rec.error = e.message; }
+  const S = db.get();
+  S.emailLog = S.emailLog || [];
+  S.emailLog.unshift(rec);
+  if (S.emailLog.length > 2000) S.emailLog.length = 2000;
+  audit('plan_change_email', { admin: ADMIN_USERNAME, userId: u.id, oldPlan, newPlan, status: rec.status });
+  db.save();
+  return { status: rec.status, error: rec.error };
+}
+
+// Set a member's subscription plan: 'none' (Free), 'basic', 'premium', 'premiumpro' or
+// 'executive'. On a real change we email the client (old -> new) via the shared mailer.
+app.post('/api/admin/users/:id/plan', requireAdminSession, async (req, res) => {
   const u = userById(req.params.id);
   if (!u) return res.status(404).json({ error: 'User not found.' });
   ensureUserShape(u);
   const id = String(req.body.plan || '').trim();
+
+  // Capture the CURRENT plan name BEFORE changing anything (for the email + change check).
+  const before = activePlan(u);
+  const oldPlanName = before ? before.name : 'Free';
+
+  let newPlanName;
   if (id === 'none' || id === 'free' || id === '') {
     u.plan = null;
     u.premium = { active: false, since: null, expires: null }; // keep legacy flag in sync
-    db.save();
-    return res.json({ ok: true, plan: 'Free', planId: 'none' });
+    newPlanName = 'Free';
+  } else {
+    if (!PLAN_BY_ID[id]) return res.status(400).json({ error: 'Choose a valid plan.' });
+    grantPlan(u, id);                       // safe update: only touches u.plan
+    newPlanName = PLAN_BY_ID[id].name;
   }
-  if (!PLAN_BY_ID[id]) return res.status(400).json({ error: 'Choose a valid plan.' });
-  grantPlan(u, id); // 30-day activation from now
-  db.save();
-  res.json({ ok: true, plan: PLAN_BY_ID[id].name, planId: id, expires: u.plan.expires });
+  db.save();                                // commit the plan change FIRST
+
+  // Email only when the plan actually changed — so repeated clicks / refreshes with the
+  // same target don't send duplicate notifications. Failure never undoes the change.
+  let email = null;
+  if (newPlanName !== oldPlanName) {
+    email = await notifyPlanChange(u, oldPlanName, newPlanName);
+  }
+  res.json({ ok: true, plan: newPlanName, planId: id === '' ? 'none' : id, expires: u.plan ? u.plan.expires : null, changed: newPlanName !== oldPlanName, email });
 });
 
 // Set a member's balance directly (KES wallet and/or USD wallet).
