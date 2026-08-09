@@ -76,7 +76,7 @@ const RAW = [
     ['Open the 1-minute recording from your task pack and listen fully.',
      'Type everything said, word for word, with correct punctuation.',
      'Paste your full transcript below (aim for accuracy).'], { minWords: 30 }),
-  T('Transcribe a 3-minute interview', 'Transcription', 4.0, 'Hard', 'text', ['Typing', 'Listening'],
+  T('Transcribe a 3-minute interview', 'Transcription', 3.0, 'Hard', 'text', ['Typing', 'Listening'],
     'Transcribe an interview with speaker labels.',
     ['Listen to the 3-minute interview recording in your task pack.',
      'Transcribe it with speaker labels (e.g. "Q:" and "A:").',
@@ -142,7 +142,7 @@ const RAW = [
     ['Create a simple square social post (e.g. in Canva) announcing a 20% weekend sale.',
      'Export it and upload to an image host or Drive (make it public).',
      'Paste the direct link to your design below.']),
-  T('Design a banner concept', 'Design', 3.5, 'Hard', 'url', ['Design', 'Layout'],
+  T('Design a banner concept', 'Design', 2.9, 'Hard', 'url', ['Design', 'Layout'],
     'Design a web banner and share the link.',
     ['Design a 1200×300 web banner for a fitness app free-trial promotion.',
      'Upload it to an image host or Drive (public link).',
@@ -273,7 +273,7 @@ const RAW = [
     ['Try the signup form with valid and invalid inputs (blank fields, bad email, weak password).',
      'Report which validations worked and which failed.',
      'Paste your findings below.'], { minWords: 30 }),
-  T('Complete a checkout user-flow test', 'Testing', 3.5, 'Hard', 'text', ['QA', 'UX'],
+  T('Complete a checkout user-flow test', 'Testing', 2.8, 'Hard', 'text', ['QA', 'UX'],
     'Walk through checkout end-to-end.',
     ['Go through a full add-to-cart → checkout flow on the test store.',
      'Describe each step, any friction, and 2 suggestions to improve it.',
@@ -300,6 +300,48 @@ const RAW = [
     ['Answer in a short paragraph: where you shop, how often, what influences your choices, and your budget approach.',
      'Write 40+ words.',
      'Paste your response below.'], { minWords: 40 }),
+
+  // ---------------- Executive tier ($14–$23) — Executive plan only ----------------
+  T('Write a 700-word thought-leadership article', 'Writing', 18.0, 'Hard', 'text', ['Writing', 'Strategy'],
+    'Write a polished long-form article for an executive audience.',
+    ['Topic: "How small businesses in Africa can use AI to grow in 2026".',
+     'Write a well-structured 650–750 word article with an intro, 3 key points, and a conclusion.',
+     'Paste the full article below.'], { minWords: 620 }),
+  T('Build a competitor analysis report', 'Research', 21.0, 'Hard', 'text', ['Research', 'Analysis'],
+    'Research and compare 3 competitors in a market.',
+    ['Pick a market you know (e.g. food delivery in Nairobi). Identify 3 real competitors.',
+     'For each: pricing, strengths, weaknesses, and 1 opportunity. Then a short recommendation.',
+     'Paste your full report (250+ words) below.'], { minWords: 250 }),
+  T('Draft a 12-month marketing strategy', 'Marketing', 22.0, 'Hard', 'text', ['Marketing', 'Strategy'],
+    'Create a high-level annual marketing plan.',
+    ['Business: a new fintech app for savings groups.',
+     'Outline quarterly goals, channels, budget split, and 3 KPIs to track.',
+     'Paste your plan (250+ words) below.'], { minWords: 250 }),
+  T('Full UX review of a checkout flow', 'Testing', 16.0, 'Hard', 'url', ['UX', 'Testing'],
+    'Review a checkout flow and report issues.',
+    ['Open any online store checkout you use.',
+     'Write up 6+ specific usability issues and a fix for each, then upload your notes (doc/screenshot).',
+     'Paste the link to your uploaded review.']),
+  T('Translate a 500-word business document', 'Translation', 15.0, 'Hard', 'text', ['Translation', 'Business'],
+    'Translate a formal business document accurately.',
+    ['Translate a 450–550 word business text between two languages you are fluent in (state which).',
+     'Keep the tone formal and accurate.',
+     'Paste the full translation below.'], { minWords: 400 }),
+  T('Transcribe a 20-minute interview', 'Transcription', 17.0, 'Hard', 'text', ['Transcription', 'Audio'],
+    'Produce a clean, timestamped transcript.',
+    ['Transcribe a 20-minute interview or podcast segment of your choice.',
+     'Include speaker labels and timestamps every ~2 minutes.',
+     'Paste the transcript (300+ words) below.'], { minWords: 300 }),
+  T('Design a complete brand style guide', 'Design', 23.0, 'Hard', 'url', ['Design', 'Branding'],
+    'Create a mini brand guide (logo, colours, type).',
+    ['Design a 1–2 page brand style guide for a fictional business.',
+     'Include a logo concept, colour palette, typography and usage rules.',
+     'Upload it and paste the link below.']),
+  T('Prepare a board meeting summary pack', 'Administrative Support', 14.0, 'Hard', 'text', ['Admin', 'Reporting'],
+    'Summarise documents into an executive brief.',
+    ['Imagine 3 department updates (sales, ops, finance).',
+     'Write a concise 1-page board summary with key figures, risks and 3 decisions needed.',
+     'Paste your summary (200+ words) below.'], { minWords: 200 }),
 ];
 
 // URL check shared by url / photo / social validators.
@@ -406,17 +448,19 @@ function validateProof(task, raw) {
 }
 
 // Required subscription tier is derived AUTOMATICALLY from the reward:
-//   reward <= $1.00 -> basic | $1.01–$2.00 -> premium | $2.01–$7.00 -> premiumpro
+//   reward <= $1.00 -> basic | $1.01–$2.00 -> premium | $2.01–$3.00 -> premiumpro
+//   above $3.00 (i.e. the $14–$23 band) -> executive (hidden top plan, untouched)
 function tierForReward(reward) {
   const r = Number(reward) || 0;
   if (r <= 1.00) return 'basic';
   if (r <= 2.00) return 'premium';
-  return 'premiumpro';
+  if (r <= 3.00) return 'premiumpro';
+  return 'executive';           // high-value tasks ($14–$23) — Executive plan only
 }
 
 const EST_MIN = { Easy: 5, Medium: 11, Hard: 20 };
 const TASKS = RAW.map((t, i) => {
-  const reward = Math.min(Math.max(Number(t.reward) || 0, 0.01), 7.00); // clamp to $0.01–$7.00
+  const reward = Math.min(Math.max(Number(t.reward) || 0, 0.01), 25.00); // clamp to $0.01–$25.00 (Executive tasks reach $23)
   const difficulty = t.difficulty || (reward <= 1 ? 'Easy' : reward <= 2 ? 'Medium' : 'Hard');
   return {
     id: 'T' + String(i + 1).padStart(3, '0'),

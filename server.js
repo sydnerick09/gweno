@@ -86,7 +86,7 @@ const SUBSCRIPTION_DAYS = 30;
 const PLANS = [
   { id: 'basic', name: 'Basic', priceKES: 200, rank: 1, minUSD: 0, maxUSD: 1.00 },
   { id: 'premium', name: 'Premium', priceKES: 500, rank: 2, minUSD: 1.00, maxUSD: 2.00 },
-  { id: 'premiumpro', name: 'Premium Pro', priceKES: 1000, rank: 3, minUSD: 2.00, maxUSD: 7.00 },
+  { id: 'premiumpro', name: 'Premium Pro', priceKES: 1000, rank: 3, minUSD: 2.00, maxUSD: 3.00 },
   // Executive: a high-tier plan accessed from the hamburger menu (not shown on the home
   // screen). Unlocks premium $14–$23 tasks. Purchasable directly (not part of the
   // sequential basic→premium→premiumpro progression).
@@ -1557,7 +1557,7 @@ app.get('/api/tasks', requireAuth, (req, res) => {
     premium: userRank(req.user) > 0,
     gate: taskGate(req.user),   // subscription-progression state (locked / limit / next upgrade)
     plan: plan ? { id: plan.id, name: plan.name, rank: plan.rank, maxUSD: plan.maxUSD, expires: req.user.plan && req.user.plan.expires } : null,
-    plans: PLANS.map((p) => ({ id: p.id, name: p.name, priceKES: p.priceKES, minUSD: p.minUSD, maxUSD: p.maxUSD, rank: p.rank })),
+    plans: PLANS.filter((p) => !p.hidden).map((p) => ({ id: p.id, name: p.name, priceKES: p.priceKES, minUSD: p.minUSD, maxUSD: p.maxUSD, rank: p.rank })),
     totalAvailable: accessible.length,
     moneyAvailableUSD: round2(accessible.reduce((a, t) => a + t.reward, 0)),
     lockedMoneyUSD: round2(available.filter((t) => t.locked).reduce((a, t) => a + t.reward, 0)),
