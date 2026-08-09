@@ -101,6 +101,9 @@ function pushEvent(u, type, text, icon) {
   u.game.events.unshift({ id: `${nowTs()}_${(_eid = (_eid + 1) % 100000)}`, type, text, icon: icon || '🔔', ts: nowTs(), read: false });
   if (u.game.events.length > 60) u.game.events.length = 60;
 }
+// Push a plain in-app message (no XP/coins/stat side-effects). For system notifications
+// like "payment sent". `title` is shown bold; `body` is optional detail.
+function notify(u, text, icon) { pushEvent(u, 'message', text, icon || '🔔'); }
 
 // ---- Reputation (derived; can't be gamed directly) --------------------------
 function reputation(g) {
@@ -248,5 +251,5 @@ function summary(u) {
 module.exports = {
   LEVELS, REWARDS, BADGES,
   ensureGameShape, level, award, touchStreak, checkBadges,
-  markProfileComplete, reputation, verificationTier, periodXP, summary, pushEvent,
+  markProfileComplete, reputation, verificationTier, periodXP, summary, pushEvent, notify,
 };

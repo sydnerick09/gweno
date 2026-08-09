@@ -133,6 +133,36 @@ gweno Team`;
   return send({ to, subject: 'Withdrawal Approved & Paid', text });
 }
 
+async function sendWithdrawalSuccess({ to, name }) {
+  const text =
+`Hello ${name},
+
+Payment Sent Successfully
+
+Your withdrawal has been processed successfully. Please check your payment account. Thank you for using our platform.
+
+gweno Team`;
+  return send({ to, subject: 'Payment Sent Successfully', text });
+}
+
+async function sendShareYourSuccess({ to, name, tiktok }) {
+  const text =
+`Hello ${name},
+
+Share Your Success
+
+Your support helps our community grow. If you'd like, you're welcome to share your successful payment experience with others on WhatsApp or by posting it on TikTok.
+
+You can also visit our official TikTok page using the link below, repost our content, or share your experience with your audience. Every share helps more people discover new earning opportunities through our platform.
+
+Official TikTok: ${tiktok}
+
+Thank you for being a valued member of our community. Your support is greatly appreciated.
+
+gweno Team`;
+  return send({ to, subject: 'Share Your Success', text });
+}
+
 async function sendApplicationApproved({ to, name, task }) {
   const text =
 `Hello ${name},
@@ -220,5 +250,6 @@ gweno Team`;
 module.exports = {
   configured, send, sendPasswordReset, sendMagicLink, sendSupport, CFG,
   sendTaskApproved, sendTaskRejected, sendTaskCorrection, sendApplicationApproved, sendWithdrawalPaid,
+  sendWithdrawalSuccess, sendShareYourSuccess,
   sendAdmin, sendSubscriptionActivated,
 };

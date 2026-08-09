@@ -89,7 +89,8 @@ const PLANS = [
   { id: 'premiumpro', name: 'Premium Pro', priceKES: 1000, rank: 3, minUSD: 2.00, maxUSD: 7.00 },
 ];
 const PLAN_BY_ID = Object.fromEntries(PLANS.map((p) => [p.id, p]));
-const TASKS_PER_DAY = 2;                                 // a member can do 2 tasks per day
+const TASKS_PER_DAY = 2;                                 // max tasks allowed within each window…
+const TASK_WINDOW_HOURS = 12;                           // …measured over a rolling 12-hour window (applies to ALL plans, incl. premium)
 const ADMIN_EMAIL = (process.env.ADMIN_EMAIL || '').trim().toLowerCase();
 const SURVEY_DONE = 'surveysDone';
 
@@ -1525,6 +1526,7 @@ app.get('/api/tasks', requireAuth, (req, res) => {
     moneyAvailableUSD: round2(accessible.reduce((a, t) => a + t.reward, 0)),
     lockedMoneyUSD: round2(available.filter((t) => t.locked).reduce((a, t) => a + t.reward, 0)),
     tasksPerDay: TASKS_PER_DAY,
+    taskWindowHours: TASK_WINDOW_HOURS,
     pendingUSD: round2(pending),
     approvedUSD: round2(approved),
     balanceUSD: round2(req.user.usd),
@@ -1624,11 +1626,17 @@ app.post('/api/tasks/:id/submit', requireAuth, (req, res) => {
       && S.submissions.some((x) => x.taskId === task.id && (x.status === 'pending' || x.status === 'approved') && x.userId !== req.user.id)) {
     return res.status(409).json({ error: 'This task was just taken by another member. Please pick another task.', code: 'task_taken' });
   }
-  // Daily limit: a member can do TASKS_PER_DAY tasks per day.
-  const todayUTC = new Date().toISOString().slice(0, 10);
-  const todayCount = mySubmissions(req.user.id).filter((x) => String(x.createdAt).slice(0, 10) === todayUTC).length;
-  if (todayCount >= TASKS_PER_DAY) {
-    return res.status(429).json({ error: `You can only do ${TASKS_PER_DAY} tasks per day. Please come back tomorrow.` });
+  // Rate limit: at most TASKS_PER_DAY tasks in any rolling 12-hour window. Applies to
+  // ALL members, including premium and premium-pro subscribers.
+  const windowMs = TASK_WINDOW_HOURS * 3600 * 1000;
+  const recent = mySubmissions(req.user.id)
+    .filter((x) => Date.now() - new Date(x.createdAt).getTime() < windowMs)
+    .sort((a, b) => String(a.createdAt).localeCompare(String(b.createdAt)));
+  if (recent.length >= TASKS_PER_DAY) {
+    const freeAt = new Date(recent[0].createdAt).getTime() + windowMs;
+    const mins = Math.max(1, Math.ceil((freeAt - Date.now()) / 60000));
+    const when = mins >= 60 ? `${Math.floor(mins / 60)}h ${mins % 60}m` : `${mins}m`;
+    return res.status(429).json({ error: `You can only do ${TASKS_PER_DAY} tasks every ${TASK_WINDOW_HOURS} hours. Please try again in about ${when}.` });
   }
   const proof = String(req.body.proof || '').trim();
   // Validate the proof against the task's type (typing / email / link / survey / photo /
@@ -2336,6 +2344,29 @@ async function notifyWithdrawalPaid(rec) {
   return emailRec;
 }
 
+// After a withdrawal is genuinely PAID, send the client two messages: a payment-sent
+// confirmation and a "share your success" nudge (with our official TikTok). Delivered
+// in-app (always) and by email (best-effort). Idempotent per redemption. The in-app
+// notifications are applied synchronously (before the first await), so a fire-and-forget
+// call from a sync callback still persists them via the caller's db.save().
+async function sendWithdrawalSuccessMessages(rec) {
+  if (!rec || rec.successMessagesSent) return;
+  rec.successMessagesSent = true;
+  const owner = userById(rec.userId);
+  if (!owner) return;
+  ensureUserShape(owner);
+  try {
+    gamify.notify(owner, 'Payment Sent Successfully — your withdrawal has been processed. Please check your payment account. Thank you for using our platform.', '💸');
+    gamify.notify(owner, 'Share Your Success — share your successful payment on WhatsApp or TikTok. Visit our official TikTok, repost, and help others discover Gweno.', '🎉');
+  } catch (_) {}
+  try {
+    if (!owner.email || !mailer.configured()) return;
+    const name = owner.name || owner.username || 'there';
+    await mailer.sendWithdrawalSuccess({ to: owner.email, name });
+    await mailer.sendShareYourSuccess({ to: owner.email, name, tiktok: TIKTOK_OFFICIAL });
+  } catch (e) { console.error('[gweno] withdrawal success messages failed:', e.message); }
+}
+
 app.post('/api/admin/redemptions/:id/mark', requireAdminSession, async (req, res) => {
   const actor = actorName(req);
   const rec = db.get().redemptions.find((r) => r.id === req.params.id);
@@ -2384,6 +2415,7 @@ app.post('/api/admin/redemptions/:id/mark', requireAdminSession, async (req, res
   if (status === 'Paid') {
     const em = await notifyWithdrawalPaid(rec);
     email = { status: em.status, error: em.error };
+    await sendWithdrawalSuccessMessages(rec);   // "Payment Sent Successfully" + "Share Your Success"
     audit('withdrawal_paid', { admin: actor, userId: rec.userId, redemptionId: rec.id, amount: round2(rec.net != null ? rec.net : rec.amount) });
   }
   db.save();
@@ -2760,7 +2792,7 @@ app.get('/api/redemptions/:id/status', requireAuth, async (req, res) => {
   if (rec.status === 'Processing' && rec.provider && rec.provider.type === 'paystack-transfer' && investPay.paystackConfigured()) {
     try {
       const s = await investPay.paystackTransferStatus(rec.provider.reference);
-      if (s.status === 'success' && rec.status !== 'Paid') { rec.status = 'Paid'; rec.resultAt = new Date().toISOString(); db.save(); }
+      if (s.status === 'success' && rec.status !== 'Paid') { rec.status = 'Paid'; rec.resultAt = new Date().toISOString(); sendWithdrawalSuccessMessages(rec); db.save(); }
       else if ((s.status === 'failed' || s.status === 'reversed') && !/failed/i.test(rec.status)) {
         rec.status = 'Failed'; rec.error = s.status;
         const u = userById(rec.userId); if (u) { ensureUserShape(u); u.usd = round2(u.usd + (rec.amountUSD != null ? rec.amountUSD : rec.amount)); }
@@ -2801,7 +2833,7 @@ app.post('/api/paystack/webhook', (req, res) => {
     const ref = evt.data && evt.data.reference;
     const rec = db.get().redemptions.find((r) => r.provider && r.provider.reference === ref);
     if (rec && !/paid|failed/i.test(rec.status)) {
-      if (evt.event === 'transfer.success') rec.status = 'Paid';
+      if (evt.event === 'transfer.success') { rec.status = 'Paid'; sendWithdrawalSuccessMessages(rec); }
       else if (evt.event === 'transfer.failed' || evt.event === 'transfer.reversed') {
         rec.status = 'Failed';
         const u = userById(rec.userId);
@@ -2841,7 +2873,7 @@ app.post('/api/mpesa/result', (req, res) => {
       x.provider.conversationId === r.ConversationID || x.provider.originatorConversationId === r.OriginatorConversationID));
     if (rec && !/paid|failed/i.test(rec.status)) {
       if (Number(r.ResultCode) === 0) {
-        rec.status = 'Paid';
+        rec.status = 'Paid'; sendWithdrawalSuccessMessages(rec);
       } else {
         rec.status = 'Failed'; rec.error = r.ResultDesc;
         const u = userById(rec.userId); // refund the held USD if the payout fails
