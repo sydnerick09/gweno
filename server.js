@@ -408,8 +408,8 @@ function generateReplacementTask(category) {
 }
 const grantPlan = (u, id) => {
   const iso = new Date().toISOString();
-  // Premium Pro unlocks the platform permanently; lower plans run for SUBSCRIPTION_DAYS.
-  const expires = id === 'premiumpro' ? null : new Date(now() + SUBSCRIPTION_DAYS * 86400000).toISOString();
+  // Premium Pro and Executive unlock the platform permanently; lower plans run for SUBSCRIPTION_DAYS.
+  const expires = (id === 'premiumpro' || id === 'executive') ? null : new Date(now() + SUBSCRIPTION_DAYS * 86400000).toISOString();
   u.plan = { id, since: iso, expires };
   audit('plan_upgrade', { userId: u.id, plan: id });
 };
@@ -648,6 +648,7 @@ function ensureUserShape(u) {
   if (u.agentStatus === undefined) u.agentStatus = u.isAgent ? 'active' : 'inactive';
   if (u.agentReferralCode === undefined) u.agentReferralCode = null; // permanent once assigned
   if (u.agentAssignedAt === undefined) u.agentAssignedAt = null;
+  if (u.agentPromoEmailedAt === undefined) u.agentPromoEmailedAt = null; // congratulatory email sent once
   gamify.ensureGameShape(u);                           // XP / level / badges / streak / coins
   return u;
 }
@@ -2138,11 +2139,12 @@ app.get('/api/admin/users', requireAdminSession, (req, res) => {
 });
 
 // ---- Agent management (assign / remove / activate / deactivate / regenerate) ----
-app.post('/api/admin/users/:id/agent', requireAdminSession, (req, res) => {
+app.post('/api/admin/users/:id/agent', requireAdminSession, async (req, res) => {
   const u = userById(req.params.id);
   if (!u) return res.status(404).json({ error: 'User not found.' });
   ensureUserShape(u);
   const action = String(req.body.action || '').trim();
+  const wasActiveAgent = u.isAgent && u.agentStatus === 'active'; // to email only on a genuine promotion
   switch (action) {
     case 'assign':
       u.isAgent = true; u.role = 'agent'; u.agentStatus = 'active';
@@ -2168,9 +2170,22 @@ app.post('/api/admin/users/:id/agent', requireAdminSession, (req, res) => {
       return res.status(400).json({ error: 'Invalid agent action.' });
   }
   audit('agent_' + action, { admin: ADMIN_USERNAME, userId: u.id, agentCode: u.agentReferralCode });
+
+  // Fire the congratulatory Regional Agent email the moment the role is set — but only on a
+  // genuine promotion (not repeat clicks / activate / regenerate), and never twice.
+  let emailStatus = null;
+  const justPromoted = action === 'assign' && !wasActiveAgent && !u.agentPromoEmailedAt;
+  if (justPromoted && u.email && mailer.configured()) {
+    try {
+      await mailer.sendAgentPromotion({ to: u.email, name: u.name || u.username || 'there' });
+      emailStatus = 'sent'; u.agentPromoEmailedAt = new Date().toISOString();
+    } catch (e) { emailStatus = 'failed'; console.error('[gweno] agent promotion email failed:', e.message); }
+    audit('agent_promotion_email', { admin: ADMIN_USERNAME, userId: u.id, to: u.email, status: emailStatus });
+  }
   db.save();
   res.json({ ok: true, isAgent: !!u.isAgent, agentStatus: u.agentStatus,
-    agentReferralCode: u.agentReferralCode, agentLink: u.agentReferralCode ? agentLinkFor(u.agentReferralCode) : null });
+    agentReferralCode: u.agentReferralCode, agentLink: u.agentReferralCode ? agentLinkFor(u.agentReferralCode) : null,
+    email: emailStatus ? { status: emailStatus } : undefined });
 });
 
 // List all agents for the admin Agents tab.

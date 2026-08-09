@@ -985,6 +985,7 @@ async function userAction(ds) {
       ['basic', 'Basic — KES 200 (tasks up to $1)'],
       ['premium', 'Premium — KES 500 (tasks $1–$2)'],
       ['premiumpro', 'Premium Pro — KES 1000 (tasks $2–$7)'],
+      ['executive', 'Executive (Exclusive) — KES 2500 (tasks $14–$23)'],
     ];
     const bg = adminModal(`
       <button class="close">×</button>
