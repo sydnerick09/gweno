@@ -316,6 +316,7 @@ select option { background: #fff; color: var(--text); }
 .doc h1 { font-size: 34px; margin: 10px 0 6px; }
 .doc .updated { color: var(--muted); font-size: 14px; margin-bottom: 30px; }
 .doc h2 { font-size: 20px; margin: 30px 0 10px; }
+.doc h3 { font-size: 16.5px; margin: 20px 0 6px; }
 .doc p, .doc li { color: #374151; line-height: 1.7; font-size: 15.5px; }
 .doc a.back { display: inline-block; margin-bottom: 20px; }
 .contact-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 18px; margin-top: 20px; }
