@@ -856,7 +856,7 @@ async function pageTasks() {
     </div>`;
 
   view().innerHTML = `
-    <p class="page-sub">Bid on a task, do the work, and get paid once the admin approves it. You can do <b>${perDay} tasks every ${windowH} hours</b>.</p>
+    <p class="page-sub">Bid on a task, do the work, and get paid once the admin approves it.${gate.unlimited ? ` As Premium Pro you can do <b>${perDay} tasks every ${windowH} hours</b>.` : ''}</p>
     <div class="grid g4">
       <div class="stat"><div class="label">Tasks available</div><div class="value">${data.totalAvailable}</div></div>
       <div class="stat brand"><div class="label">Money available to earn</div><div class="value">${usd(data.moneyAvailableUSD)}</div></div>

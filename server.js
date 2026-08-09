@@ -87,6 +87,10 @@ const PLANS = [
   { id: 'basic', name: 'Basic', priceKES: 200, rank: 1, minUSD: 0, maxUSD: 1.00 },
   { id: 'premium', name: 'Premium', priceKES: 500, rank: 2, minUSD: 1.00, maxUSD: 2.00 },
   { id: 'premiumpro', name: 'Premium Pro', priceKES: 1000, rank: 3, minUSD: 2.00, maxUSD: 7.00 },
+  // Executive: a high-tier plan accessed from the hamburger menu (not shown on the home
+  // screen). Unlocks premium $14–$23 tasks. Purchasable directly (not part of the
+  // sequential basic→premium→premiumpro progression).
+  { id: 'executive', name: 'Executive', priceKES: 2500, rank: 4, minUSD: 14.00, maxUSD: 23.00, hidden: true },
 ];
 const PLAN_BY_ID = Object.fromEntries(PLANS.map((p) => [p.id, p]));
 const TASKS_PER_DAY = 2;                                 // max tasks allowed within each window…
@@ -473,7 +477,7 @@ function withdrawalPaidThisCycle(u) {
 function taskGate(u) {
   const plan = activePlan(u);
   const planId = plan ? plan.id : 'free';
-  const unlimited = planId === 'premiumpro';
+  const unlimited = planId === 'premiumpro' || planId === 'executive';
   const limit = PLAN_TASK_LIMIT[planId] != null ? PLAN_TASK_LIMIT[planId] : null;
   const done = tasksThisCycleCount(u);
   const atLimit = !unlimited && limit != null && done >= limit;
@@ -491,6 +495,9 @@ function upgradeEligibility(u, targetPlanId) {
   const cur = activePlan(u);
   const curRank = cur ? cur.rank : 0;
   if (target.rank <= curRank) return { ok: false, error: `You already have the ${cur ? cur.name : target.name} plan or higher.` };
+  // Executive is a standalone top-tier plan bought directly from the menu — it bypasses the
+  // sequential basic→premium→premiumpro progression (any lower-tier member may purchase it).
+  if (target.id === 'executive') return { ok: true };
   if (target.rank !== curRank + 1) {
     const nextName = (PLANS.find((p) => p.rank === curRank + 1) || {}).name || 'the next plan';
     return { ok: false, error: `Upgrade one level at a time — get ${nextName} first.` };
@@ -502,6 +509,33 @@ function upgradeEligibility(u, targetPlanId) {
     if (!gate.locked) return { ok: false, error: `Complete your ${gate.planName} task${gate.limit === 1 ? '' : 's'} and make a successful withdrawal before upgrading to ${target.name}.` };
   }
   return { ok: true };
+}
+
+// Self-healing recovery: if a member has a CONFIRMED subscription payment but their plan
+// isn't active (e.g. a callback confirmed the payment but the activation write was lost),
+// re-activate it here — preserving the ORIGINAL payment window so it isn't unfairly extended.
+// Called from the read paths (/api/me, /api/subscription, /api/tasks) so the plan self-heals
+// the moment the member's dashboard refreshes after paying. Returns true if it changed anything.
+function reconcileUserPlan(u) {
+  if (!u) return false;
+  const subs = (db.get().deposits || []).filter((d) => d.userId === u.id && d.purpose === 'subscription' && d.status === 'success');
+  if (!subs.length) return false;
+  subs.sort((a, b) => String(b.paidAt || b.createdAt).localeCompare(String(a.paidAt || a.createdAt)));
+  const latest = subs[0];
+  const paidPlan = PLAN_BY_ID[latest.plan];
+  if (!paidPlan) return false;
+  const cur = activePlan(u);
+  if (cur && cur.rank >= paidPlan.rank) return false;          // already active at that tier or higher
+  const paidAt = new Date(latest.paidAt || latest.createdAt).getTime();
+  const permanent = paidPlan.id === 'premiumpro' || paidPlan.id === 'executive';
+  const stillValid = permanent || (now() - paidAt) < SUBSCRIPTION_DAYS * 86400000;
+  if (!stillValid) return false;                               // the paid window has legitimately elapsed
+  // Re-grant using the original activation window (not a fresh 30 days).
+  u.plan = { id: paidPlan.id, since: new Date(paidAt).toISOString(), expires: permanent ? null : new Date(paidAt + SUBSCRIPTION_DAYS * 86400000).toISOString() };
+  latest.reconciledAt = new Date().toISOString();
+  audit('plan_reconciled', { userId: u.id, plan: paidPlan.id, reference: latest.reference || latest.id });
+  console.log(`[gweno] reconciled plan for user=${u.id} -> ${paidPlan.id} (payment ${latest.reference || latest.id})`);
+  return true;
 }
 
 // #5 — one account per device. A used fingerprint stays a tombstone even after
@@ -1286,6 +1320,7 @@ app.post('/api/onboarding', requireAuth, (req, res) => {
 
 // ---- Session-backed endpoints ----------------------------------------------
 app.get('/api/me', requireAuth, (req, res) => {
+  if (reconcileUserPlan(req.user)) db.save();   // self-heal a paid-but-not-activated subscription
   res.json({ user: publicUser(req.user), sessionExpiresAt: req.session.expiresAt, fx: FX_KES_PER_USD });
 });
 
@@ -1481,6 +1516,7 @@ function mySubmissions(userId) {
 }
 
 app.get('/api/tasks', requireAuth, (req, res) => {
+  if (reconcileUserPlan(req.user)) db.save();   // self-heal plan before computing task access
   const plan = activePlan(req.user);
   const mine = mySubmissions(req.user.id);
   // #2 — Single-use: a paid task that ANY member has claimed (pending) or completed
@@ -1626,17 +1662,20 @@ app.post('/api/tasks/:id/submit', requireAuth, (req, res) => {
       && S.submissions.some((x) => x.taskId === task.id && (x.status === 'pending' || x.status === 'approved') && x.userId !== req.user.id)) {
     return res.status(409).json({ error: 'This task was just taken by another member. Please pick another task.', code: 'task_taken' });
   }
-  // Rate limit: at most TASKS_PER_DAY tasks in any rolling 12-hour window. Applies to
-  // ALL members, including premium and premium-pro subscribers.
-  const windowMs = TASK_WINDOW_HOURS * 3600 * 1000;
-  const recent = mySubmissions(req.user.id)
-    .filter((x) => Date.now() - new Date(x.createdAt).getTime() < windowMs)
-    .sort((a, b) => String(a.createdAt).localeCompare(String(b.createdAt)));
-  if (recent.length >= TASKS_PER_DAY) {
-    const freeAt = new Date(recent[0].createdAt).getTime() + windowMs;
-    const mins = Math.max(1, Math.ceil((freeAt - Date.now()) / 60000));
-    const when = mins >= 60 ? `${Math.floor(mins / 60)}h ${mins % 60}m` : `${mins}m`;
-    return res.status(429).json({ error: `You can only do ${TASKS_PER_DAY} tasks every ${TASK_WINDOW_HOURS} hours. Please try again in about ${when}.` });
+  // Rate limit — Premium Pro ONLY. Premium Pro has unlimited total tasks, so it's capped
+  // at TASKS_PER_DAY within any rolling 12-hour window. Free/basic/premium are NOT rate-
+  // limited here; their cap is the progression gate above (per-plan total task allowance).
+  if (gate.unlimited) {
+    const windowMs = TASK_WINDOW_HOURS * 3600 * 1000;
+    const recent = mySubmissions(req.user.id)
+      .filter((x) => Date.now() - new Date(x.createdAt).getTime() < windowMs)
+      .sort((a, b) => String(a.createdAt).localeCompare(String(b.createdAt)));
+    if (recent.length >= TASKS_PER_DAY) {
+      const freeAt = new Date(recent[0].createdAt).getTime() + windowMs;
+      const mins = Math.max(1, Math.ceil((freeAt - Date.now()) / 60000));
+      const when = mins >= 60 ? `${Math.floor(mins / 60)}h ${mins % 60}m` : `${mins}m`;
+      return res.status(429).json({ error: `Premium Pro allows ${TASKS_PER_DAY} tasks every ${TASK_WINDOW_HOURS} hours. Please try again in about ${when}.` });
+    }
   }
   const proof = String(req.body.proof || '').trim();
   // Validate the proof against the task's type (typing / email / link / survey / photo /
@@ -3085,12 +3124,13 @@ function activateSubscription(u, rec, source) {
 //  PREMIUM SUBSCRIPTION  —  $10 (charged in KES) via M-Pesa STK, unlocks $1–$4 tasks
 // =============================================================================
 app.get('/api/subscription', requireAuth, (req, res) => {
+  if (reconcileUserPlan(req.user)) db.save();
   const p = activePlan(req.user);
   res.json({
     active: userRank(req.user) > 0,
     plan: p ? { id: p.id, name: p.name, rank: p.rank, maxUSD: p.maxUSD } : null,
     expires: (req.user.plan && req.user.plan.expires) || null,
-    plans: PLANS.map((x) => ({ id: x.id, name: x.name, priceKES: x.priceKES, minUSD: x.minUSD, maxUSD: x.maxUSD, rank: x.rank })),
+    plans: PLANS.map((x) => ({ id: x.id, name: x.name, priceKES: x.priceKES, minUSD: x.minUSD, maxUSD: x.maxUSD, rank: x.rank, hidden: !!x.hidden })),
     live: payments.mpesaStkConfigured(),
     cardLive: investPay.paystackConfigured(),
   });
