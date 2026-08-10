@@ -2083,6 +2083,32 @@ app.post('/api/admin/logout', (req, res) => {
 app.get('/api/admin/overview', requireAdminSession, (req, res) => {
   const S = db.get();
   const subs = S.submissions;
+
+  // ---- Subscription payment revenue (successfully-confirmed payments ONLY) ----
+  const subsDeposits = (S.deposits || []).filter((d) => d.purpose === 'subscription');
+  const success = subsDeposits.filter((d) => d.status === 'success');
+  const kesOf = (d) => (d.currency === 'USD' ? (Number(d.amount) || 0) * FX_KES_PER_USD : (Number(d.amount) || 0));
+  const paidAtMs = (d) => new Date(d.paidAt || d.activatedAt || d.createdAt).getTime();
+  const startOfToday = new Date(); startOfToday.setHours(0, 0, 0, 0);
+  const nowMs = Date.now(), DAY = 86400000;
+  const sumSince = (ms) => round2(success.filter((d) => paidAtMs(d) >= ms).reduce((a, d) => a + kesOf(d), 0));
+  const provType = (d) => String((d.provider && d.provider.type) || '').toLowerCase();
+
+  const revenue = {
+    totalKES: round2(success.reduce((a, d) => a + kesOf(d), 0)),
+    todayKES: sumSince(startOfToday.getTime()),
+    weekKES: sumSince(nowMs - 7 * DAY),
+    monthKES: sumSince(nowMs - 30 * DAY),
+  };
+  const payments = {
+    successful: success.length,
+    pending: subsDeposits.filter((d) => d.status === 'pending').length,
+    failed: subsDeposits.filter((d) => d.status === 'failed').length,
+    manual: success.filter((d) => d.activationType === 'manual' || provType(d) === 'manual').length,
+    mpesa: success.filter((d) => /mpesa/.test(provType(d))).length,
+    paystack: success.filter((d) => /paystack/.test(provType(d))).length,
+  };
+
   res.json({
     admin: { username: ADMIN_USERNAME },
     users: S.users.length,
@@ -2093,6 +2119,7 @@ app.get('/api/admin/overview', requireAdminSession, (req, res) => {
       rejected: subs.filter((x) => x.status === 'rejected').length,
       disputes: subs.filter((x) => x.dispute).length,
     },
+    revenue, payments, fx: FX_KES_PER_USD,
     deposits: { count: S.deposits.length, totalKES: round2(S.deposits.filter((d) => d.status === 'success').reduce((a, d) => a + d.amount, 0)) },
     withdrawals: { count: S.redemptions.length, open: S.redemptions.filter((r) => /process|request/i.test(r.status)).length },
     support: S.support.length,
@@ -2103,13 +2130,26 @@ app.get('/api/admin/users', requireAdminSession, (req, res) => {
   const S = db.get();
   const subsByUser = {};
   S.submissions.forEach((x) => { (subsByUser[x.userId] = subsByUser[x.userId] || []).push(x); });
+  // Subscription payments grouped per user (for preferred plan, total paid, last payment).
+  const depsByUser = {};
+  (S.deposits || []).filter((d) => d.purpose === 'subscription').forEach((d) => { (depsByUser[d.userId] = depsByUser[d.userId] || []).push(d); });
   const users = S.users.map((u) => {
     const mine = subsByUser[u.id] || [];
     const plan = activePlan(u);
+    // Payment-derived fields.
+    const myDeps = (depsByUser[u.id] || []).slice().sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)));
+    const succ = myDeps.filter((d) => d.status === 'success');
+    const kesOf = (d) => (d.currency === 'USD' ? (Number(d.amount) || 0) * FX_KES_PER_USD : (Number(d.amount) || 0));
+    const preferred = myDeps[0] ? ((PLAN_BY_ID[myDeps[0].plan] || {}).name || myDeps[0].plan) : null; // plan they selected (latest attempt)
     return {
       id: u.id, name: u.name, username: u.username, email: u.email, isAdmin: !!u.isAdmin,
       balance: round2(u.balance || 0), usd: round2(u.usd || 0), onboarded: !!u.onboarded,
       referralCount: u.referralCount || 0, createdAt: u.createdAt,
+      referralCode: (u.referral && u.referral.code) || null,   // searchable
+      preferredPlan: preferred,                                // preferred/selected plan (before/for payment)
+      totalPaidKES: round2(succ.reduce((a, d) => a + kesOf(d), 0)),
+      lastPaymentAt: succ[0] ? (succ[0].paidAt || succ[0].createdAt) : null,
+      paymentStatus: myDeps[0] ? myDeps[0].status : 'none',    // latest subscription payment status
       providers: u.providers || [],                       // how they joined (email / google / facebook / apple)
       suspended: !!u.suspended,
       held: !!u.held,
@@ -2489,14 +2529,47 @@ app.post('/api/admin/deposits/:id/activate', requireAdminSession, (req, res) => 
   const u = userById(rec.userId);
   if (!u) return res.status(404).json({ error: 'The paying user no longer exists.' });
   ensureUserShape(u);
+  if (rec.activated) return res.json({ ok: true, already: true, plan: plan.name, message: `${plan.name} was already activated for this payment.` });
 
-  rec.status = 'success';
-  if (!rec.paidAt) rec.paidAt = new Date().toISOString();
-  rec.activatedBy = actor;                 // who reconciled it
-  grantPlan(u, plan.id);                   // grant/refresh the plan (admin override)
-  audit('subscription_activated', { admin: actor, userId: u.id, depositId: rec.id, plan: plan.id, amount: rec.amount, currency: rec.currency, reference: rec.reference });
+  // Optional reconciliation details the admin can supply (amount actually paid, method, note).
+  if (req.body.amount != null && Number(req.body.amount) >= 0) rec.amount = round2(req.body.amount);
+  const method = String(req.body.method || '').trim(); if (method) rec.method = method;
+  const note = String(req.body.note || '').trim(); if (note) rec.adminNote = note;
+
+  activateUserPlan(u, rec, 'manual:' + actor);   // SAME central activation as the auto callbacks
+  audit('subscription_activated', { admin: actor, userId: u.id, depositId: rec.id, plan: plan.id, amount: rec.amount, currency: rec.currency, reference: rec.reference, type: 'manual' });
   db.save();
   res.json({ ok: true, plan: plan.name, message: `${plan.name} activated for ${u.username || u.name || 'the client'}.` });
+});
+
+// Manual activation with NO prior payment record — the admin confirms a payment received
+// through another channel. Creates the subscription transaction, then activates via the
+// SAME central function (records revenue, plan, email + notification).
+app.post('/api/admin/users/:id/activate-plan', requireAdminSession, (req, res) => {
+  const actor = actorName(req);
+  const u = userById(req.params.id);
+  if (!u) return res.status(404).json({ error: 'User not found.' });
+  ensureUserShape(u);
+  const planId = String(req.body.plan || '').trim();
+  const plan = PLAN_BY_ID[planId];
+  if (!plan) return res.status(400).json({ error: 'Choose a valid plan.' });
+  const method = String(req.body.method || 'Manual').trim();
+  const note = String(req.body.note || '').trim();
+  const amount = req.body.amount != null ? round2(req.body.amount) : plan.priceKES;
+  const currency = String(req.body.currency || 'KES').trim().toUpperCase() === 'USD' ? 'USD' : 'KES';
+
+  const S = db.get();
+  const rec = {
+    id: rid(8), userId: u.id, purpose: 'subscription', plan: planId,
+    amount, currency, method, reference: 'man_' + rid(8),
+    status: 'pending', provider: { type: 'manual', method }, adminNote: note,
+    createdAt: new Date().toISOString(), paidAt: null,
+  };
+  S.deposits.push(rec);
+  activateUserPlan(u, rec, 'manual:' + actor);   // creates the transaction + activates (central)
+  audit('subscription_activated', { admin: actor, userId: u.id, depositId: rec.id, plan: planId, amount, currency, type: 'manual' });
+  db.save();
+  res.json({ ok: true, plan: plan.name, prevPlan: rec.prevPlan, message: `${plan.name} activated for ${u.username || u.name || 'the client'} (manual).` });
 });
 
 app.get('/api/admin/redemptions', requireAdminSession, (req, res) => {
@@ -3268,11 +3341,34 @@ function handleStkCallback(cb) {
 // Activate a paid subscription automatically (NO admin approval). Grants/refreshes the
 // plan, records the source, sends an in-app notification and a confirmation email.
 // Called only from CONFIRMED-payment paths (verified M-Pesa/Paystack callbacks & returns).
-function activateSubscription(u, rec, source) {
+// ---------------------------------------------------------------------------
+//  activateUserPlan — the SINGLE central activation path used by BOTH automatic
+//  payment callbacks (M-Pesa Daraja, Paystack) and manual admin activation. It is
+//  IDEMPOTENT: each payment record activates exactly once (rec.activated guard), so a
+//  duplicate callback or a repeated admin click can never grant the plan or count the
+//  revenue twice. It grants/refreshes the plan (preserving all other user data),
+//  stamps the transaction (prev/new plan, amount, method, auto|manual, activatedBy,
+//  activatedAt), notifies the user in-app, and emails a confirmation.
+//  `rec` is the payment/deposit transaction record; `source` encodes the channel
+//  ('auto:mpesa' | 'auto:paystack' | 'manual:<admin>').
+// ---------------------------------------------------------------------------
+function activateUserPlan(u, rec, source) {
+  if (rec && rec.activated) return { ok: true, already: true, plan: rec.newPlan || null }; // processed once
   const planId = (rec && rec.plan) || 'premium';
   const planObj = PLAN_BY_ID[planId] || PLAN_BY_ID.premium;
+  const prev = activePlan(u);
+  const prevName = prev ? prev.name : 'Free';
   grantPlan(u, planId);                          // sets/refreshes plan + expiry, audited
-  if (rec) rec.activatedBy = source || 'auto';
+  if (rec) {
+    rec.status = 'success';
+    if (!rec.paidAt) rec.paidAt = new Date().toISOString();
+    rec.activated = true;                        // idempotency guard — never activate twice
+    rec.activatedAt = new Date().toISOString();
+    rec.activatedBy = source || 'auto';
+    rec.activationType = /^manual/i.test(String(source || '')) ? 'manual' : 'auto';
+    rec.prevPlan = prevName;
+    rec.newPlan = planObj.name;
+  }
   try {
     gamify.award(u, 'subscription', `sub:${(rec && rec.id) || planId}`, {
       event: { text: `${planObj.name} subscription activated`, icon: '⭐' },
@@ -3286,7 +3382,10 @@ function activateSubscription(u, rec, source) {
       await mailer.sendSubscriptionActivated({ to: u.email, name: u.name || u.username || 'there', plan: planObj.name, expires });
     } catch (e) { console.error('[gweno] subscription email failed:', e.message); }
   })();
+  return { ok: true, plan: planObj.name, prevPlan: prevName };
 }
+// Back-compat alias — existing callbacks call activateSubscription(u, rec, source).
+const activateSubscription = activateUserPlan;
 
 // =============================================================================
 //  PREMIUM SUBSCRIPTION  —  $10 (charged in KES) via M-Pesa STK, unlocks $1–$4 tasks

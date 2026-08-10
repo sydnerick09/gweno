@@ -155,6 +155,9 @@ async function tOverview() {
   loading();
   const { data } = await apiGet('/api/admin/overview');
   const s = data.submissions || {}, d = data.deposits || {}, w = data.withdrawals || {};
+  const rev = data.revenue || {}, pay = data.payments || {};
+  const fx = data.fx || 129;
+  const kesUsd = (n) => `${kes(n)} <span class="p-sub" style="font-weight:400">≈ ${usd((Number(n) || 0) / fx)}</span>`;
   content().innerHTML = `
     <p class="page-sub">Signed in as admin <b>${esc(data.admin ? data.admin.username : '')}</b>.</p>
     <div class="grid g4">
@@ -163,13 +166,35 @@ async function tOverview() {
       <div class="stat"><div class="label">Open disputes</div><div class="value">${s.disputes || 0}</div></div>
       <div class="stat"><div class="label">Support tickets</div><div class="value">${data.support || 0}</div></div>
     </div>
+
+    <div class="panel">
+      <h3>Subscription revenue</h3>
+      <p class="p-sub" style="margin-top:0">From <b>successfully-confirmed</b> subscription payments only (pending, failed and duplicate callbacks are excluded).</p>
+      <div class="grid g4">
+        <div class="stat brand"><div class="label">Total revenue</div><div class="value">${kesUsd(rev.totalKES)}</div></div>
+        <div class="stat"><div class="label">Today</div><div class="value">${kesUsd(rev.todayKES)}</div></div>
+        <div class="stat"><div class="label">This week</div><div class="value">${kesUsd(rev.weekKES)}</div></div>
+        <div class="stat"><div class="label">This month</div><div class="value">${kesUsd(rev.monthKES)}</div></div>
+      </div>
+      <div class="grid g4" style="margin-top:12px">
+        <div class="stat"><div class="label">Successful payments</div><div class="value">${pay.successful || 0}</div></div>
+        <div class="stat"><div class="label">Pending payments</div><div class="value">${pay.pending || 0}</div></div>
+        <div class="stat"><div class="label">Failed payments</div><div class="value">${pay.failed || 0}</div></div>
+        <div class="stat"><div class="label">Manual activations</div><div class="value">${pay.manual || 0}</div></div>
+      </div>
+      <div class="grid g2" style="margin-top:12px">
+        <div class="stat"><div class="label">M-Pesa payments</div><div class="value">${pay.mpesa || 0}</div></div>
+        <div class="stat"><div class="label">Paystack payments</div><div class="value">${pay.paystack || 0}</div></div>
+      </div>
+    </div>
+
     <div class="grid g4">
       <div class="stat"><div class="label">Submissions</div><div class="value">${s.total || 0}</div></div>
       <div class="stat"><div class="label">Approved</div><div class="value">${s.approved || 0}</div></div>
       <div class="stat"><div class="label">Deposits (success)</div><div class="value">${kes(d.totalKES)}</div></div>
       <div class="stat"><div class="label">Withdrawals open</div><div class="value">${w.open || 0}</div></div>
     </div>
-    <div class="panel"><h3>Welcome, admin</h3><p class="p-sub">Use the tabs above to review submissions, inspect users, and manage deposits and withdrawals. Approving a submission credits the member's USD balance.</p></div>`;
+    <div class="panel"><h3>Welcome, admin</h3><p class="p-sub">Use the tabs above to review submissions, inspect users, and manage deposits, withdrawals and manual plan activations. Revenue above updates automatically as subscription payments are confirmed.</p></div>`;
 }
 
 // Render submitted proof: clickable when it's a link, plain (wrapped) text otherwise.
@@ -523,7 +548,8 @@ async function tAudit() {
 }
 
 let USERS_CACHE = [];
-const USERS_STATE = { q: '', status: 'all', page: 1, per: 20 };
+const USERS_STATE = { q: '', status: 'all', plan: 'all', referrals: 'all', page: 1, per: 20 };
+const USER_PLAN_OPTS = [['all', 'All plans'], ['none', 'Free'], ['basic', 'Basic'], ['premium', 'Premium'], ['premiumpro', 'Premium Pro'], ['executive', 'Executive']];
 const inputStyle = 'padding:9px 12px;border:1px solid var(--line);border-radius:10px;background:var(--bg-2);color:var(--text)';
 
 async function tUsers() {
@@ -534,18 +560,22 @@ async function tUsers() {
   content().innerHTML = `
     <p class="page-sub">${USERS_CACHE.length} registered user(s). <b>Suspend</b> blocks sign-in · <b>Hold</b> pauses withdrawals & tasks · <b>Delete</b> removes the account. <a href="/api/admin/export" download>Download data export</a>.</p>
     <div class="panel" style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:12px">
-      <input id="uSearch" placeholder="Search name, email, username or ID…" style="flex:1;min-width:220px;${inputStyle}">
-      <select id="uStatus" style="${inputStyle}">${[['all', 'All statuses'], ['active', 'Active'], ['suspended', 'Suspended'], ['hold', 'On hold']].map(([v, l]) => `<option value="${v}">${l}</option>`).join('')}</select>
+      <input id="uSearch" placeholder="Search name, email, phone, referral code or ID…" style="flex:1;min-width:220px;${inputStyle}">
+      <select id="uStatus" style="${inputStyle}">${[['all', 'All statuses'], ['active', 'Active'], ['inactive', 'Inactive'], ['suspended', 'Suspended'], ['hold', 'On hold']].map(([v, l]) => `<option value="${v}">${l}</option>`).join('')}</select>
+      <select id="uReferrals" style="${inputStyle}">${[['all', 'All (referrals)'], ['with', 'Has referrals'], ['without', 'No referrals']].map(([v, l]) => `<option value="${v}">${l}</option>`).join('')}</select>
+      <select id="uPlan" style="${inputStyle}">${USER_PLAN_OPTS.map(([v, l]) => `<option value="${v}">${l}</option>`).join('')}</select>
       <span class="p-sub" id="uCount"></span>
     </div>
     <div class="panel" style="overflow-x:auto"><table class="table">
-      <thead><tr><th>Name</th><th>Email</th><th>Plan</th><th class="num">Wallet</th><th class="num">Earned</th><th class="num">Tasks</th><th>Status</th><th>Actions</th></tr></thead>
+      <thead><tr><th>Name</th><th>Contact</th><th>Plan</th><th class="num">Referrals</th><th class="num">Paid</th><th class="num">Wallet</th><th class="num">Tasks</th><th>Status</th><th>Actions</th></tr></thead>
       <tbody id="uBody"></tbody>
     </table></div>
     <div id="uPager" style="display:flex;gap:12px;align-items:center;justify-content:center;margin-top:4px"></div>`;
   const s = document.getElementById('uSearch');
   s.addEventListener('input', () => { USERS_STATE.q = s.value; USERS_STATE.page = 1; renderUsersTable(); });
   document.getElementById('uStatus').addEventListener('change', (e) => { USERS_STATE.status = e.target.value; USERS_STATE.page = 1; renderUsersTable(); });
+  document.getElementById('uReferrals').addEventListener('change', (e) => { USERS_STATE.referrals = e.target.value; USERS_STATE.page = 1; renderUsersTable(); });
+  document.getElementById('uPlan').addEventListener('change', (e) => { USERS_STATE.plan = e.target.value; USERS_STATE.page = 1; renderUsersTable(); });
   renderUsersTable();
 }
 
@@ -554,11 +584,16 @@ function renderUsersTable() {
   const act = (a, u, label, extra) => `<button class="btn btn-ghost auto uact" data-a="${a}" data-id="${u.id}" data-email="${esc(u.email)}" data-kes="${u.balance}" data-usd="${u.usd}"${extra || ''}>${label}</button>`;
   const q = USERS_STATE.q.trim().toLowerCase();
   const list = USERS_CACHE.filter((u) => {
-    if (USERS_STATE.status === 'active' && (u.suspended || u.held)) return false;
+    const active = !u.suspended && !u.held;
+    if (USERS_STATE.status === 'active' && !active) return false;
+    if (USERS_STATE.status === 'inactive' && active) return false;
     if (USERS_STATE.status === 'suspended' && !u.suspended) return false;
     if (USERS_STATE.status === 'hold' && !u.held) return false;
+    if (USERS_STATE.referrals === 'with' && !(u.referralCount > 0)) return false;
+    if (USERS_STATE.referrals === 'without' && u.referralCount > 0) return false;
+    if (USERS_STATE.plan !== 'all' && (u.planId || 'none') !== USERS_STATE.plan) return false;
     if (!q) return true;
-    return [u.name, u.username, u.email, u.id].some((v) => String(v || '').toLowerCase().includes(q));
+    return [u.name, u.username, u.email, u.id, u.phone, u.referralCode].some((v) => String(v || '').toLowerCase().includes(q));
   });
   const pages = Math.max(1, Math.ceil(list.length / USERS_STATE.per));
   if (USERS_STATE.page > pages) USERS_STATE.page = pages;
@@ -567,10 +602,11 @@ function renderUsersTable() {
   const cnt = document.getElementById('uCount'); if (cnt) cnt.textContent = `${list.length} match${list.length === 1 ? '' : 'es'}`;
   document.getElementById('uBody').innerHTML = items.map((u) => `<tr>
     <td>${esc(u.name || u.username || '—')}<br><span class="p-sub">@${esc(u.username || '')}</span></td>
-    <td class="p-sub">${esc(u.email)}</td>
-    <td class="p-sub">${esc(u.plan || 'Free')}</td>
+    <td class="p-sub">${esc(u.email || '—')}${u.phone ? `<br>${esc(u.phone)}` : ''}</td>
+    <td class="p-sub">${esc(u.plan || 'Free')}${u.preferredPlan && u.preferredPlan !== (u.plan || 'Free') ? `<br><span class="p-sub">selected: ${esc(u.preferredPlan)}</span>` : ''}</td>
+    <td class="num">${u.referralCount || 0}</td>
+    <td class="num">${u.totalPaidKES ? kes(u.totalPaidKES) : '—'}${u.paymentStatus && u.paymentStatus !== 'none' ? `<br><span class="p-sub">${esc(u.paymentStatus)}</span>` : ''}</td>
     <td class="num">${usd(u.usd)}<br><span class="p-sub">${kes(u.balance)}</span></td>
-    <td class="num">${usd(u.totalEarningsUSD)}</td>
     <td class="num">${u.completedTasks} done<br><span class="p-sub">${u.pendingTasks} pending</span></td>
     <td>${badges(u)}</td>
     <td><div style="display:flex;gap:6px;flex-wrap:wrap">
@@ -583,12 +619,13 @@ function renderUsersTable() {
       ${act('hold', u, u.held ? 'Release hold' : 'Hold')}
       ${act('balance', u, 'Balance')}
       ${act('plan', u, 'Change plan', ' data-plan="' + esc(u.planId || 'none') + '"')}
+      <button class="btn btn-ghost auto uactivate" data-id="${u.id}">Confirm payment</button>
       ${act('password', u, 'Reset password')}
       ${act('gamify', u, 'XP / Badges')}
       ${u.isAgent ? act('agent-remove', u, '✕ Agent', ' style="border-color:var(--brand-2);color:var(--brand-2)"') : act('agent-assign', u, '★ Make agent', ' style="border-color:var(--brand-2);color:var(--brand-2)"')}
       ${act('delete', u, 'Delete', ' style="border-color:var(--danger);color:#c0143c"')}`}
     </div></td>
-  </tr>`).join('') || `<tr><td colspan="8" class="p-sub">No users match your search.</td></tr>`;
+  </tr>`).join('') || `<tr><td colspan="9" class="p-sub">No users match your search.</td></tr>`;
   document.getElementById('uPager').innerHTML = `
     <button class="btn btn-ghost auto" id="uPrev" style="width:auto"${USERS_STATE.page <= 1 ? ' disabled' : ''}>← Prev</button>
     <span class="p-sub">Page ${USERS_STATE.page} of ${pages}</span>
@@ -600,6 +637,46 @@ function renderUsersTable() {
   content().querySelectorAll('.udetails').forEach((b) => b.addEventListener('click', () => openDetailsForm(find(b.dataset.id))));
   content().querySelectorAll('.uview').forEach((b) => b.addEventListener('click', () => openUserView(find(b.dataset.id))));
   content().querySelectorAll('.uemail').forEach((b) => b.addEventListener('click', () => openUserEmail(find(b.dataset.id))));
+  content().querySelectorAll('.uactivate').forEach((b) => b.addEventListener('click', () => openManualActivate(find(b.dataset.id))));
+}
+
+// Manual payment confirmation + activation — records a subscription transaction and
+// activates the plan through the SAME central backend function as the auto callbacks.
+function openManualActivate(u) {
+  if (!u) return;
+  const opts = [['basic', 'Basic — KES 200'], ['premium', 'Premium — KES 500'], ['premiumpro', 'Premium Pro — KES 1000'], ['executive', 'Executive — KES 2500']];
+  const priceKES = { basic: 200, premium: 500, premiumpro: 1000, executive: 2500 };
+  const bg = adminModal(`
+    <button class="close">×</button>
+    <h3 style="margin:0 0 4px">Confirm payment &amp; activate</h3>
+    <p class="p-sub">${esc(u.email || u.username || '')} · current plan: <b>${esc(u.plan || 'Free')}</b></p>
+    <p class="p-sub">Use this when a payment was confirmed another way (no callback). It records the payment and activates the plan — the same as a successful M-Pesa/Paystack callback.</p>
+    <div class="field"><label>Plan paid for</label>
+      <select id="maPlan" style="width:100%;${inputStyle}">${opts.map(([v, l]) => `<option value="${v}" ${v === (u.planId) ? '' : ''}>${l}</option>`).join('')}</select></div>
+    <div class="field"><label>Amount</label>
+      <div style="display:flex;gap:8px">
+        <input id="maAmount" type="number" min="0" step="1" value="200" style="flex:1;${inputStyle}">
+        <select id="maCurrency" style="${inputStyle}"><option>KES</option><option>USD</option></select>
+      </div></div>
+    <div class="field"><label>Payment method</label>
+      <select id="maMethod" style="width:100%;${inputStyle}"><option>M-Pesa</option><option>Paystack</option><option>Bank transfer</option><option>Cash</option><option>Other</option></select></div>
+    <div class="field"><label>Admin note (optional)</label>
+      <textarea id="maNote" rows="2" style="width:100%;${inputStyle}" placeholder="e.g. M-Pesa code QGH3X… confirmed manually"></textarea></div>
+    <button class="btn btn-primary" id="maSave">Confirm &amp; activate</button>`);
+  const planSel = bg.querySelector('#maPlan');
+  const amt = bg.querySelector('#maAmount');
+  const sync = () => { amt.value = priceKES[planSel.value] || amt.value; };
+  planSel.addEventListener('change', sync); sync();
+  bg.querySelector('#maSave').addEventListener('click', async (e) => {
+    const btn = e.currentTarget; if (btn.disabled) return;
+    btn.disabled = true;                                     // prevent double-activation
+    const body = { plan: planSel.value, amount: Number(amt.value), currency: bg.querySelector('#maCurrency').value, method: bg.querySelector('#maMethod').value, note: bg.querySelector('#maNote').value.trim() };
+    const { ok, data } = await api('/api/admin/users/' + u.id + '/activate-plan', body);
+    if (!ok) { btn.disabled = false; return toast(data.error || 'Failed', 'error'); }
+    bg.remove();
+    toast(`${data.plan} activated for ${u.username || u.email} · client notified`, 'ok');
+    tUsers();
+  });
 }
 
 // ---- Agents tab: manage all platform agents ----
