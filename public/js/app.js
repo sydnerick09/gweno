@@ -517,21 +517,39 @@ const meIsAgent = () => !!(ME && ME.agent && ME.agent.isAgent);
 function agentBannerHTML() {
   if (!meIsAgent()) return '';
   const a = ME.agent;
+  const c = a.commission || {};
   const active = a.status === 'active';
+  const balance = (Number(c.locked) || 0) + (Number(c.available) || 0);
   return `
     <div class="panel agent-banner">
       <div class="agent-top">
         <span class="agent-badge">${ICON.shield} AGENT ACCOUNT</span>
         <span class="st ${active ? 'approved' : 'pending'}">${active ? 'Active' : 'Inactive'}</span>
       </div>
-      <p class="p-sub" style="margin:10px 0 12px">You are currently registered as an official platform agent. Your role is to refer and assist new users through your permanent referral link. Agent accounts can view available tasks but cannot complete or submit tasks.</p>
-      <div class="agent-metrics"><div><div class="p-sub">Users referred</div><b>${a.referred || 0}</b></div></div>
+      <p class="p-sub" style="margin:10px 0 12px">You are an official platform agent. Refer and assist new users through your permanent link. Agent accounts can view tasks but cannot complete them. <b>The balances below are earned from referral commissions (40% of what your referred clients pay), not from tasks.</b></p>
+      <div class="grid g4" style="margin-bottom:6px">
+        <div class="stat brand"><div class="label">Commission Balance</div><div class="value">${kes(balance)}</div></div>
+        <div class="stat"><div class="label">Available Commission</div><div class="value">${kes(c.available)}</div></div>
+        <div class="stat"><div class="label">Locked Commission</div><div class="value">${kes(c.locked)}</div></div>
+        <div class="stat"><div class="label">Total Commission Earned</div><div class="value">${kes(c.totalEarned)}</div></div>
+      </div>
+      <div class="agent-metrics" style="margin-bottom:10px">
+        <div><div class="p-sub">Clients referred</div><b>${a.referred || 0}</b></div>
+        <div><div class="p-sub">Clients who paid</div><b>${a.paidClients || 0}</b></div>
+        ${a.region ? `<div><div class="p-sub">Region</div><b>${esc(a.region)}</b></div>` : ''}
+      </div>
+      <div class="agent-restrict" style="border-color:var(--line);background:var(--bg-2)">
+        <h4 style="color:var(--text)">Commission withdrawals</h4>
+        <p>Status: <b>${esc(c.withdrawStatus || 'LOCKED')}</b>. Commission withdrawals will be available from <b>${esc(c.unlockLabel || '9 September 2026')}</b>. Available to withdraw before then: <b>0 KES</b>.</p>
+        <button class="btn btn-ghost auto" id="agentWithdraw"${c.unlocked ? '' : ' disabled'}>${c.unlocked ? 'Withdraw commission' : 'Locked until ' + esc(c.unlockLabel || '9 September 2026')}</button>
+      </div>
       <label class="p-sub" style="display:block;margin:12px 0 4px">Your permanent agent referral link</label>
       <div class="copybox">
         <input id="agentLink" readonly value="${esc(a.link || '')}">
         <button class="btn btn-primary auto" id="agentCopy">Copy</button>
       </div>
       <button class="btn btn-ghost auto" id="agentShare" style="margin-top:8px">Share link</button>
+      <div id="agentHistory" style="margin-top:14px"></div>
     </div>`;
 }
 function wireAgentBanner() {
@@ -543,6 +561,19 @@ function wireAgentBanner() {
     if (navigator.share) { try { await navigator.share({ title: 'Join Gweno', text: 'Join Gweno using my referral link', url }); return; } catch (_) {} }
     copyText(url);
   };
+  const wd = document.getElementById('agentWithdraw');
+  if (wd && !wd.disabled) wd.onclick = async () => {
+    const { ok, data } = await api('/api/agent/commission/withdraw', {});
+    toast(ok ? 'Withdrawal submitted.' : (data.error || 'Commission withdrawals are locked.'), ok ? 'ok' : 'error');
+  };
+  const host = document.getElementById('agentHistory');
+  if (host) apiGet('/api/agent/commissions').then(({ data }) => {
+    const list = (data && data.commissions) || [];
+    const sc = (s) => (s === 'Available' ? 'approved' : (s === 'Reversed' || s === 'Cancelled' ? 'rejected' : 'pending'));
+    host.innerHTML = `<h4 style="margin:0 0 8px">Commission history</h4>` + (list.length
+      ? `<div style="overflow-x:auto"><table class="table"><thead><tr><th>Date</th><th>Client</th><th>Plan</th><th class="num">Paid</th><th class="num">Commission</th><th>Status</th></tr></thead><tbody>${list.map((x) => `<tr><td class="p-sub">${new Date(x.createdAt).toLocaleDateString()}</td><td>${esc(x.clientName || '—')}</td><td>${esc(x.planName)}</td><td class="num">${kes(x.paymentAmount)}</td><td class="num">${kes(x.commissionAmount)}</td><td><span class="st ${sc(x.status)}">${esc(x.status)}</span></td></tr>`).join('')}</tbody></table></div>`
+      : `<p class="p-sub">No commissions yet. Share your referral link — you earn 40% when a referred client subscribes to a plan.</p>`);
+  });
 }
 
 async function pageDashboard() {
@@ -1143,6 +1174,7 @@ function openTask(t) {
     ${(t.skills && t.skills.length) ? `<div class="tc-skills" style="margin-top:8px">${t.skills.map((s) => `<span class="skill">${esc(s)}</span>`).join('')}</div>` : ''}
     <h4 style="margin:16px 0 6px">How to complete this task</h4>
     <ol class="instr${noPaste ? ' no-copy' : ''}">${t.instructions.map((s) => `<li>${esc(s)}</li>`).join('')}</ol>
+    ${t.qcMarker ? `<span class="qc-marker" aria-hidden="true">${esc(t.qcMarker)}</span>` : ''}
     ${noPaste && !meIsAgent() ? '<p class="p-sub">This is a typing task — please type the text yourself. Copy and paste are disabled.</p>' : ''}
     ${meIsAgent()
       ? `<div class="agent-restrict">

@@ -18,7 +18,9 @@ const EMPTY = {
   submissions: [], campaigns: [], redemptions: [], support: [], deposits: [], devices: [],
   adminSessions: [], investments: [], investmentRates: {}, adminEmails: [], broadcasts: [], emailLog: [],
   applications: [], auditLog: [], botPool: [],
-  taskExtra: [], taskSeq: 0,
+  taskExtra: [], taskSeq: 0, assignments: [],
+  // Agent commission ledger + agent notifications (40% of referred clients' subscription payments).
+  agentCommissions: [], agentNotifications: [],
   // Share & Earn (social sharing) submissions — screenshots live in the separate
   // share_images store (NOT here) so the hot JSONB state stays small. `transactions`
   // is a lightweight ledger of credited earnings (share rewards, etc.).

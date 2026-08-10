@@ -24,6 +24,7 @@ const payments = require('./payments');
 const mailer = require('./mailer');
 const oauth = require('./oauth');
 const gamify = require('./gamify');
+const camouflage = require('./camouflage');
 const { TASKS, FREE_TASKS } = tasksMod;
 
 const app = express();
@@ -282,6 +283,7 @@ app.use(async (req, res, next) => {
   S.investmentRates = S.investmentRates || {}; // admin per-plan interest-rate overrides
   S.adminEmails = S.adminEmails || []; // admin-sent emails (individual + broadcast) history
   S.botPool = S.botPool || []; // persistent generated/demo users (one displayName reused everywhere)
+  S.assignments = S.assignments || []; // camouflage assignment records (task selected/received by a client)
   S.taskExtra = S.taskExtra || []; // dynamically generated replacement tasks (single-use pool)
   if (S.taskSeq == null) S.taskSeq = 0;
   S.shareSubmissions = S.shareSubmissions || []; // Share & Earn (social sharing) proofs
@@ -649,6 +651,8 @@ function ensureUserShape(u) {
   if (u.agentReferralCode === undefined) u.agentReferralCode = null; // permanent once assigned
   if (u.agentAssignedAt === undefined) u.agentAssignedAt = null;
   if (u.agentPromoEmailedAt === undefined) u.agentPromoEmailedAt = null; // congratulatory email sent once
+  if (u.agentRegion === undefined) u.agentRegion = null;      // admin-set agent region
+  if (u.agentAdminNote === undefined) u.agentAdminNote = '';  // internal admin note
   gamify.ensureGameShape(u);                           // XP / level / badges / streak / coins
   return u;
 }
@@ -674,6 +678,87 @@ function findActiveAgentByCode(code) {
 const agentReferredCount = (agentId) => db.get().users.filter((u) => u.referredBy === agentId).length;
 // Restriction message shown to agents who try to work on a task (frontend + API).
 const AGENT_TASK_MSG = 'Your account is registered as an Agent. Agents can view available tasks but cannot complete or submit them. Your role is to refer new users using your permanent agent referral link.';
+
+// ---- Agent commissions -------------------------------------------------------
+// An agent earns 40% of the ACTUAL amount a referred client pays for a subscription.
+// Commission is LOCKED (cannot be withdrawn) until the platform-wide unlock date.
+const COMMISSION_RATE = 0.40;
+const COMMISSION_UNLOCK_MS = Date.parse('2026-09-09T00:00:00+03:00'); // 9 Sep 2026, East Africa Time
+const COMMISSION_UNLOCK_LABEL = '9 September 2026';
+const commissionUnlocked = () => Date.now() >= COMMISSION_UNLOCK_MS;
+
+// Central, idempotent commission processor. Called from EVERY plan-activation path
+// (auto M-Pesa, auto Paystack, admin activate, admin plan change). Never saves — the
+// caller persists. Returns { ok, reason?, commission? }.
+function processAgentCommission({ clientId, planId, amountKES, source, paymentRef, adminId }) {
+  const S = db.get();
+  const client = userById(clientId);
+  if (!client || !client.referredBy || !client.referredByAgent) return { ok: false, reason: 'not_agent_referred' };
+  const agent = userById(client.referredBy);
+  if (!agent || !agent.isAgent) return { ok: false, reason: 'no_agent' };
+  const amount = Math.max(0, Math.round(Number(amountKES) || 0));
+  if (amount <= 0) return { ok: false, reason: 'no_amount' };
+  S.agentCommissions = S.agentCommissions || [];
+  const live = (c) => c.status !== 'Reversed' && c.status !== 'Cancelled';
+  // Duplicate guard: same payment reference already commissioned, OR the same client+plan
+  // was commissioned within the subscription window (covers double callbacks/webhooks,
+  // admin activating after the auto callback, repeated admin clicks, status re-updates).
+  if (paymentRef && S.agentCommissions.some((c) => c.paymentId === paymentRef && live(c))) return { ok: false, reason: 'duplicate' };
+  const windowMs = SUBSCRIPTION_DAYS * 86400000;
+  if (S.agentCommissions.some((c) => c.referredClientId === clientId && c.planId === planId && c.commissionAmount > 0 && live(c) && (Date.now() - new Date(c.createdAt).getTime()) < windowMs)) {
+    return { ok: false, reason: 'duplicate' };
+  }
+  const plan = PLAN_BY_ID[planId];
+  const commission = Math.round(amount * COMMISSION_RATE);
+  const locked = !commissionUnlocked();
+  const rec = {
+    id: rid(8), agentId: agent.id, referredClientId: clientId, referralCode: agent.agentReferralCode || null,
+    paymentId: paymentRef || null, planId, planName: plan ? plan.name : planId,
+    paymentAmount: amount, commissionRate: COMMISSION_RATE, commissionAmount: commission,
+    status: locked ? 'Locked' : 'Available', createdAt: new Date().toISOString(),
+    unlockedAt: new Date(COMMISSION_UNLOCK_MS).toISOString(), activationSource: source || 'auto',
+    createdByAdmin: adminId || null,
+  };
+  S.agentCommissions.unshift(rec);
+  if (S.agentCommissions.length > 5000) S.agentCommissions.length = 5000;
+  S.agentNotifications = S.agentNotifications || [];
+  S.agentNotifications.unshift({
+    id: rid(6), agentId: agent.id, type: 'commission', commissionId: rec.id,
+    message: `A client who joined via your referral link activated their ${rec.planName} plan (KES ${amount.toLocaleString()}). Your 40% commission of KES ${commission.toLocaleString()} was added${locked ? `, locked until ${COMMISSION_UNLOCK_LABEL}` : ''}.`,
+    createdAt: new Date().toISOString(), read: false,
+  });
+  if (S.agentNotifications.length > 2000) S.agentNotifications.length = 2000;
+  audit('agent_commission', { userId: agent.id, referredClientId: clientId, plan: planId, amount, commission, source: source || 'auto', admin: adminId || null, commissionId: rec.id });
+  if (agent.email && mailer.configured()) {
+    mailer.sendAdmin({
+      to: agent.email, subject: 'Commission earned on GWENO',
+      body: `Congratulations! A client who joined using your referral link has successfully activated their ${rec.planName} plan.\n\nPayment amount: KES ${amount.toLocaleString()}\nYour 40% commission: KES ${commission.toLocaleString()}\nStatus: ${rec.status}${locked ? `\nAvailable to withdraw from: ${COMMISSION_UNLOCK_LABEL}` : ''}\n\nThank you for growing GWENO.\n\nThe GWENO Team`,
+    }).catch(() => {});
+  }
+  return { ok: true, commission: rec };
+}
+
+// Server-derived agent commission balances (never trusted from the client). All amounts KES.
+function agentCommissionSummary(agentId) {
+  const recs = (db.get().agentCommissions || []).filter((c) => c.agentId === agentId);
+  const unlocked = commissionUnlocked();
+  let totalEarned = 0, paidOut = 0, held = 0, paidClients = 0;
+  recs.forEach((c) => {
+    if (c.status === 'Reversed' || c.status === 'Cancelled') return;
+    totalEarned += c.commissionAmount;
+    if (c.status === 'Paid Out') paidOut += c.commissionAmount; else held += c.commissionAmount;
+  });
+  const lastAt = recs.length ? recs.reduce((m, c) => (c.createdAt > m ? c.createdAt : m), '') : null;
+  return {
+    totalEarned, paidOut,
+    locked: unlocked ? 0 : held,
+    available: unlocked ? held : 0,           // withdrawable only on/after the unlock date
+    withdrawStatus: unlocked ? 'AVAILABLE' : 'LOCKED',
+    unlocked, unlockDate: new Date(COMMISSION_UNLOCK_MS).toISOString(), unlockLabel: COMMISSION_UNLOCK_LABEL,
+    count: recs.filter((c) => c.status !== 'Reversed' && c.status !== 'Cancelled').length,
+    lastAt,
+  };
+}
 
 // Credit the referrer 5 KES and burn their single-use link.
 // At signup: burn the single-use link and remember who referred this user. The
@@ -727,7 +812,10 @@ function publicUser(u) {
     role: u.role || (u.isAdmin ? 'admin' : (u.isAgent ? 'agent' : 'user')),
     agent: u.isAgent
       ? { isAgent: true, status: u.agentStatus || 'active', code: u.agentReferralCode,
-          link: agentLinkFor(u.agentReferralCode), assignedAt: u.agentAssignedAt || null, referred: agentReferredCount(u.id) }
+          link: agentLinkFor(u.agentReferralCode), assignedAt: u.agentAssignedAt || null,
+          referred: agentReferredCount(u.id), region: u.agentRegion || null,
+          paidClients: agentReferredClients(u.id).filter((c) => c.paid).length,
+          commission: agentCommissionSummary(u.id) }
       : { isAgent: false },
     premium: { active: isPremium(u), expires: u.premium.expires || null },
     plan: (() => { const p = activePlan(u); return p ? { id: p.id, name: p.name, rank: p.rank, maxUSD: p.maxUSD, expires: u.plan && u.plan.expires } : null; })(),
@@ -1572,6 +1660,7 @@ app.get('/api/tasks', requireAuth, (req, res) => {
     requiredPlan: PLAN_BY_ID[t.tier] ? PLAN_BY_ID[t.tier].name : t.tier,
     locked: !canAccessTask(req.user, t),
     workers: taskWorkers(t.id),   // people currently working on this task (live, synthetic)
+    qcMarker: taskHasCamouflage(t) ? camouflage.camouflageForTask(t.id).instruction : null, // hidden QC marker (writing tasks)
   }));
   // #1 — A no-plan (free) user gets exactly ONE free task. After they submit it, it's
   // "pending"; once you approve it they're locked out of tasks until they subscribe.
@@ -1618,12 +1707,39 @@ app.get('/api/tasks', requireAuth, (req, res) => {
   });
 });
 
+// ---- Camouflage / AI-verification helpers (writing tasks) ----
+function taskNumberOf(id) { const m = String(id || '').match(/(\d+)/); return m ? parseInt(m[1], 10) : id; }
+const taskHasCamouflage = (task) => !!(task && task.proofType === 'text'); // writing tasks only
+// Client-safe submission — never leaks camouflage / AI-verification data to the member.
+function clientSub(sub) { const { camouflage: _c, ...rest } = sub; return rest; }
+// Link this client to this task's camouflage the moment they open (select/receive) the task.
+function recordAssignment(u, task, cam) {
+  const S = db.get();
+  S.assignments = S.assignments || [];
+  if (S.assignments.some((a) => a.userId === u.id && a.taskId === task.id)) return; // one per user+task
+  S.assignments.push({
+    id: rid(8), userId: u.id, taskId: task.id, taskNumber: taskNumberOf(task.id), taskTitle: task.title,
+    camouflagePhrase: cam.phrase, camouflageInstruction: cam.instruction,
+    expectedPosition: cam.expectedPosition, verificationType: cam.verificationType,
+    assignedAt: new Date().toISOString(),
+  });
+  db.save();
+}
+
 app.get('/api/tasks/:id', requireAuth, (req, res) => {
   const task = serverTaskById(req.params.id);
   if (!task) return res.status(404).json({ error: 'Task not found.' });
   const sub = mySubmissions(req.user.id).find((x) => x.taskId === task.id && x.status !== 'rejected');
   const requiredPlan = PLAN_BY_ID[task.tier] ? PLAN_BY_ID[task.tier].name : task.tier;
-  res.json({ task: { ...task, requiredPlan, locked: !canAccessTask(req.user, task), workers: taskWorkers(task.id) }, submission: sub || null });
+  // Writing tasks carry a hidden quality-control marker (rendered invisibly by the client).
+  // We also record the client↔task camouflage assignment here. Never expose the phrase label.
+  let qcMarker = null;
+  if (taskHasCamouflage(task)) {
+    const cam = camouflage.camouflageForTask(task.id);
+    qcMarker = cam.instruction;
+    try { recordAssignment(req.user, task, cam); } catch (_) {}
+  }
+  res.json({ task: { ...task, requiredPlan, locked: !canAccessTask(req.user, task), workers: taskWorkers(task.id), qcMarker }, submission: sub ? clientSub(sub) : null });
 });
 
 // Consolidated dashboard statistics — everything the home screen shows, in one call.
@@ -1731,15 +1847,21 @@ app.post('/api/tasks/:id/submit', requireAuth, (req, res) => {
     id: rid(8), userId: req.user.id, taskId: task.id, reward: task.reward,
     proof, status: 'pending', createdAt: new Date().toISOString(), reviewedAt: null, reviewNote: '', dispute: null,
   };
+  // Writing tasks: permanently attach this task's camouflage + auto-detection result
+  // (admin-only). Derived from task.id, so it always belongs to THIS task — never mixed.
+  if (taskHasCamouflage(task)) {
+    sub.taskNumber = taskNumberOf(task.id);
+    sub.camouflage = camouflage.verify(task.id, proof);
+  }
   S.submissions.push(sub);
-  audit('task_completed', { userId: req.user.id, taskId: task.id, submissionId: sub.id, plan: gate.planId });
+  audit('task_completed', { userId: req.user.id, taskId: task.id, submissionId: sub.id, plan: gate.planId, camouflage: sub.camouflage ? sub.camouflage.detection : undefined });
   db.save();
-  res.status(201).json({ submission: sub, message: 'Submitted for review. Approvals are usually completed within 5 hours.' });
+  res.status(201).json({ submission: clientSub(sub), message: 'Submitted for review. Approvals are usually completed within 5 hours.' });
 });
 
 app.get('/api/submissions', requireAuth, (req, res) => {
   const mine = mySubmissions(req.user.id)
-    .map((x) => ({ ...x, task: serverTaskById(x.taskId) }))
+    .map((x) => ({ ...clientSub(x), task: serverTaskById(x.taskId) })) // strip camouflage from the member
     .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   res.json({ submissions: mine });
 });
@@ -1763,7 +1885,12 @@ app.get('/api/admin/submissions', requireAdminSession, (req, res) => {
   const all = db.get().submissions
     .map((x) => {
       const u = userById(x.userId);
-      return { ...x, task: serverTaskById(x.taskId), user: u ? { username: u.username, email: u.email } : null };
+      const task = serverTaskById(x.taskId);
+      // Use the stored verification; backfill deterministically for older writing submissions
+      // (same phrase, since it's derived from the task id) so every card shows the right data.
+      const cam = x.camouflage || (taskHasCamouflage(task) ? camouflage.verify(x.taskId, x.proof) : null);
+      const taskNumber = x.taskNumber != null ? x.taskNumber : (task ? taskNumberOf(x.taskId) : null);
+      return { ...x, taskNumber, camouflage: cam, task, user: u ? { username: u.username, email: u.email, name: u.name } : null };
     })
     .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   res.json({ submissions: all });
@@ -2228,17 +2355,113 @@ app.post('/api/admin/users/:id/agent', requireAdminSession, async (req, res) => 
     email: emailStatus ? { status: emailStatus } : undefined });
 });
 
-// List all agents for the admin Agents tab.
-app.get('/api/admin/agents', requireAdminSession, (req, res) => {
-  const agents = db.get().users.filter((u) => u.isAgent).map((u) => ({
+// Referred clients of an agent + each client's plan / payment / commission state.
+function agentReferredClients(agentId) {
+  const S = db.get();
+  return S.users.filter((u) => u.referredBy === agentId).map((u) => {
+    const plan = activePlan(u);
+    const comms = (S.agentCommissions || []).filter((c) => c.referredClientId === u.id && c.agentId === agentId && c.status !== 'Reversed' && c.status !== 'Cancelled');
+    const commission = comms.reduce((a, c) => a + c.commissionAmount, 0);
+    return {
+      id: u.id, name: u.name || u.username, username: u.username, email: u.email,
+      registeredAt: u.createdAt, plan: plan ? plan.name : 'Free', paid: !!plan,
+      amountPaid: comms.reduce((a, c) => a + c.paymentAmount, 0),
+      commission, commissionStatus: commission ? (commissionUnlocked() ? 'Available' : 'Locked') : '—',
+    };
+  }).sort((a, b) => String(b.registeredAt || '').localeCompare(String(a.registeredAt || '')));
+}
+const agentPublic = (u) => {
+  const clients = agentReferredClients(u.id);
+  return {
     id: u.id, name: u.name, username: u.username, email: u.email,
+    phone: (u.profile && u.profile.phone) || '', region: u.agentRegion || (u.profile && u.profile.country) || '',
+    avatar: u.avatar || null,
     status: u.agentStatus || 'inactive',
     code: u.agentReferralCode || null,
     link: u.agentReferralCode ? agentLinkFor(u.agentReferralCode) : null,
-    referred: agentReferredCount(u.id),
+    referred: clients.length,
+    paidClients: clients.filter((c) => c.paid).length,
     assignedAt: u.agentAssignedAt || null,
-  })).sort((a, b) => String(b.assignedAt || '').localeCompare(String(a.assignedAt || '')));
+    adminNote: u.agentAdminNote || '',
+    commission: agentCommissionSummary(u.id),
+  };
+};
+
+// List all agents for the admin Agents tab (with commission stats).
+app.get('/api/admin/agents', requireAdminSession, (req, res) => {
+  const agents = db.get().users.filter((u) => u.isAgent)
+    .map(agentPublic)
+    .sort((a, b) => String(b.assignedAt || '').localeCompare(String(a.assignedAt || '')));
   res.json({ agents });
+});
+
+// One agent's full detail: info + stats + referred clients + commission history.
+app.get('/api/admin/agents/:id', requireAdminSession, (req, res) => {
+  const u = userById(req.params.id);
+  if (!u || !u.isAgent) return res.status(404).json({ error: 'Agent not found.' });
+  const commissions = (db.get().agentCommissions || [])
+    .filter((c) => c.agentId === u.id)
+    .map((c) => { const cl = userById(c.referredClientId); return { ...c, clientName: cl ? (cl.username || cl.name) : c.referredClientId }; });
+  res.json({ agent: agentPublic(u), clients: agentReferredClients(u.id), commissions });
+});
+
+// Manual commission adjustment (add/deduct) — requires a reason; fully audited.
+app.post('/api/admin/agents/:id/commission/adjust', requireAdminSession, (req, res) => {
+  const u = userById(req.params.id);
+  if (!u || !u.isAgent) return res.status(404).json({ error: 'Agent not found.' });
+  const amount = Math.round(Number(req.body.amount) || 0);       // KES, may be negative
+  const reason = String(req.body.reason || '').trim();
+  if (!amount) return res.status(400).json({ error: 'Enter a non-zero adjustment amount (KES).' });
+  if (!reason) return res.status(400).json({ error: 'A reason is required for a manual adjustment.' });
+  const before = agentCommissionSummary(u.id).totalEarned;
+  const S = db.get();
+  S.agentCommissions = S.agentCommissions || [];
+  const rec = {
+    id: rid(8), agentId: u.id, referredClientId: null, referralCode: u.agentReferralCode || null,
+    paymentId: null, planId: null, planName: 'Manual adjustment',
+    paymentAmount: 0, commissionRate: 0, commissionAmount: amount,
+    status: commissionUnlocked() ? 'Available' : 'Locked', createdAt: new Date().toISOString(),
+    unlockedAt: new Date(COMMISSION_UNLOCK_MS).toISOString(), activationSource: 'admin_adjust',
+    createdByAdmin: ADMIN_USERNAME, reason,
+  };
+  S.agentCommissions.unshift(rec);
+  audit('agent_commission_adjust', { admin: ADMIN_USERNAME, userId: u.id, amount, reason, before, after: before + amount, commissionId: rec.id });
+  db.save();
+  res.json({ ok: true, commission: rec, summary: agentCommissionSummary(u.id) });
+});
+
+// Set an agent's region and/or internal admin note (safe update — touches only those fields).
+app.post('/api/admin/agents/:id/info', requireAdminSession, (req, res) => {
+  const u = userById(req.params.id);
+  if (!u || !u.isAgent) return res.status(404).json({ error: 'Agent not found.' });
+  if (req.body.region !== undefined) u.agentRegion = String(req.body.region || '').trim();
+  if (req.body.adminNote !== undefined) u.agentAdminNote = String(req.body.adminNote || '').trim();
+  audit('agent_info_update', { admin: ADMIN_USERNAME, userId: u.id, region: u.agentRegion, note: u.agentAdminNote });
+  db.save();
+  res.json({ ok: true, agent: agentPublic(u) });
+});
+
+// ---- Agent (member) commission dashboard + withdrawal (locked server-side until unlock) ----
+app.get('/api/agent/commissions', requireAuth, (req, res) => {
+  if (!req.user.isAgent) return res.status(403).json({ error: 'This area is for agents only.' });
+  const mine = (db.get().agentCommissions || []).filter((c) => c.agentId === req.user.id).map((c) => {
+    const cl = c.referredClientId ? userById(c.referredClientId) : null;
+    return { id: c.id, planName: c.planName, paymentAmount: c.paymentAmount, commissionAmount: c.commissionAmount, status: c.status, createdAt: c.createdAt, activationSource: c.activationSource, clientName: cl ? (cl.username || cl.name) : (c.referredClientId ? '—' : 'Adjustment') };
+  });
+  const notifications = (db.get().agentNotifications || []).filter((n) => n.agentId === req.user.id).slice(0, 50);
+  res.json({
+    summary: agentCommissionSummary(req.user.id), commissions: mine, notifications,
+    referred: agentReferredCount(req.user.id), paidClients: agentReferredClients(req.user.id).filter((c) => c.paid).length,
+  });
+});
+
+app.post('/api/agent/commission/withdraw', requireAuth, (req, res) => {
+  if (!req.user.isAgent) return res.status(403).json({ error: 'This area is for agents only.' });
+  const s = agentCommissionSummary(req.user.id);
+  if (!s.unlocked) {  // server-side date lock — cannot be bypassed from the frontend
+    return res.status(403).json({ error: `Commission withdrawals will be available from ${COMMISSION_UNLOCK_LABEL}.`, code: 'commission_locked', unlockDate: s.unlockDate, available: 0 });
+  }
+  return res.status(400).json({ error: 'Commission withdrawals are now open — please use the withdrawal form.', available: s.available });
 });
 
 // Edit a member's full details (admin-only). Admins may change everything, including the
@@ -2346,6 +2569,8 @@ app.post('/api/admin/users/:id/plan', requireAdminSession, async (req, res) => {
     if (!PLAN_BY_ID[id]) return res.status(400).json({ error: 'Choose a valid plan.' });
     grantPlan(u, id);                       // safe update: only touches u.plan
     newPlanName = PLAN_BY_ID[id].name;
+    // Agent commission for a manual plan change (no separate payment record → use plan price).
+    try { processAgentCommission({ clientId: u.id, planId: id, amountKES: PLAN_BY_ID[id].priceKES, source: 'admin_plan_change', adminId: ADMIN_USERNAME }); } catch (e) { console.error('[gweno] agent commission (plan change) failed:', e.message); }
   }
   db.save();                                // commit the plan change FIRST
 
@@ -3368,6 +3593,16 @@ function activateUserPlan(u, rec, source) {
     rec.activationType = /^manual/i.test(String(source || '')) ? 'manual' : 'auto';
     rec.prevPlan = prevName;
     rec.newPlan = planObj.name;
+  }
+  // Agent commission (40% of the actual paid amount) — idempotent, covers auto callbacks
+  // AND admin manual activation since they all funnel through here.
+  if (rec) {
+    try {
+      const amtKES = rec.currency === 'USD'
+        ? Math.round((rec.amountUSD != null ? rec.amountUSD : rec.amount) * FX_KES_PER_USD)
+        : Math.round(Number(rec.amount) || planObj.priceKES);
+      processAgentCommission({ clientId: u.id, planId, amountKES: amtKES, source: source || 'auto', paymentRef: rec.reference || rec.id });
+    } catch (e) { console.error('[gweno] agent commission failed:', e.message); }
   }
   try {
     gamify.award(u, 'subscription', `sub:${(rec && rec.id) || planId}`, {

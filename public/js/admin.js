@@ -205,31 +205,75 @@ function proofCell(p) {
   return esc(s);
 }
 
+// Colour a camouflage detection result: Detected = red, Similar = amber, Not Detected = green.
+const detClass = (d) => d === 'Detected' ? 'rejected' : d === 'Similar Match' ? 'pending' : 'approved';
 async function tSubmissions() {
   loading();
   const { data } = await apiGet('/api/admin/submissions');
   const subs = data.submissions || [];
-  const render = () => {
-    const p = paginate('submissions', subs);
-    content().innerHTML = `
-    <p class="page-sub">Every task submission. Click <b>Review</b> to see the full task and the user's response side by side, then Approve or Reject. Approving credits the user's USD balance.</p>
-    <div class="panel"><table class="table">
-      <thead><tr><th>User</th><th>Task</th><th class="num">Reward</th><th>Answer preview</th><th>Submitted</th><th>Status</th><th>Action</th></tr></thead>
-      <tbody>${subs.length ? p.rows.map((sm) => `
-        <tr>
-          <td>${esc(sm.user ? sm.user.username : '—')}<br><span class="p-sub">${esc(sm.user ? sm.user.email : '')}</span></td>
-          <td>${esc(sm.task ? sm.task.title : sm.taskId)}${sm.task ? `<br><span class="p-sub">${esc(sm.task.category || '')}</span>` : ''}</td>
-          <td class="num">${usd(sm.reward)}</td>
-          <td class="p-sub" style="max-width:240px;max-height:60px;overflow:hidden;word-break:break-word">${proofCell(sm.proof)}${sm.dispute ? `<br><b style="color:var(--danger)">Dispute:</b> ${esc(sm.dispute.message)}` : ''}</td>
-          <td class="p-sub">${sm.createdAt ? new Date(sm.createdAt).toLocaleString() : '—'}</td>
-          <td><span class="st ${sm.status}">${statusLabel(sm.status)}</span>${(sm.status === 'correction' || sm.status === 'rejected') && sm.reviewNote ? `<br><span class="p-sub">${esc(sm.reviewNote)}</span>` : ''}</td>
-          <td><button class="btn btn-primary auto adm-review" data-id="${sm.id}">Review</button></td>
-        </tr>`).join('') : `<tr><td colspan="7" class="p-sub">No submissions yet.</td></tr>`}</tbody>
-    </table>${pagerBar('submissions', p)}</div>`;
-    content().querySelectorAll('.adm-review').forEach((b) => b.addEventListener('click', () => openReviewSubmission(subs.find((x) => x.id === b.dataset.id))));
-    wirePager('submissions', p, render);
+  const state = { q: '', filter: 'all' };
+  const det = (sm) => sm.camouflage ? sm.camouflage.detection : null;
+  const stat = (sm) => sm.camouflage ? sm.camouflage.status : null;
+  const matchFilter = (sm) => {
+    switch (state.filter) {
+      case 'detected': return det(sm) === 'Detected';
+      case 'not_detected': return det(sm) === 'Not Detected';
+      case 'similar': return det(sm) === 'Similar Match';
+      case 'possible_ai': return stat(sm) === 'Possible AI Use';
+      case 'needs_review': return stat(sm) === 'Needs Review';
+      case 'approved': return sm.status === 'approved';
+      case 'rejected': return sm.status === 'rejected';
+      default: return true;
+    }
   };
-  render();
+  const matchSearch = (sm) => {
+    const q = state.q.trim().toLowerCase(); if (!q) return true;
+    return [sm.user && sm.user.name, sm.user && sm.user.username, sm.taskNumber, sm.task && sm.task.title,
+      sm.camouflage && sm.camouflage.phrase, sm.id].map((x) => String(x == null ? '' : x).toLowerCase()).join(' ').includes(q);
+  };
+  const filters = [['all', 'All submissions'], ['detected', 'Camouflage detected'], ['not_detected', 'Not detected'],
+    ['similar', 'Similar match'], ['possible_ai', 'Possible AI use'], ['needs_review', 'Needs review'],
+    ['approved', 'Approved'], ['rejected', 'Rejected']];
+
+  content().innerHTML = `
+    <p class="page-sub">Every task submission with <b>AI-use verification</b>. Click <b>Review</b> for the full task, the user's response, and the camouflage detection — then Approve or Reject.</p>
+    <div class="panel" style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:12px">
+      <input id="subSearch" placeholder="Search client, task #, title, camouflage or submission ID…" style="flex:1;min-width:220px;${inputStyle}">
+      <select id="subFilter" style="${inputStyle}">${filters.map(([v, l]) => `<option value="${v}">${l}</option>`).join('')}</select>
+      <span class="p-sub" id="subShown"></span>
+    </div>
+    <div class="panel" style="overflow-x:auto"><table class="table">
+      <thead><tr><th>User</th><th>Task</th><th class="num">Reward</th><th>Answer</th><th>AI verification</th><th>Status</th><th>Action</th></tr></thead>
+      <tbody id="subBody"></tbody>
+    </table><div id="subPager"></div></div>`;
+
+  function renderRows() {
+    const filtered = subs.filter((sm) => matchFilter(sm) && matchSearch(sm));
+    const p = paginate('submissions', filtered);
+    document.getElementById('subShown').textContent = `${filtered.length} shown`;
+    document.getElementById('subBody').innerHTML = filtered.length ? p.rows.map((sm) => {
+      const cam = sm.camouflage;
+      const camCell = cam
+        ? `<div class="p-sub" style="font-size:12px">🎭 <b>${esc(cam.phrase.length > 20 ? cam.phrase.slice(0, 20) + '…' : cam.phrase)}</b></div><span class="st ${detClass(cam.detection)}">${esc(cam.detection)}</span>`
+        : '<span class="p-sub">—</span>';
+      return `<tr>
+        <td>${esc(sm.user ? (sm.user.name || sm.user.username) : '—')}<br><span class="p-sub">${esc(sm.user ? sm.user.email : '')}</span></td>
+        <td><b>#${esc(sm.taskNumber != null ? sm.taskNumber : sm.taskId)}</b> ${esc(sm.task ? sm.task.title : '')}${sm.task ? `<br><span class="p-sub">${esc(sm.task.category || '')}</span>` : ''}</td>
+        <td class="num">${usd(sm.reward)}</td>
+        <td class="p-sub" style="max-width:200px;max-height:60px;overflow:hidden;word-break:break-word">${proofCell(sm.proof)}${sm.dispute ? `<br><b style="color:var(--danger)">Dispute:</b> ${esc(sm.dispute.message)}` : ''}</td>
+        <td>${camCell}</td>
+        <td><span class="st ${sm.status}">${statusLabel(sm.status)}</span>${(sm.status === 'correction' || sm.status === 'rejected') && sm.reviewNote ? `<br><span class="p-sub">${esc(sm.reviewNote)}</span>` : ''}</td>
+        <td><button class="btn btn-primary auto adm-review" data-id="${sm.id}">Review</button></td>
+      </tr>`;
+    }).join('') : `<tr><td colspan="7" class="p-sub">No submissions match.</td></tr>`;
+    document.getElementById('subPager').innerHTML = pagerBar('submissions', p);
+    content().querySelectorAll('.adm-review').forEach((b) => b.addEventListener('click', () => openReviewSubmission(subs.find((x) => x.id === b.dataset.id))));
+    wirePager('submissions', p, renderRows);
+  }
+  const s = document.getElementById('subSearch');
+  s.addEventListener('input', () => { state.q = s.value; PAGE_STATE.submissions = 1; renderRows(); });
+  document.getElementById('subFilter').addEventListener('change', (e) => { state.filter = e.target.value; PAGE_STATE.submissions = 1; renderRows(); });
+  renderRows();
 }
 
 // Approve / reject / request-correction. Surfaces whether the decision email sent.
@@ -265,6 +309,21 @@ function openReviewSubmission(sm) {
     : /^https?:\/\//i.test(proof) ? `<a href="${esc(proof)}" target="_blank" rel="noopener">${esc(proof)}</a>`
     : `<div class="review-proof">${esc(proof)}</div>`;
   const reqs = taskRequirements(t);
+  const cam = sm.camouflage;
+  const camSection = cam ? `
+    <div class="ai-verify">
+      <h4>🎭 AI Verification <span class="p-sub" style="font-weight:400">— admin only</span></h4>
+      <div class="ai-grid">
+        <div><span class="ai-k">Task number</span><span class="ai-v"><b>#${esc(sm.taskNumber != null ? sm.taskNumber : sm.taskId)}</b></span></div>
+        <div><span class="ai-k">Camouflage used</span><span class="ai-v"><b>${esc(cam.phrase)}</b></span></div>
+        <div><span class="ai-k">Expected position</span><span class="ai-v">${esc(cam.expectedPosition)}</span></div>
+        <div><span class="ai-k">Detection result</span><span class="ai-v"><span class="st ${detClass(cam.detection)}">${esc(cam.detection)}</span></span></div>
+        <div><span class="ai-k">Detection confidence</span><span class="ai-v">${esc(cam.confidence)}</span></div>
+        <div><span class="ai-k">Verification status</span><span class="ai-v"><b>${esc(cam.status)}</b></span></div>
+      </div>
+      <p class="ai-instr"><span class="ai-k">Camouflage instruction:</span> ${esc(cam.instruction)}</p>
+      <p class="p-sub" style="margin:8px 0 0">Advisory AI-use signal only — it never auto-approves or rejects. Use your judgement and make the final decision below.</p>
+    </div>` : '<p class="p-sub" style="margin:10px 0 0">AI verification does not apply to this task type.</p>';
   const bg = adminModal(`
     <button class="close">×</button>
     <h3>Review submission</h3>
@@ -286,6 +345,7 @@ function openReviewSubmission(sm) {
         ${sm.dispute ? `<p class="review-label" style="color:var(--danger)">Dispute raised:</p><div class="review-proof">${esc(sm.dispute.message)}</div>` : ''}
       </div>
     </div>
+    ${camSection}
     <label class="review-ack"><input type="checkbox" id="revAck"> I have reviewed the full task and the user's response, and the answer is relevant and complete.</label>
     <div class="review-actions">
       ${sm.status !== 'approved' ? `<button class="btn btn-primary" id="revApprove" disabled>Approve &amp; pay ${usd(sm.reward)}</button>` : ''}
@@ -679,47 +739,109 @@ function openManualActivate(u) {
   });
 }
 
-// ---- Agents tab: manage all platform agents ----
+// ---- Agents tab: manage all platform agents + commissions ----
 let AGENTS_CACHE = [];
+const AGENTS_STATE = { q: '', filter: 'all' };
 async function tAgents() {
   loading();
   const { data } = await apiGet('/api/admin/agents');
   AGENTS_CACHE = data.agents || [];
   content().innerHTML = `
-    <p class="page-sub">${AGENTS_CACHE.length} agent(s). Agents refer &amp; assist new users through a permanent link; they can view tasks but cannot complete them. Assign an agent from the <b>Users</b> tab.</p>
+    <p class="page-sub">${AGENTS_CACHE.length} agent(s). Agents refer &amp; assist new users through a permanent link and earn <b>40% commission</b> on their referred clients' subscription payments. Assign an agent from the <b>Users</b> tab.</p>
     <div class="panel" style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:12px">
       <input id="agSearch" placeholder="Search agent name, email or username…" style="flex:1;min-width:220px;${inputStyle}">
+      <select id="agFilter" style="${inputStyle}">${[['all', 'All agents'], ['active', 'Active'], ['inactive', 'Inactive'], ['referrals', 'With referrals'], ['noreferrals', 'Without referrals'], ['paid', 'With paid referrals'], ['commission', 'With locked balance']].map(([v, l]) => `<option value="${v}">${l}</option>`).join('')}</select>
       <span class="p-sub" id="agCount"></span>
     </div>
     <div class="panel" style="overflow-x:auto"><table class="table">
-      <thead><tr><th>Agent</th><th>Status</th><th class="num">Referred</th><th>Assigned</th><th>Referral link</th><th>Actions</th></tr></thead>
+      <thead><tr><th>Agent</th><th>Status</th><th class="num">Referred</th><th class="num">Paid</th><th class="num">Commission</th><th class="num">Locked</th><th>Actions</th></tr></thead>
       <tbody id="agBody"></tbody>
     </table></div>`;
-  document.getElementById('agSearch').addEventListener('input', renderAgentsTable);
+  document.getElementById('agSearch').addEventListener('input', (e) => { AGENTS_STATE.q = e.target.value; renderAgentsTable(); });
+  document.getElementById('agFilter').addEventListener('change', (e) => { AGENTS_STATE.filter = e.target.value; renderAgentsTable(); });
   renderAgentsTable();
 }
 
 function renderAgentsTable() {
-  const q = (document.getElementById('agSearch').value || '').trim().toLowerCase();
-  const list = AGENTS_CACHE.filter((a) => !q || [a.name, a.username, a.email].some((v) => String(v || '').toLowerCase().includes(q)));
+  const q = (AGENTS_STATE.q || '').trim().toLowerCase();
+  const f = AGENTS_STATE.filter;
+  const list = AGENTS_CACHE.filter((a) => {
+    if (q && ![a.name, a.username, a.email].some((v) => String(v || '').toLowerCase().includes(q))) return false;
+    const c = a.commission || {};
+    if (f === 'active') return a.status === 'active';
+    if (f === 'inactive') return a.status !== 'active';
+    if (f === 'referrals') return a.referred > 0;
+    if (f === 'noreferrals') return !a.referred;
+    if (f === 'paid') return (a.paidClients || 0) > 0;
+    if (f === 'commission') return (c.locked || 0) > 0;
+    return true;
+  });
   document.getElementById('agCount').textContent = `${list.length} shown`;
-  document.getElementById('agBody').innerHTML = list.map((a) => `<tr>
+  document.getElementById('agBody').innerHTML = list.map((a) => { const c = a.commission || {}; return `<tr>
     <td>${esc(a.name || a.username || '—')}<br><span class="p-sub">${esc(a.email || '')}</span></td>
     <td><span class="st ${a.status === 'active' ? 'approved' : 'pending'}">${a.status === 'active' ? 'Active' : 'Inactive'}</span></td>
     <td class="num">${a.referred}</td>
-    <td class="p-sub">${a.assignedAt ? new Date(a.assignedAt).toLocaleDateString() : '—'}</td>
-    <td class="p-sub" style="max-width:240px;word-break:break-all">${esc(a.link || '—')}</td>
+    <td class="num">${a.paidClients || 0}</td>
+    <td class="num">${kes(c.totalEarned)}</td>
+    <td class="num">${kes(c.locked)}</td>
     <td><div style="display:flex;gap:6px;flex-wrap:wrap">
-      <button class="btn btn-ghost auto agcopy" data-link="${esc(a.link || '')}">Copy link</button>
-      ${a.status === 'active'
-        ? `<button class="btn btn-ghost auto agact" data-id="${a.id}" data-x="deactivate">Deactivate</button>`
-        : `<button class="btn btn-primary auto agact" data-id="${a.id}" data-x="activate">Activate</button>`}
+      <button class="btn btn-primary auto agdetail" data-id="${a.id}">Details</button>
+      ${a.status === 'active' ? `<button class="btn btn-ghost auto agact" data-id="${a.id}" data-x="deactivate">Deactivate</button>` : `<button class="btn btn-ghost auto agact" data-id="${a.id}" data-x="activate">Activate</button>`}
       <button class="btn btn-ghost auto agact" data-id="${a.id}" data-x="regenerate">Regenerate</button>
-      <button class="btn btn-ghost auto agact" data-id="${a.id}" data-x="remove" style="border-color:var(--danger);color:#c0143c">Remove agent</button>
+      <button class="btn btn-ghost auto agact" data-id="${a.id}" data-x="remove" style="border-color:var(--danger);color:#c0143c">Remove</button>
     </div></td>
-  </tr>`).join('') || `<tr><td colspan="6" class="p-sub">No agents yet. Assign one from the Users tab.</td></tr>`;
-  content().querySelectorAll('.agcopy').forEach((b) => b.addEventListener('click', () => { if (navigator.clipboard) navigator.clipboard.writeText(b.dataset.link); toast('Referral link copied'); }));
+  </tr>`; }).join('') || `<tr><td colspan="7" class="p-sub">No agents match.</td></tr>`;
   content().querySelectorAll('.agact').forEach((b) => b.addEventListener('click', () => agentAction(b.dataset.id, b.dataset.x)));
+  content().querySelectorAll('.agdetail').forEach((b) => b.addEventListener('click', () => openAgentDetail(b.dataset.id)));
+}
+
+// Full agent detail: info + stats + referred clients + commission history + manual adjust.
+async function openAgentDetail(id) {
+  const { ok, data } = await apiGet('/api/admin/agents/' + id);
+  if (!ok) return toast('Could not load agent', 'error');
+  const a = data.agent, clients = data.clients || [], comms = data.commissions || [], c = a.commission || {};
+  const sc = (s) => (s === 'Available' ? 'approved' : (s === 'Reversed' || s === 'Cancelled' ? 'rejected' : 'pending'));
+  const bg = adminModal(`
+    <button class="close">×</button>
+    <h3 style="margin:0 0 2px">${esc(a.name || a.username)}</h3>
+    <p class="p-sub">${esc(a.email || '')} · ${esc(a.phone || 'no phone')} · <span class="st ${a.status === 'active' ? 'approved' : 'pending'}">${a.status === 'active' ? 'Active' : 'Inactive'}</span></p>
+    <div class="grid g4" style="margin:10px 0">
+      <div class="stat"><div class="label">Referred</div><div class="value">${a.referred}</div></div>
+      <div class="stat"><div class="label">Paid</div><div class="value">${a.paidClients || 0}</div></div>
+      <div class="stat"><div class="label">Commission earned</div><div class="value">${kes(c.totalEarned)}</div></div>
+      <div class="stat"><div class="label">Locked balance</div><div class="value">${kes(c.locked)}</div></div>
+    </div>
+    <div class="grid g2">
+      <div class="field"><label>Region</label><input id="agRegion" value="${esc(a.region || '')}" style="${inputStyle}"></div>
+      <div class="field"><label>Referral link</label><input readonly value="${esc(a.link || '')}" style="${inputStyle}"></div>
+    </div>
+    <div class="field"><label>Internal admin note</label><textarea id="agNote" rows="2" style="width:100%;${inputStyle}">${esc(a.adminNote || '')}</textarea></div>
+    <button class="btn btn-ghost auto" id="agSaveInfo" style="margin-bottom:14px">Save region &amp; note</button>
+
+    <h4 style="margin:6px 0">Referred clients (${clients.length})</h4>
+    <div style="overflow:auto;max-height:200px"><table class="table"><thead><tr><th>Client</th><th>Joined</th><th>Plan</th><th>Paid</th><th class="num">Amount</th><th class="num">Commission</th></tr></thead><tbody>${clients.length ? clients.map((x) => `<tr><td>${esc(x.name)}</td><td class="p-sub">${x.registeredAt ? new Date(x.registeredAt).toLocaleDateString() : '—'}</td><td>${esc(x.plan)}</td><td>${x.paid ? 'Yes' : 'No'}</td><td class="num">${kes(x.amountPaid)}</td><td class="num">${kes(x.commission)}</td></tr>`).join('') : `<tr><td colspan="6" class="p-sub">No referred clients yet.</td></tr>`}</tbody></table></div>
+
+    <h4 style="margin:12px 0 6px">Commission history (${comms.length})</h4>
+    <div style="overflow:auto;max-height:200px"><table class="table"><thead><tr><th>Date</th><th>Client</th><th>Plan</th><th class="num">Paid</th><th class="num">Commission</th><th>Status</th><th>Source</th></tr></thead><tbody>${comms.length ? comms.map((x) => `<tr><td class="p-sub">${new Date(x.createdAt).toLocaleDateString()}</td><td>${esc(x.clientName || '—')}</td><td>${esc(x.planName)}</td><td class="num">${kes(x.paymentAmount)}</td><td class="num">${kes(x.commissionAmount)}</td><td><span class="st ${sc(x.status)}">${esc(x.status)}</span></td><td class="p-sub">${esc(x.activationSource || '')}</td></tr>`).join('') : `<tr><td colspan="7" class="p-sub">No commissions yet.</td></tr>`}</tbody></table></div>
+
+    <h4 style="margin:12px 0 6px">Manual commission adjustment</h4>
+    <div class="grid g2">
+      <div class="field"><label>Amount (KES — negative to deduct)</label><input id="agAdjAmt" type="number" step="1" style="${inputStyle}"></div>
+      <div class="field"><label>Reason (required)</label><input id="agAdjReason" style="${inputStyle}"></div>
+    </div>
+    <button class="btn btn-primary auto" id="agAdjSave">Apply adjustment</button>`);
+  bg.querySelector('#agSaveInfo').addEventListener('click', async () => {
+    const r = await api('/api/admin/agents/' + id + '/info', { region: bg.querySelector('#agRegion').value, adminNote: bg.querySelector('#agNote').value });
+    if (r.ok) { toast('Saved'); tAgents(); } else toast(r.data.error || 'Failed', 'error');
+  });
+  bg.querySelector('#agAdjSave').addEventListener('click', async () => {
+    const amount = Number(bg.querySelector('#agAdjAmt').value);
+    const reason = bg.querySelector('#agAdjReason').value.trim();
+    if (!amount) return toast('Enter a non-zero amount', 'error');
+    if (!reason) return toast('A reason is required', 'error');
+    const r = await api('/api/admin/agents/' + id + '/commission/adjust', { amount, reason });
+    if (r.ok) { toast('Adjustment applied'); bg.remove(); tAgents(); } else toast(r.data.error || 'Failed', 'error');
+  });
 }
 
 async function agentAction(id, action) {
