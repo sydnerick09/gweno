@@ -18,7 +18,7 @@ function toast(msg, type = 'ok') {
   setTimeout(() => { t.classList.remove('show'); setTimeout(() => t.remove(), 250); }, 3000);
 }
 
-const TABS = [['overview', 'Overview'], ['submissions', 'Submissions'], ['questionnaires', 'Questionnaires'], ['applications', 'Applications'], ['share', 'Social Share'], ['emails', 'Email log'], ['audit', 'Audit log'], ['users', 'Users'], ['agents', 'Agents'], ['rewards', 'Rewards'], ['sendemail', 'Send Email'], ['broadcast', 'Broadcast'], ['investments', 'Investments'], ['deposits', 'Deposits'], ['withdrawals', 'Withdrawals'], ['support', 'Support']];
+const TABS = [['overview', 'Overview'], ['submissions', 'Submissions'], ['questionnaires', 'Questionnaires'], ['math', 'Exclusive Math'], ['applications', 'Applications'], ['share', 'Social Share'], ['emails', 'Email log'], ['audit', 'Audit log'], ['users', 'Users'], ['agents', 'Agents'], ['rewards', 'Rewards'], ['sendemail', 'Send Email'], ['broadcast', 'Broadcast'], ['investments', 'Investments'], ['deposits', 'Deposits'], ['withdrawals', 'Withdrawals'], ['support', 'Support']];
 
 // ---- Reusable client-side pagination for admin tables ----
 const PAGE_STATE = {};        // key -> current page (1-based); reset to 1 on tab switch
@@ -148,7 +148,7 @@ const loading = () => { content().innerHTML = `
 
 function route() {
   if (ROLE === 'finance' && !FINANCE_TABS.includes(TAB)) TAB = 'overview';
-  ({ overview: tOverview, submissions: tSubmissions, questionnaires: tQuestionnaires, applications: tApplications, share: tShareReview, emails: tEmails, audit: tAudit, users: tUsers, agents: tAgents, rewards: tRewards, sendemail: tSendEmail, broadcast: tBroadcast, investments: tInvestments, deposits: tDeposits, withdrawals: tWithdrawals, support: tSupport }[TAB] || tOverview)();
+  ({ overview: tOverview, submissions: tSubmissions, questionnaires: tQuestionnaires, math: tMath, applications: tApplications, share: tShareReview, emails: tEmails, audit: tAudit, users: tUsers, agents: tAgents, rewards: tRewards, sendemail: tSendEmail, broadcast: tBroadcast, investments: tInvestments, deposits: tDeposits, withdrawals: tWithdrawals, support: tSupport }[TAB] || tOverview)();
 }
 
 async function tOverview() {
@@ -500,6 +500,76 @@ function openQuizReject(id) {
   });
 }
 
+// ---- Exclusive Plan: AI-vs-canonical maths task verification ----
+const AI_STATUS_CLS = { MATCH: 'approved', EQUIVALENT: 'approved', DIFFERENT: 'rejected', NEEDS_REVIEW: 'pending' };
+let MATH_CACHE = [];
+async function tMath() {
+  loading();
+  const { data } = await apiGet('/api/admin/math');
+  MATH_CACHE = data.tasks || [];
+  const aiOn = !!data.aiConfigured;
+  const render = () => {
+    const p = paginate('math', MATH_CACHE);
+    content().innerHTML = `
+    <p class="page-sub">Exclusive-plan mathematics verification. Full visibility: <b>Question → Canonical → AI → Client → Verification</b>. Canonical answers are computed and stored server-side only.${aiOn ? '' : ' <b>AI evaluation is not configured</b> (set ANTHROPIC_API_KEY to enable independent AI solving).'}</p>
+    <div class="panel" style="overflow-x:auto"><table class="table">
+      <thead><tr><th>Task</th><th>Category</th><th>Canonical</th><th>AI answer</th><th>Client answer</th><th>AI status</th><th>Client</th><th>Verification</th><th></th></tr></thead>
+      <tbody>${MATH_CACHE.length ? p.rows.map((t) => `
+        <tr>
+          <td style="max-width:240px;word-break:break-word">${esc(t.question)}<br><span class="p-sub">${esc(t.user ? t.user.username : '')} · ${esc(t.difficulty)}</span></td>
+          <td class="p-sub">${esc(t.category)}</td>
+          <td><b>${esc(t.canonical || '—')}</b></td>
+          <td>${t.aiAnswer ? esc(t.aiAnswer) : '<span class="p-sub">—</span>'}</td>
+          <td>${t.clientAnswer ? esc(t.clientAnswer) : '<span class="p-sub">not submitted</span>'}</td>
+          <td>${t.aiStatus ? `<span class="st ${AI_STATUS_CLS[t.aiStatus] || 'pending'}">${esc(t.aiStatus)}</span>` : '—'}</td>
+          <td>${t.clientStatus ? `<span class="st ${t.clientStatus === 'CORRECT' ? 'approved' : 'rejected'}">${esc(t.clientStatus)}</span>` : '—'}</td>
+          <td>${t.verification ? `<span class="st ${t.verification === 'PASSED' ? 'approved' : 'rejected'}">${esc(t.verification)}</span>` : '—'}</td>
+          <td><button class="btn btn-ghost auto mexpand" data-id="${esc(t.id)}">AI response</button></td>
+        </tr>`).join('') : `<tr><td colspan="9" class="p-sub">No mathematics tasks yet.</td></tr>`}</tbody>
+    </table>${pagerBar('math', p)}</div>`;
+    content().querySelectorAll('.mexpand').forEach((b) => b.addEventListener('click', () => openMathDetail(MATH_CACHE.find((x) => x.id === b.dataset.id), aiOn)));
+    wirePager('math', p, render);
+  };
+  render();
+}
+
+function openMathDetail(t, aiOn) {
+  if (!t) return;
+  const bg = adminModal(`
+    <button class="close">×</button>
+    <h3>Task verification</h3>
+    <div class="review-grid">
+      <div class="review-col">
+        <h4>📋 Task</h4>
+        <p class="review-title">${esc(t.question)}</p>
+        <p class="p-sub">${esc(t.category)} · ${esc(t.difficulty)} · ${esc(t.user ? t.user.username : '')}</p>
+        <p class="review-label">Canonical answer (server)</p><div class="review-proof"><b>${esc(t.canonical || '—')}</b></div>
+        <p class="review-label">Client answer</p><div class="review-proof">${esc(t.clientAnswer || '— not submitted —')}</div>
+        <p class="review-label">Result</p>
+        <div>${t.clientStatus ? `<span class="st ${t.clientStatus === 'CORRECT' ? 'approved' : 'rejected'}">${esc(t.clientStatus)}</span>` : '<span class="p-sub">pending</span>'}
+          ${t.verification ? ` <span class="st ${t.verification === 'PASSED' ? 'approved' : 'rejected'}">${esc(t.verification)}</span>` : ''}</div>
+      </div>
+      <div class="review-col">
+        <h4>🤖 AI evaluation</h4>
+        <p class="review-label">AI answer ${t.aiStatus ? `· <span class="st ${AI_STATUS_CLS[t.aiStatus] || 'pending'}">${esc(t.aiStatus)}</span>` : ''}</p>
+        <div class="review-proof">${esc(t.aiAnswer || (t.aiError ? '(' + t.aiError + ')' : '— not run —'))}</div>
+        ${t.aiConfidence != null ? `<p class="review-label">Confidence</p><div>${Math.round(t.aiConfidence * 100)}%</div>` : ''}
+        ${t.aiAmbiguities ? `<p class="review-label">Detected ambiguities</p><div class="review-proof">${esc(t.aiAmbiguities)}</div>` : ''}
+        ${t.aiReasoning ? `<p class="review-label">Reasoning</p><div class="review-proof">${esc(t.aiReasoning)}</div>` : ''}
+        ${t.aiRaw ? `<p class="review-label">Full AI response</p><div class="review-proof" style="max-height:180px;overflow:auto">${esc(t.aiRaw)}</div>` : ''}
+        <div style="margin-top:12px"><button class="btn btn-primary auto" id="mRunAi"${aiOn ? '' : ' disabled title="Set ANTHROPIC_API_KEY"'}>${t.aiAnswer ? 'Re-run AI' : 'Run AI'}</button></div>
+      </div>
+    </div>`, 'modal-wide');
+  const run = bg.querySelector('#mRunAi');
+  if (run) run.addEventListener('click', async () => {
+    run.disabled = true; run.textContent = 'Solving…';
+    const { ok, data } = await api('/api/admin/math/' + t.id + '/evaluate', {});
+    if (!ok) { run.disabled = false; run.textContent = 'Run AI'; return toast(data.error || 'Failed', 'error'); }
+    toast('AI: ' + (data.aiStatus || 'done'), 'ok');
+    bg.remove(); tMath();
+  });
+}
+
 const EMAIL_TYPE = {
   approved: 'Task approved', rejected: 'Task rejected', correction: 'Correction requested',
   application_approved: 'Application approved', application_rejected: 'Application rejected',
@@ -704,8 +774,8 @@ function renderUsersTable() {
 // activates the plan through the SAME central backend function as the auto callbacks.
 function openManualActivate(u) {
   if (!u) return;
-  const opts = [['basic', 'Basic — KES 200'], ['premium', 'Premium — KES 500'], ['premiumpro', 'Premium Pro — KES 1000'], ['executive', 'Executive — KES 2500']];
-  const priceKES = { basic: 200, premium: 500, premiumpro: 1000, executive: 2500 };
+  const opts = [['basic', 'Basic — KES 200'], ['premium', 'Premium — KES 500'], ['premiumpro', 'Premium Pro — KES 1000'], ['executive', 'Executive — KES 3000']];
+  const priceKES = { basic: 200, premium: 500, premiumpro: 1000, executive: 3000 };
   const bg = adminModal(`
     <button class="close">×</button>
     <h3 style="margin:0 0 4px">Confirm payment &amp; activate</h3>
@@ -799,7 +869,7 @@ function renderAgentsTable() {
 async function openAgentDetail(id) {
   const { ok, data } = await apiGet('/api/admin/agents/' + id);
   if (!ok) return toast('Could not load agent', 'error');
-  const a = data.agent, clients = data.clients || [], comms = data.commissions || [], c = a.commission || {};
+  const a = data.agent, clients = data.clients || [], comms = data.commissions || [], c = a.commission || {}, el = a.eligibility || {};
   const sc = (s) => (s === 'Available' ? 'approved' : (s === 'Reversed' || s === 'Cancelled' ? 'rejected' : 'pending'));
   const bg = adminModal(`
     <button class="close">×</button>
@@ -810,6 +880,18 @@ async function openAgentDetail(id) {
       <div class="stat"><div class="label">Paid</div><div class="value">${a.paidClients || 0}</div></div>
       <div class="stat"><div class="label">Commission earned</div><div class="value">${kes(c.totalEarned)}</div></div>
       <div class="stat"><div class="label">Locked balance</div><div class="value">${kes(c.locked)}</div></div>
+    </div>
+    <div class="ai-verify" style="border-color:var(--brand)">
+      <h4>🎯 Client eligibility &amp; commission</h4>
+      <div class="ai-grid">
+        <div><span class="ai-k">Total referred</span><span class="ai-v">${el.totalReferred || 0}</span></div>
+        <div><span class="ai-k">Valid clients</span><span class="ai-v"><b>${el.validClients || 0}</b></span></div>
+        <div><span class="ai-k">Active this week</span><span class="ai-v">${el.activeThisWeek || 0} / ${el.minClients || 50}</span></div>
+        <div><span class="ai-k">Weekly requirement</span><span class="ai-v"><span class="st ${el.weeklyRequirementMet ? 'approved' : 'pending'}">${esc(el.weeklyStatus || '—')}</span></span></div>
+        <div><span class="ai-k">Basic commission (earned)</span><span class="ai-v"><b>${kes(el.basicCommission || 0)}</b></span></div>
+        <div><span class="ai-k">Premium plans</span><span class="ai-v">No agent commission</span></div>
+      </div>
+      <p class="p-sub" style="margin:8px 0 0">Agents earn 40% on the Basic plan only. Terms accepted: <b>${a.termsAccepted ? 'Yes' : 'No'}</b></p>
     </div>
     <div class="grid g2">
       <div class="field"><label>Region</label><input id="agRegion" value="${esc(a.region || '')}" style="${inputStyle}"></div>
@@ -1185,7 +1267,7 @@ async function userAction(ds) {
       ['basic', 'Basic — KES 200 (tasks up to $1)'],
       ['premium', 'Premium — KES 500 (tasks $1–$2)'],
       ['premiumpro', 'Premium Pro — KES 1000 (tasks $2–$7)'],
-      ['executive', 'Executive (Exclusive) — KES 2500 (tasks $14–$23)'],
+      ['executive', 'Executive (Exclusive) — KES 3000 (tasks $14–$23)'],
     ];
     const bg = adminModal(`
       <button class="close">×</button>

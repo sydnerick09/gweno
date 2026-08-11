@@ -18,6 +18,7 @@ const db = require('./db');
 const tasksMod = require('./tasks');
 const surveysMod = require('./surveys');
 const quizMod = require('./questionnaires');
+const mathMod = require('./mathtasks');
 const investmentsMod = require('./investments');
 const { currencyFor } = require('./currencies');
 const payments = require('./payments');
@@ -91,7 +92,7 @@ const PLANS = [
   // Executive: a high-tier plan accessed from the hamburger menu (not shown on the home
   // screen). Unlocks premium $14–$23 tasks. Purchasable directly (not part of the
   // sequential basic→premium→premiumpro progression).
-  { id: 'executive', name: 'Executive', priceKES: 2500, rank: 4, minUSD: 14.00, maxUSD: 23.00, hidden: true },
+  { id: 'executive', name: 'Executive', priceKES: 3000, rank: 4, minUSD: 14.00, maxUSD: 23.00, hidden: true },
 ];
 const PLAN_BY_ID = Object.fromEntries(PLANS.map((p) => [p.id, p]));
 const TASKS_PER_DAY = 2;                                 // max tasks allowed within each window…
@@ -289,6 +290,7 @@ app.use(async (req, res, next) => {
   S.shareSubmissions = S.shareSubmissions || []; // Share & Earn (social sharing) proofs
   S.quizSubmissions = S.quizSubmissions || [];   // questionnaire submissions (auto-scored, admin-approved)
   S.transactions = S.transactions || [];         // lightweight earnings ledger
+  S.mathTasks = S.mathTasks || [];               // Exclusive-plan maths tasks (canonical answer kept server-side only)
 })();
 
 // One-time backfill: award XP/badges/levels for activity that happened before the
@@ -651,6 +653,7 @@ function ensureUserShape(u) {
   if (u.agentReferralCode === undefined) u.agentReferralCode = null; // permanent once assigned
   if (u.agentAssignedAt === undefined) u.agentAssignedAt = null;
   if (u.agentPromoEmailedAt === undefined) u.agentPromoEmailedAt = null; // congratulatory email sent once
+  if (u.agentTermsAcceptedAt === undefined) u.agentTermsAcceptedAt = null; // Regional Agent T&C acceptance
   if (u.agentRegion === undefined) u.agentRegion = null;      // admin-set agent region
   if (u.agentAdminNote === undefined) u.agentAdminNote = '';  // internal admin note
   gamify.ensureGameShape(u);                           // XP / level / badges / streak / coins
@@ -686,6 +689,59 @@ const COMMISSION_RATE = 0.40;
 const COMMISSION_UNLOCK_MS = Date.parse('2026-09-09T00:00:00+03:00'); // 9 Sep 2026, East Africa Time
 const COMMISSION_UNLOCK_LABEL = '9 September 2026';
 const commissionUnlocked = () => Date.now() >= COMMISSION_UNLOCK_MS;
+const AGENT_MIN_CLIENTS = 50;              // valid clients needed to unlock Premium-plan commission
+const AGENT_WEEK_MS = 7 * 86400000;        // weekly monitoring window
+
+// A VALID client = a genuine person who joined via THIS agent's link (not the agent, onboarded,
+// not suspended). The one-account-per-device rule already blocks duplicate/self-created accounts
+// at signup, so a valid client is inherently a distinct device. Fully derived — no stored flag,
+// so it applies automatically to every agent (including those assigned before this system).
+function agentValidClients(agentId) {
+  return db.get().users.filter((u) =>
+    u.id !== agentId && u.referredBy === agentId && u.referredByAgent && u.onboarded && !u.suspended);
+}
+// Has this client done any genuine activity within `ms` (login streak / task / deposit / share),
+// or registered within it? Used for the weekly "actively monitored" count.
+function clientActiveWithin(u, ms) {
+  const since = Date.now() - ms;
+  const S = db.get();
+  if (u.game && u.game.streak && u.game.streak.lastDate && new Date(u.game.streak.lastDate).getTime() >= since) return true;
+  if ((S.submissions || []).some((x) => x.userId === u.id && new Date(x.createdAt).getTime() >= since)) return true;
+  if ((S.deposits || []).some((x) => x.userId === u.id && new Date(x.createdAt).getTime() >= since)) return true;
+  if ((S.shareSubmissions || []).some((x) => x.userId === u.id && new Date(x.createdAt).getTime() >= since)) return true;
+  if (u.createdAt && new Date(u.createdAt).getTime() >= since) return true;
+  return false;
+}
+// Full agent eligibility (server-authoritative). Basic commission is always eligible; Premium
+// commission unlocks only at >= 50 valid clients. Weekly requirement = 50 actively-monitored clients.
+function agentEligibility(agentId) {
+  const S = db.get();
+  const totalReferred = S.users.filter((u) => u.referredBy === agentId).length;
+  const valid = agentValidClients(agentId);
+  const validClients = valid.length;
+  const activeThisWeek = valid.filter((u) => clientActiveWithin(u, AGENT_WEEK_MS)).length;
+  const premiumUnlocked = validClients >= AGENT_MIN_CLIENTS;
+  const comms = (S.agentCommissions || []).filter((c) => c.agentId === agentId
+    && c.status !== 'Reversed' && c.status !== 'Cancelled' && c.status !== 'Ineligible');
+  let basicCommission = 0, premiumCommission = 0;
+  comms.forEach((c) => {
+    const rank = (PLAN_BY_ID[c.planId] || {}).rank || 0;
+    if (rank <= 1) basicCommission += c.commissionAmount; else premiumCommission += c.commissionAmount;
+  });
+  return {
+    minClients: AGENT_MIN_CLIENTS,
+    totalReferred, validClients,
+    countedToward50: Math.min(validClients, AGENT_MIN_CLIENTS),
+    remainingToUnlock: Math.max(0, AGENT_MIN_CLIENTS - validClients),
+    activeThisWeek,
+    clientsRemainingThisWeek: Math.max(0, AGENT_MIN_CLIENTS - activeThisWeek),
+    weeklyRequirementMet: activeThisWeek >= AGENT_MIN_CLIENTS,
+    weeklyStatus: activeThisWeek >= AGENT_MIN_CLIENTS ? 'Requirement Met' : 'Requirement Not Met',
+    premiumUnlocked,
+    premiumCommissionStatus: premiumUnlocked ? 'active' : 'locked',
+    basicCommission, premiumCommission,
+  };
+}
 
 // Central, idempotent commission processor. Called from EVERY plan-activation path
 // (auto M-Pesa, auto Paystack, admin activate, admin plan change). Never saves — the
@@ -709,13 +765,22 @@ function processAgentCommission({ clientId, planId, amountKES, source, paymentRe
     return { ok: false, reason: 'duplicate' };
   }
   const plan = PLAN_BY_ID[planId];
+  const planRank = plan ? plan.rank : 0;
+  // Agents earn commission ONLY on Basic-plan subscriptions. Referred clients are free to
+  // subscribe to Premium, Premium Pro or Executive, but those higher plans pay NO agent
+  // commission.
+  if (planRank !== 1) {
+    audit('agent_commission_skip', { userId: agent.id, referredClientId: clientId, plan: planId, amount, reason: 'non_basic_plan' });
+    return { ok: false, reason: 'non_basic_plan' };
+  }
   const commission = Math.round(amount * COMMISSION_RATE);
   const locked = !commissionUnlocked();
   const rec = {
     id: rid(8), agentId: agent.id, referredClientId: clientId, referralCode: agent.agentReferralCode || null,
     paymentId: paymentRef || null, planId, planName: plan ? plan.name : planId,
     paymentAmount: amount, commissionRate: COMMISSION_RATE, commissionAmount: commission,
-    status: locked ? 'Locked' : 'Available', createdAt: new Date().toISOString(),
+    status: locked ? 'Locked' : 'Available', ineligibleReason: null,
+    createdAt: new Date().toISOString(),
     unlockedAt: new Date(COMMISSION_UNLOCK_MS).toISOString(), activationSource: source || 'auto',
     createdByAdmin: adminId || null,
   };
@@ -742,9 +807,10 @@ function processAgentCommission({ clientId, planId, amountKES, source, paymentRe
 function agentCommissionSummary(agentId) {
   const recs = (db.get().agentCommissions || []).filter((c) => c.agentId === agentId);
   const unlocked = commissionUnlocked();
-  let totalEarned = 0, paidOut = 0, held = 0, paidClients = 0;
+  let totalEarned = 0, paidOut = 0, held = 0, pendingPremium = 0;
   recs.forEach((c) => {
     if (c.status === 'Reversed' || c.status === 'Cancelled') return;
+    if (c.status === 'Ineligible') { pendingPremium += c.commissionAmount; return; } // not counted until 50 clients
     totalEarned += c.commissionAmount;
     if (c.status === 'Paid Out') paidOut += c.commissionAmount; else held += c.commissionAmount;
   });
@@ -753,9 +819,10 @@ function agentCommissionSummary(agentId) {
     totalEarned, paidOut,
     locked: unlocked ? 0 : held,
     available: unlocked ? held : 0,           // withdrawable only on/after the unlock date
+    pendingPremium,                            // premium commission awaiting the 50-client unlock
     withdrawStatus: unlocked ? 'AVAILABLE' : 'LOCKED',
     unlocked, unlockDate: new Date(COMMISSION_UNLOCK_MS).toISOString(), unlockLabel: COMMISSION_UNLOCK_LABEL,
-    count: recs.filter((c) => c.status !== 'Reversed' && c.status !== 'Cancelled').length,
+    count: recs.filter((c) => c.status !== 'Reversed' && c.status !== 'Cancelled' && c.status !== 'Ineligible').length,
     lastAt,
   };
 }
@@ -2384,6 +2451,8 @@ const agentPublic = (u) => {
     assignedAt: u.agentAssignedAt || null,
     adminNote: u.agentAdminNote || '',
     commission: agentCommissionSummary(u.id),
+    eligibility: agentEligibility(u.id),         // total/valid/active clients + Premium lock status
+    termsAccepted: !!u.agentTermsAcceptedAt,
   };
 };
 
@@ -2452,11 +2521,25 @@ app.get('/api/agent/commissions', requireAuth, (req, res) => {
   res.json({
     summary: agentCommissionSummary(req.user.id), commissions: mine, notifications,
     referred: agentReferredCount(req.user.id), paidClients: agentReferredClients(req.user.id).filter((c) => c.paid).length,
+    eligibility: agentEligibility(req.user.id),                 // 50-client gate + weekly monitoring
+    termsAccepted: !!req.user.agentTermsAcceptedAt, termsAcceptedAt: req.user.agentTermsAcceptedAt || null,
   });
+});
+
+// Accept the Regional Agent Terms & Conditions (records the timestamp; gates commission withdrawal).
+app.post('/api/agent/accept-terms', requireAuth, (req, res) => {
+  if (!req.user.isAgent) return res.status(403).json({ error: 'This area is for agents only.' });
+  if (!req.user.agentTermsAcceptedAt) {
+    req.user.agentTermsAcceptedAt = new Date().toISOString();
+    audit('agent_terms_accepted', { userId: req.user.id });
+    db.save();
+  }
+  res.json({ ok: true, termsAcceptedAt: req.user.agentTermsAcceptedAt });
 });
 
 app.post('/api/agent/commission/withdraw', requireAuth, (req, res) => {
   if (!req.user.isAgent) return res.status(403).json({ error: 'This area is for agents only.' });
+  if (!req.user.agentTermsAcceptedAt) return res.status(403).json({ error: 'Please read and accept the Agent Terms & Conditions before using agent features.', code: 'terms_required' });
   const s = agentCommissionSummary(req.user.id);
   if (!s.unlocked) {  // server-side date lock — cannot be bypassed from the frontend
     return res.status(403).json({ error: `Commission withdrawals will be available from ${COMMISSION_UNLOCK_LABEL}.`, code: 'commission_locked', unlockDate: s.unlockDate, available: 0 });
@@ -4011,6 +4094,136 @@ app.post('/api/admin/questionnaires/:id/decision', requireAdminSession, (req, re
   audit('quiz_' + decision, { admin: actor, userId: rec.userId, quizId: rec.quizId, submissionId: rec.id, amount: decision === 'approved' ? round2(rec.reward) : 0 });
   db.save();
   res.json({ ok: true, submission: { id: rec.id, status: rec.status, reviewNote: rec.reviewNote } });
+});
+
+// =============================================================================
+//  EXCLUSIVE PLAN — AI-solvable MATHEMATICS tasks + three-answer verification.
+//  Canonical answers are computed and stored SERVER-SIDE ONLY. The client never
+//  receives the canonical answer (not in any response, not before or after submit).
+//  Three separate fields are kept and never overwrite each other: canonical, aiAnswer,
+//  clientAnswer. An AI model can solve the question independently for comparison.
+// =============================================================================
+function isExclusive(u) { const p = activePlan(u); return !!(p && p.id === 'executive'); }
+// Never leak the canonical answer to the client.
+function publicMath(t) {
+  return { id: t.id, category: t.category, difficulty: t.difficulty, question: t.question,
+    instructions: t.instructions, status: t.status, clientAnswer: t.clientAnswer || null,
+    clientStatus: t.clientStatus || null, createdAt: t.createdAt, submittedAt: t.submittedAt || null };
+}
+
+// Independently solve a maths question with an AI model (Anthropic Messages API). Fully
+// optional: with no ANTHROPIC_API_KEY it degrades gracefully (status stays NEEDS_REVIEW).
+async function aiSolveMath(question) {
+  const key = process.env.ANTHROPIC_API_KEY;
+  if (!key) return { ok: false, reason: 'AI is not configured (set ANTHROPIC_API_KEY).' };
+  try {
+    const r = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-api-key': key, 'anthropic-version': '2023-06-01' },
+      body: JSON.stringify({
+        model: process.env.ANTHROPIC_MODEL || 'claude-sonnet-5',
+        max_tokens: 900,
+        messages: [{ role: 'user', content:
+          'Solve this mathematics problem. Reply with ONLY a JSON object and nothing else: '
+          + '{"final_answer": string, "reasoning": string (brief), "confidence": number between 0 and 1, "ambiguities": string}.\n\n'
+          + 'Problem: ' + question }],
+      }),
+    });
+    const j = await r.json();
+    if (!r.ok) return { ok: false, reason: (j.error && j.error.message) || ('HTTP ' + r.status), raw: JSON.stringify(j).slice(0, 2000) };
+    const text = (j.content || []).map((c) => c.text || '').join('').trim();
+    let parsed = {};
+    try { parsed = JSON.parse(text.replace(/^```(?:json)?\s*|\s*```$/g, '')); } catch (_) {}
+    return {
+      ok: true,
+      finalAnswer: parsed.final_answer != null ? String(parsed.final_answer) : text,
+      reasoning: parsed.reasoning != null ? String(parsed.reasoning) : null,
+      confidence: typeof parsed.confidence === 'number' ? parsed.confidence : null,
+      ambiguities: parsed.ambiguities != null ? String(parsed.ambiguities) : null,
+      raw: text.slice(0, 4000),
+    };
+  } catch (e) { return { ok: false, reason: String(e.message || e) }; }
+}
+
+// Run the AI evaluation for a stored task and record the result (idempotent-ish: re-runnable).
+async function runAiEval(t) {
+  const ai = await aiSolveMath(t.question);
+  if (!ai.ok) { t.aiStatus = 'NEEDS_REVIEW'; t.aiError = ai.reason || 'AI unavailable'; t.aiRaw = ai.raw || null; return; }
+  t.aiAnswer = ai.finalAnswer;                 // B. AI Answer — separate field
+  t.aiReasoning = ai.reasoning;
+  t.aiConfidence = ai.confidence;
+  t.aiAmbiguities = ai.ambiguities;
+  t.aiRaw = ai.raw;
+  t.aiError = null;
+  t.aiStatus = mathMod.aiStatus(t.canonical, t.aiAnswer, t.verifyMethod); // MATCH|EQUIVALENT|DIFFERENT|NEEDS_REVIEW
+  t.aiEvaluatedAt = new Date().toISOString();
+}
+
+// Generate a new maths task for an Exclusive-plan member (canonical stored, not returned).
+app.get('/api/math/task', requireAuth, (req, res) => {
+  if (!isExclusive(req.user)) return res.status(403).json({ error: 'The mathematics task lab is available on the Exclusive Plan.', code: 'exclusive_only' });
+  const g = mathMod.generate();
+  const t = {
+    id: 'MX' + rid(7), userId: req.user.id,
+    category: g.category, difficulty: g.difficulty, question: g.question, instructions: g.instructions,
+    canonical: g.canonical, verifyMethod: g.verifyMethod,   // A. Canonical Answer — server-only
+    aiAnswer: null, aiStatus: 'NEEDS_REVIEW', aiReasoning: null, aiConfidence: null, aiAmbiguities: null, aiRaw: null, aiEvaluatedAt: null,
+    clientAnswer: null, clientStatus: null, verification: null,
+    status: 'generated', createdAt: new Date().toISOString(), submittedAt: null,
+  };
+  const S = db.get(); S.mathTasks = S.mathTasks || []; S.mathTasks.unshift(t);
+  if (S.mathTasks.length > 5000) S.mathTasks.length = 5000;
+  db.save();
+  res.json({ task: publicMath(t) });   // sanitized — no canonical answer
+});
+
+// Client submits their answer — auto-graded against the canonical answer (server-side).
+app.post('/api/math/task/:id/submit', requireAuth, rateLimit('math', 40, 60 * 1000), async (req, res) => {
+  const t = (db.get().mathTasks || []).find((x) => x.id === req.params.id && x.userId === req.user.id);
+  if (!t) return res.status(404).json({ error: 'Task not found.' });
+  if (t.status === 'submitted') return res.status(409).json({ error: 'You have already submitted this task.', result: t.clientStatus });
+  const answer = String(req.body.answer == null ? '' : req.body.answer).trim();
+  if (!answer) return res.status(400).json({ error: 'Please enter your answer.' });
+
+  t.clientAnswer = answer;                                   // C. Client Submission — separate field
+  t.clientStatus = mathMod.grade(t.canonical, answer, t.verifyMethod); // CORRECT | INCORRECT
+  t.status = 'submitted';
+  t.submittedAt = new Date().toISOString();
+  t.verification = t.clientStatus === 'CORRECT' ? 'PASSED' : 'FAILED';
+  db.save();
+
+  // Independently solve with the AI (best-effort) so the admin gets AI-vs-canonical too.
+  if (process.env.ANTHROPIC_API_KEY) { try { await runAiEval(t); db.save(); } catch (_) {} }
+
+  // Return ONLY the client's own result — never the canonical answer.
+  res.json({ ok: true, result: t.clientStatus, verification: t.verification });
+});
+
+// ---- Admin: Exclusive Task Verification (full three-answer visibility) ----
+app.get('/api/admin/math', requireAdminSession, (req, res) => {
+  const all = (db.get().mathTasks || []).map((t) => {
+    const u = userById(t.userId);
+    return {
+      id: t.id, category: t.category, difficulty: t.difficulty, question: t.question,
+      canonical: t.canonical, aiAnswer: t.aiAnswer, clientAnswer: t.clientAnswer,
+      aiStatus: t.aiStatus, clientStatus: t.clientStatus, verification: t.verification,
+      aiReasoning: t.aiReasoning, aiConfidence: t.aiConfidence, aiAmbiguities: t.aiAmbiguities,
+      aiRaw: t.aiRaw, aiError: t.aiError || null, aiEvaluatedAt: t.aiEvaluatedAt || null,
+      status: t.status, createdAt: t.createdAt, submittedAt: t.submittedAt,
+      user: u ? { username: u.username, email: u.email } : null,
+    };
+  }).sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)));
+  res.json({ tasks: all, aiConfigured: !!process.env.ANTHROPIC_API_KEY });
+});
+
+// Admin runs / re-runs the AI evaluation for a task on demand.
+app.post('/api/admin/math/:id/evaluate', requireAdminSession, async (req, res) => {
+  const t = (db.get().mathTasks || []).find((x) => x.id === req.params.id);
+  if (!t) return res.status(404).json({ error: 'Task not found.' });
+  if (!process.env.ANTHROPIC_API_KEY) return res.status(503).json({ error: 'AI is not configured. Set ANTHROPIC_API_KEY to enable AI evaluation.' });
+  await runAiEval(t);
+  db.save();
+  res.json({ ok: true, aiAnswer: t.aiAnswer, aiStatus: t.aiStatus, aiReasoning: t.aiReasoning, aiConfidence: t.aiConfidence, aiAmbiguities: t.aiAmbiguities });
 });
 
 // =============================================================================

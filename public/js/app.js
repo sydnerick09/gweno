@@ -514,6 +514,61 @@ function startFeed(items) {
 const meIsAgent = () => !!(ME && ME.agent && ME.agent.isAgent);
 
 // Professional "AGENT ACCOUNT" banner shown on the dashboard (and profile) for agents.
+// Agent Terms & Conditions (with Privacy, Help and client status folded in). Rendered as a
+// single COLLAPSED section on the dashboard — the detail lives here, not spread on the page.
+function agentExtraHTML(d) {
+  const el = d.eligibility || {};
+  const min = el.minClients || 50;
+  const row = (i, t, b) => `<div class="priv-row"><span class="priv-ico">${i}</span><div><b>${esc(t)}</b><div class="p-sub" style="margin:0">${esc(b)}</div></div></div>`;
+  const privacy = [
+    ['🔒', 'Account Privacy', 'Your agent account access is limited to what you need to manage your referred clients.'],
+    ['🪪', 'Client Information Protection', 'You may view only the basic information needed to guide your clients — never share, sell or disclose it.'],
+    ['💳', 'Payment & Commission Privacy', 'Your commission data is private to you. Client payment credentials are never exposed to agents.'],
+    ['🛡️', 'Security & Fraud Prevention', 'Fake, duplicate, self-created or inactive accounts are detected and excluded. Fraud may end your agent status.'],
+    ['👤', 'Personal Information', 'Client passwords, ID documents and private account details are never shown to agents.'],
+    ['📄', 'Data & Records', 'Access client records only for legitimate coaching and monitoring — never for unauthorized purposes.'],
+  ].map((x) => row(...x)).join('');
+  const help = [
+    ['❓', 'Getting Started as an Agent', 'Share your permanent link, then recruit, guide and coach genuine clients.'],
+    ['👥', 'Managing Your Clients', "Monitor your clients' activity and help them complete tasks and subscribe."],
+    ['📈', 'Understanding Commission', 'You earn 40% on the Basic plan only. Higher plans do not pay agent commission.'],
+    ['💰', 'Agent Earnings and Payouts', 'Commission accrues to your agent balance and unlocks on the configured date.'],
+    ['🎯', 'Client Requirement', `A valid client is a genuine, onboarded, non-duplicate person who joined via your link. You (the agent), fake, duplicate, inactive or suspended accounts never count. Keep at least ${min} actively-monitored clients each week.`],
+    ['🔒', 'Privacy and Security', 'Protect client information and never misuse your access.'],
+    ['📋', 'Agent Terms & Conditions', 'Review and accept the agent terms in this section.'],
+    ['🛠️', 'Technical Support', 'Trouble with your dashboard or link? Contact support and we will help.'],
+    ['💬', 'Contact Support', 'Reach the team from the Support page at any time.'],
+  ].map((x) => row(...x)).join('');
+  const status = `
+    <h4 style="margin:14px 0 6px">Your client status</h4>
+    <div class="grid g4" style="margin-bottom:6px">
+      <div class="stat"><div class="label">Total referred</div><div class="value">${el.totalReferred || 0}</div></div>
+      <div class="stat"><div class="label">Valid clients</div><div class="value">${el.validClients || 0}</div></div>
+      <div class="stat"><div class="label">Active this week</div><div class="value">${el.activeThisWeek || 0}/${min}</div></div>
+      <div class="stat"><div class="label">Weekly status</div><div class="value" style="font-size:16px">${esc(el.weeklyStatus || '—')}</div></div>
+    </div>
+    <p class="p-sub" style="margin:0">Basic-plan commission earned: <b>${kes(el.basicCommission || 0)}</b>. Premium, Premium Pro and Executive plans do not earn agent commission.</p>`;
+  const terms = `
+    <p>As a Regional Agent you agree to actively <b>recruit, monitor, guide and coach</b> genuine clients.</p>
+    <ul style="margin:8px 0;padding-left:18px">
+      <li>Maintain a minimum of <b>${min} active clients per week</b> — genuinely monitored and coached. Fake, duplicate, inactive or self-created accounts are not counted.</li>
+      <li>You earn a <b>40% commission on the Basic plan only</b>. Your referred clients may still subscribe to Premium, Premium Pro or Executive, but those higher plans do <b>not</b> pay agent commission.</li>
+      <li>Commission is paid only on <b>valid, successful Basic subscriptions</b> — cancelled, refunded, duplicated or fraudulent subscriptions earn nothing.</li>
+      <li>You must protect client information and never share, sell, misuse or publicly disclose it.</li>
+    </ul>
+    ${d.termsAccepted ? `<p class="pill-note">✅ You accepted these terms${d.termsAcceptedAt ? ' on ' + new Date(d.termsAcceptedAt).toLocaleDateString() : ''}.</p>` : '<button class="btn btn-primary auto" id="agentAcceptTerms">I agree to the Agent Terms</button>'}`;
+  return `<details class="agent-acc"><summary>📋 Agent Terms &amp; Conditions · Privacy · Help</summary>
+    <div class="agent-acc-body">
+      ${terms}
+      ${status}
+      <h4 style="margin:16px 0 6px">🔒 Privacy</h4>
+      <p class="p-sub">You may access only the information necessary to manage your referred clients. Never share, sell, misuse or publicly disclose client information.</p>
+      ${privacy}
+      <h4 style="margin:16px 0 6px">❓ Help &amp; Support</h4>
+      ${help}
+    </div></details>`;
+}
+
 function agentBannerHTML() {
   if (!meIsAgent()) return '';
   const a = ME.agent;
@@ -538,6 +593,7 @@ function agentBannerHTML() {
         <div><div class="p-sub">Clients who paid</div><b>${a.paidClients || 0}</b></div>
         ${a.region ? `<div><div class="p-sub">Region</div><b>${esc(a.region)}</b></div>` : ''}
       </div>
+      <div id="agentExtra"></div>
       <div class="agent-restrict" style="border-color:var(--line);background:var(--bg-2)">
         <h4 style="color:var(--text)">Commission withdrawals</h4>
         <p>Status: <b>${esc(c.withdrawStatus || 'LOCKED')}</b>. Commission withdrawals will be available from <b>${esc(c.unlockLabel || '9 September 2026')}</b>. Available to withdraw before then: <b>0 KES</b>.</p>
@@ -568,6 +624,16 @@ function wireAgentBanner() {
   };
   const host = document.getElementById('agentHistory');
   if (host) apiGet('/api/agent/commissions').then(({ data }) => {
+    // Eligibility panel + Terms / Privacy / Help sections.
+    const extra = document.getElementById('agentExtra');
+    if (extra) {
+      extra.innerHTML = agentExtraHTML(data || {});
+      const accept = document.getElementById('agentAcceptTerms');
+      if (accept) accept.onclick = async () => {
+        const { ok, data: d } = await api('/api/agent/accept-terms', {});
+        if (ok) { toast('Agent terms accepted.'); wireAgentBanner(); } else toast(d.error || 'Failed', 'error');
+      };
+    }
     const list = (data && data.commissions) || [];
     const sc = (s) => (s === 'Available' ? 'approved' : (s === 'Reversed' || s === 'Cancelled' ? 'rejected' : 'pending'));
     host.innerHTML = `<h4 style="margin:0 0 8px">Commission history</h4>` + (list.length
@@ -1084,9 +1150,57 @@ async function pageExecutive() {
           ? `<p class="pill-note">✅ Your Executive Plan is active${data.expires ? ' until ' + fmtDate(data.expires) : ''}.</p>`
           : `<button class="btn btn-primary auto" id="execSub">Subscribe for ${kes(exec.priceKES)}</button>`}
       </div>
-    </div>`;
+    </div>
+    ${isExec ? `
+    <div class="panel" id="mathLab">
+      <h3>Mathematics task lab</h3>
+      <p class="p-sub">Solve independently generated mathematics problems — arithmetic, algebra, calculus and more. Your answer is checked instantly.</p>
+      <div id="mathArea"><button class="btn btn-primary auto" id="mathGet">Get a question</button></div>
+    </div>` : ''}`;
   const b = document.getElementById('execSub');
   if (b) b.addEventListener('click', () => openSubscribe({ plans: [exec], plan: cur }, 'executive'));
+  const mg = document.getElementById('mathGet');
+  if (mg) mg.addEventListener('click', loadMathTask);
+}
+
+async function loadMathTask() {
+  const area = document.getElementById('mathArea');
+  if (area) area.innerHTML = `<div class="sk sk-line" style="width:60%;height:16px"></div><div class="sk sk-row" style="margin-top:10px"></div>`;
+  const { ok, data } = await apiGet('/api/math/task');
+  if (!ok || !data.task) { if (area) area.innerHTML = `<p class="p-sub">${esc((data && data.error) || 'Could not load a question.')}</p><button class="btn btn-ghost auto" id="mathGet2">Try again</button>`; const r = document.getElementById('mathGet2'); if (r) r.addEventListener('click', loadMathTask); return; }
+  renderMathTask(data.task);
+}
+
+function renderMathTask(t) {
+  const area = document.getElementById('mathArea');
+  if (!area) return;
+  area.innerHTML = `
+    <div class="math-card">
+      <div class="math-meta"><span class="tier-badge">${esc(t.category)}</span> <span class="p-sub">${esc(t.difficulty)}</span></div>
+      <p class="math-q">${esc(t.question)}</p>
+      <p class="p-sub">${esc(t.instructions || 'Enter your final answer.')}</p>
+      <div class="field"><input id="mathAns" placeholder="Your answer (e.g. x = 5, or a number)" autocomplete="off"></div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <button class="btn btn-primary auto" id="mathSubmit">Submit answer</button>
+        <button class="btn btn-ghost auto" id="mathSkip">New question</button>
+      </div>
+      <div id="mathResult" style="margin-top:12px"></div>
+    </div>`;
+  const input = document.getElementById('mathAns');
+  const submit = document.getElementById('mathSubmit');
+  const doSubmit = async () => {
+    const answer = input.value.trim();
+    if (!answer) return toast('Enter your answer first', 'error');
+    submit.disabled = true; submit.textContent = 'Checking…';
+    const { ok, data } = await api('/api/math/task/' + t.id + '/submit', { answer });
+    if (!ok) { submit.disabled = false; submit.textContent = 'Submit answer'; return toast(data.error || 'Could not submit', 'error'); }
+    const pass = data.result === 'CORRECT';
+    document.getElementById('mathResult').innerHTML = `<span class="st ${pass ? 'approved' : 'rejected'}">${pass ? '✓ Correct' : '✗ Incorrect'}</span>`;
+    input.disabled = true; submit.style.display = 'none';
+  };
+  submit.addEventListener('click', doSubmit);
+  input.addEventListener('keydown', (e) => { if (e.key === 'Enter') doSubmit(); });
+  document.getElementById('mathSkip').addEventListener('click', loadMathTask);
 }
 
 // Per-type proof field + a short hint describing exactly what's expected.

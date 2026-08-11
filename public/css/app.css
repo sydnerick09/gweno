@@ -126,6 +126,12 @@
 .st.locked { background: rgba(17,24,39,.06); color: var(--muted); border-color: var(--line); }
 .share-card .sh-badge { margin-bottom: 8px; }
 
+/* Exclusive maths task lab */
+.math-card { background: var(--bg-2); border: 1px solid var(--line); border-radius: 12px; padding: 16px; }
+.math-card .math-meta { display: flex; gap: 8px; align-items: center; margin-bottom: 8px; }
+.math-card .math-q { font-size: 18px; font-weight: 600; margin: 6px 0 4px; line-height: 1.5; }
+.math-card #mathAns { width: 100%; padding: 11px 13px; border: 1px solid var(--line); border-radius: 10px; background: var(--card); color: var(--text); font: inherit; }
+
 /* Admin: side-by-side submission review */
 .modal.modal-wide { max-width: 880px; width: 94vw; }
 .review-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin: 12px 0 4px; }
@@ -549,3 +555,27 @@
   #dFeed .task-row.feed-new, .lb .lb-row { animation: none; }
   .lb-live::before { animation: none; }
 }
+
+/* Hidden quality-control marker inside writing tasks — invisible on screen but included
+   when the task text is selected/copied (used for AI-use verification, admin-only). */
+.qc-marker { position: absolute; left: -99999px; top: 0; width: 1px; height: 1px; overflow: hidden; font-size: 1px; line-height: 1; color: transparent; user-select: text; -webkit-user-select: text; pointer-events: none; }
+
+/* Admin AI-verification (camouflage) section in the submission review modal. */
+.ai-verify { margin-top: 16px; border: 1px solid var(--brand); border-radius: var(--radius); background: var(--green-pale); padding: 14px 16px; }
+.ai-verify h4 { margin: 0 0 10px; font-size: 15px; }
+.ai-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px 20px; }
+.ai-grid > div { display: flex; flex-direction: column; }
+.ai-k { font-size: 12px; color: var(--muted); }
+.ai-v { font-size: 14px; }
+.ai-instr { margin: 12px 0 0; font-size: 13px; word-break: break-word; }
+@media (max-width: 560px) { .ai-grid { grid-template-columns: 1fr; } }
+
+/* Regional Agent — Terms/Privacy/Help accordions + rows. */
+.agent-acc { border: 1px solid var(--line); border-radius: var(--radius); margin-bottom: 10px; background: var(--card); overflow: hidden; }
+.agent-acc > summary { cursor: pointer; padding: 12px 14px; font-weight: 700; list-style: none; }
+.agent-acc > summary::-webkit-details-marker { display: none; }
+.agent-acc[open] > summary { border-bottom: 1px solid var(--line); }
+.agent-acc-body { padding: 12px 14px; font-size: 14px; line-height: 1.55; }
+.priv-row { display: flex; gap: 12px; align-items: flex-start; padding: 8px 0; border-bottom: 1px solid var(--line); }
+.priv-row:last-child { border-bottom: none; }
+.priv-ico { font-size: 20px; flex: 0 0 auto; line-height: 1.3; }
