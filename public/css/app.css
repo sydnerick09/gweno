@@ -146,6 +146,9 @@
 .review-ack input { margin-top: 3px; }
 .review-actions { display: flex; gap: 8px; flex-wrap: wrap; }
 @media (max-width: 640px) { .review-grid { grid-template-columns: 1fr; } }
+.ai-manual { margin-top: 14px; }
+.ev-item { display: flex; gap: 10px; align-items: flex-start; justify-content: space-between; background: var(--card); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; margin-bottom: 6px; font-size: 13.5px; }
+.ev-item .btn { flex: none; }
 
 /* Task list rows */
 .task-row { display: flex; align-items: center; gap: 14px; padding: 14px 0; border-bottom: 1px solid var(--line); }

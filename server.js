@@ -2071,6 +2071,47 @@ app.post('/api/admin/submissions/:id/decision', requireAdminSession, async (req,
   res.json({ ok: true, submission: sub, email: { status: emailRec.status, error: emailRec.error } });
 });
 
+// Manual AI review / override — an INTERNAL admin record stored SEPARATELY from the
+// original submission. It never modifies sub.proof (immutable original), never changes
+// the payment decision, and never notifies the client. Distinguishes a manual flag from
+// the automatic detector result (which is preserved, not fabricated).
+const AI_MANUAL_STATUSES = ['Not detected', 'Suspicious', 'AI detected — manual review', 'Clear / Human-written', 'Needs further review'];
+app.post('/api/admin/submissions/:id/ai-review', requireAdminSession, (req, res) => {
+  const actor = actorName(req);
+  const sub = db.get().submissions.find((x) => x.id === req.params.id);
+  if (!sub) return res.status(404).json({ error: 'Submission not found.' });
+  const manualStatus = String(req.body.manualStatus || '').trim();
+  if (!AI_MANUAL_STATUSES.includes(manualStatus)) return res.status(400).json({ error: 'Choose a valid manual review status.' });
+  const notes = String(req.body.reviewerNotes || '').trim().slice(0, 4000);
+  const rawEv = Array.isArray(req.body.evidence) ? req.body.evidence : [];
+  const evidence = rawEv.slice(0, 50).map((e) => ({
+    id: rid(6),
+    text: String((e && e.text) || '').slice(0, 4000),
+    reason: String((e && e.reason) || '').slice(0, 120),
+    customReason: String((e && e.customReason) || '').slice(0, 300),
+    reviewer: actor,
+    at: new Date().toISOString(),
+    status: manualStatus,
+  })).filter((e) => e.text);
+  // The REAL automatic detector result (camouflage-based); never faked. Absent => 'Not detected'.
+  const automaticResult = (sub.camouflage && sub.camouflage.detection) ? sub.camouflage.detection : 'Not detected';
+  // Store the review SEPARATELY — the original submission (sub.proof) is left untouched.
+  sub.aiReview = {
+    automaticResult,                 // automatic_ai_result (preserved, not fabricated)
+    manualStatus,                    // manual_review_status (administrator's decision)
+    flaggedBy: 'administrator',      // distinguishes "Manually flagged" from "Automatically detected"
+    evidence,                        // evidence_entries (each: text, reason, reviewer, at, status)
+    reviewerNotes: notes,            // reviewer_notes
+    reviewedBy: actor,               // reviewed_by
+    reviewedAt: new Date().toISOString(), // reviewed_at
+    clientNotified: false,           // client_notified — internal review never notifies the client
+  };
+  audit('ai_manual_review', { admin: actor, submissionId: sub.id, taskId: sub.taskId, userId: sub.userId,
+    automaticResult, manualStatus, evidenceCount: evidence.length, clientNotified: false });
+  db.save();
+  res.json({ ok: true, aiReview: sub.aiReview });
+});
+
 // Audit log of outgoing decision emails (with resend).
 app.get('/api/admin/emails', requireAdminSession, (req, res) => {
   const log = (db.get().emailLog || []).map((e) => {

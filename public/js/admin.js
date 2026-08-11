@@ -324,6 +324,33 @@ function openReviewSubmission(sm) {
       <p class="ai-instr"><span class="ai-k">Camouflage instruction:</span> ${esc(cam.instruction)}</p>
       <p class="p-sub" style="margin:8px 0 0">Advisory AI-use signal only — it never auto-approves or rejects. Use your judgement and make the final decision below.</p>
     </div>` : '<p class="p-sub" style="margin:10px 0 0">AI verification does not apply to this task type.</p>';
+
+  // Manual AI review — an internal record kept SEPARATELY from the original submission.
+  const AI_STATUSES = ['Not detected', 'Suspicious', 'AI detected — manual review', 'Clear / Human-written', 'Needs further review'];
+  const AI_REASONS = ['AI-like phrasing', 'Repeated AI patterns', 'Inconsistent writing style', 'Generic/generated response', 'Suspicious formatting', 'Other'];
+  const ar = sm.aiReview || null;
+  const autoDetect = cam ? cam.detection : 'Not detected';
+  let mrEv = ar && Array.isArray(ar.evidence) ? ar.evidence.map((e) => ({ text: e.text, reason: e.reason, customReason: e.customReason })) : [];
+  const manualSection = `
+    <div class="ai-verify ai-manual">
+      <h4>🔍 Manual AI Review <span class="p-sub" style="font-weight:400">— internal record · never sent to the client</span></h4>
+      <div class="ai-grid">
+        <div><span class="ai-k">Automatic detection</span><span class="ai-v">${esc(autoDetect)}</span></div>
+        <div><span class="ai-k">Current manual review</span><span class="ai-v">${ar ? esc(ar.manualStatus) + ` <span class="p-sub">(by ${esc(ar.reviewedBy || 'admin')})</span>` : '—'}</span></div>
+      </div>
+      <div class="field"><label>Review for AI</label>
+        <select id="mrStatus" style="${inputStyle};width:100%">${AI_STATUSES.map((s) => `<option ${ar && ar.manualStatus === s ? 'selected' : ''}>${esc(s)}</option>`).join('')}</select></div>
+      <div id="mrEvidenceWrap" style="display:none">
+        <p class="review-label">Selected evidence — the exact passages that caused concern</p>
+        <div id="mrEvList"></div>
+        <div class="field"><label>Evidence / selected text</label><textarea id="mrEvText" rows="3" style="${inputStyle};width:100%" placeholder="Paste the specific portion of the client's submission that looks AI-generated…"></textarea></div>
+        <div class="field"><label>Reason for flag</label><select id="mrEvReason" style="${inputStyle};width:100%">${AI_REASONS.map((r) => `<option>${esc(r)}</option>`).join('')}</select></div>
+        <div class="field" id="mrCustomWrap" style="display:none"><label>Custom reason</label><input id="mrEvCustom" style="${inputStyle};width:100%"></div>
+        <button class="btn btn-ghost auto" type="button" id="mrAddEv">+ Add correction / evidence</button>
+      </div>
+      <div class="field" style="margin-top:10px"><label>Reviewer notes (optional)</label><textarea id="mrNotes" rows="2" style="${inputStyle};width:100%" placeholder="Internal reviewer notes…">${ar ? esc(ar.reviewerNotes || '') : ''}</textarea></div>
+      <button class="btn btn-primary auto" id="mrSave">Save AI review</button>
+    </div>`;
   const bg = adminModal(`
     <button class="close">×</button>
     <h3>Review submission</h3>
@@ -346,6 +373,7 @@ function openReviewSubmission(sm) {
       </div>
     </div>
     ${camSection}
+    ${manualSection}
     <label class="review-ack"><input type="checkbox" id="revAck"> I have reviewed the full task and the user's response, and the answer is relevant and complete.</label>
     <div class="review-actions">
       ${sm.status !== 'approved' ? `<button class="btn btn-primary" id="revApprove" disabled>Approve &amp; pay ${usd(sm.reward)}</button>` : ''}
@@ -358,6 +386,37 @@ function openReviewSubmission(sm) {
   if (approveBtn) approveBtn.addEventListener('click', () => { if (!ack.checked) return; bg.remove(); decideSubmission(sm.id, 'approved'); });
   const rej = bg.querySelector('#revReject'); if (rej) rej.addEventListener('click', () => { bg.remove(); decideSubmission(sm.id, 'rejected'); });
   const corr = bg.querySelector('#revCorrect'); if (corr) corr.addEventListener('click', () => { bg.remove(); openCorrection(sm.id); });
+
+  // ---- Manual AI review wiring ----
+  const mrStatus = bg.querySelector('#mrStatus');
+  const mrWrap = bg.querySelector('#mrEvidenceWrap');
+  const mrList = bg.querySelector('#mrEvList');
+  const mrReason = bg.querySelector('#mrEvReason');
+  const mrCustomWrap = bg.querySelector('#mrCustomWrap');
+  const renderEv = () => {
+    mrList.innerHTML = mrEv.length
+      ? mrEv.map((ev, i) => `<div class="ev-item"><div><b>${esc(ev.reason || '')}${ev.customReason ? ': ' + esc(ev.customReason) : ''}</b><br><span class="p-sub">${esc(ev.text)}</span></div><button class="btn btn-ghost auto ev-rm" data-i="${i}" type="button">Remove</button></div>`).join('')
+      : '<p class="p-sub">No evidence added yet.</p>';
+    mrList.querySelectorAll('.ev-rm').forEach((b) => b.addEventListener('click', () => { mrEv.splice(Number(b.dataset.i), 1); renderEv(); }));
+  };
+  const syncMr = () => { mrWrap.style.display = mrStatus.value === 'AI detected — manual review' ? 'block' : 'none'; };
+  mrStatus.addEventListener('change', syncMr); syncMr(); renderEv();
+  mrReason.addEventListener('change', () => { mrCustomWrap.style.display = mrReason.value === 'Other' ? 'block' : 'none'; });
+  bg.querySelector('#mrAddEv').addEventListener('click', () => {
+    const text = bg.querySelector('#mrEvText').value.trim();
+    if (!text) return toast('Paste the evidence text first', 'error');
+    mrEv.push({ text, reason: mrReason.value, customReason: mrReason.value === 'Other' ? bg.querySelector('#mrEvCustom').value.trim() : '' });
+    bg.querySelector('#mrEvText').value = ''; bg.querySelector('#mrEvCustom').value = ''; renderEv();
+  });
+  bg.querySelector('#mrSave').addEventListener('click', async (e) => {
+    const btn = e.currentTarget; btn.disabled = true;
+    const body = { manualStatus: mrStatus.value, reviewerNotes: bg.querySelector('#mrNotes').value.trim(),
+      evidence: mrStatus.value === 'AI detected — manual review' ? mrEv : [] };
+    const { ok, data } = await api('/api/admin/submissions/' + sm.id + '/ai-review', body);
+    if (!ok) { btn.disabled = false; return toast(data.error || 'Failed', 'error'); }
+    toast('AI review saved — internal record, client not notified', 'ok');
+    bg.remove(); tSubmissions();
+  });
 }
 
 // The "Reason for Correction" is composed by the admin and emailed to the member.
