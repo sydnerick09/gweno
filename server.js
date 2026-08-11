@@ -290,7 +290,10 @@ app.use(async (req, res, next) => {
   S.shareSubmissions = S.shareSubmissions || []; // Share & Earn (social sharing) proofs
   S.quizSubmissions = S.quizSubmissions || [];   // questionnaire submissions (auto-scored, admin-approved)
   S.transactions = S.transactions || [];         // lightweight earnings ledger
-  S.mathTasks = S.mathTasks || [];               // Exclusive-plan maths tasks (canonical answer kept server-side only)
+  S.mathTasks = S.mathTasks || [];               // Exclusive-plan maths task submissions (canonical answer kept server-side only)
+  S.mathCatalog = S.mathCatalog || [];           // Exclusive-plan maths task cards (marketplace catalog)
+  S.settings = S.settings || {};                 // admin-configurable settings
+  S.settings.mathReward = S.settings.mathReward || { min: 14, max: 23 }; // Exclusive maths reward range (USD)
 })();
 
 // One-time backfill: award XP/badges/levels for activity that happened before the
@@ -1749,6 +1752,11 @@ app.get('/api/tasks', requireAuth, (req, res) => {
       if (ft) { available = [{ ...ft, requiredPlan: 'Free', locked: false, workers: taskWorkers(ft.id) }, ...available]; free = { active: true, state: 'available', reward: 0.40 }; }
       else { free = { active: true, state: 'completed', reward: 0.40 }; }
     }
+  }
+  // Exclusive Plan maths tasks appear as cards in the SAME marketplace, gated server-side:
+  // only eligible (non-held, non-agent) Executive members receive them.
+  if (!req.user.held && !req.user.isAgent && isExclusive(req.user)) {
+    available = [...mathCardsFor(req.user), ...available];
   }
   const accessible = available.filter((t) => !t.locked);
   const pending = mine.filter((x) => x.status === 'pending').reduce((a, x) => a + x.reward, 0);
@@ -4145,11 +4153,81 @@ app.post('/api/admin/questionnaires/:id/decision', requireAdminSession, (req, re
 //  clientAnswer. An AI model can solve the question independently for comparison.
 // =============================================================================
 function isExclusive(u) { const p = activePlan(u); return !!(p && p.id === 'executive'); }
-// Never leak the canonical answer to the client.
-function publicMath(t) {
-  return { id: t.id, category: t.category, difficulty: t.difficulty, question: t.question,
-    instructions: t.instructions, status: t.status, clientAnswer: t.clientAnswer || null,
-    clientStatus: t.clientStatus || null, createdAt: t.createdAt, submittedAt: t.submittedAt || null };
+
+// ---- Exclusive maths CATALOG (marketplace cards) ----------------------------
+// A catalog card is a reusable maths task shown in the Task Marketplace to eligible
+// Exclusive-plan members. Canonical answers live on the card SERVER-SIDE ONLY and are
+// never sent to the client. Cards are auto-generated to keep the marketplace stocked and
+// can also be created / edited / activated / deactivated by an admin.
+const MATH_TARGET = 12; // keep at least this many active cards available
+const MATH_HARD_MIN = 14, MATH_HARD_MAX = 23; // product rule: rewards are $14–$23
+const DEFAULT_MATH_INSTR = 'Solve the problem and enter your final answer (e.g. "x = 5" or a number). You may show your working in the optional field.';
+const MATH_TITLES = {
+  'Arithmetic': 'Arithmetic evaluation', 'Percentages': 'Percentage problem', 'Ratios': 'Ratio problem',
+  'Linear equations': 'Solve the linear equation', 'Simultaneous equations': 'Solve the simultaneous equations',
+  'Quadratic equations': 'Solve the quadratic equation', 'Sequences and series': 'Sequence & series problem',
+  'Logarithms and exponents': 'Logarithms & exponents', 'Statistics': 'Statistics problem', 'Probability': 'Probability problem',
+  'Geometry': 'Geometry problem', 'Trigonometry': 'Trigonometry problem', 'Functions': 'Evaluate the function',
+  'Differentiation': 'Differentiation problem', 'Integration': 'Evaluate the integral', 'Limits': 'Evaluate the limit',
+  'Optimization': 'Optimization problem', 'Word problems': 'Mathematics word problem',
+};
+function mathTitleFor(cat) { return MATH_TITLES[cat] || (cat + ' problem'); }
+// Reward range: admin-configurable but always clamped to the product range $14–$23.
+function mathRewardRange() {
+  const s = (db.get().settings && db.get().settings.mathReward) || {};
+  let min = Number.isFinite(s.min) ? Math.round(s.min) : 14;
+  let max = Number.isFinite(s.max) ? Math.round(s.max) : 23;
+  min = Math.max(MATH_HARD_MIN, Math.min(MATH_HARD_MAX, min));
+  max = Math.max(min, Math.min(MATH_HARD_MAX, max));
+  return { min, max };
+}
+function mathReward() { const { min, max } = mathRewardRange(); return Math.floor(Math.random() * (max - min + 1)) + min; }
+// Validate an admin-entered reward: whole dollars within the hard $14–$23 range.
+function validMathReward(r) { const n = Math.round(Number(r)); return Number.isFinite(n) && n >= MATH_HARD_MIN && n <= MATH_HARD_MAX ? n : null; }
+function mathEstMinutes(difficulty) { const adv = String(difficulty).toLowerCase() === 'advanced'; return adv ? (12 + Math.floor(Math.random() * 9)) : (6 + Math.floor(Math.random() * 7)); }
+// Build a catalog card from a generated problem (or admin input).
+function makeMathCard(g, opts = {}) {
+  const difficulty = g.difficulty || 'Intermediate';
+  return {
+    id: 'MC' + rid(6),
+    category: g.category, difficulty,
+    title: g.title || mathTitleFor(g.category),
+    question: g.question, instructions: g.instructions || DEFAULT_MATH_INSTR,
+    canonical: g.canonical, verifyMethod: g.verifyMethod || 'numeric',   // A. Canonical Answer — server-only
+    reward: opts.reward != null ? opts.reward : mathReward(),
+    estMinutes: opts.estMinutes != null ? opts.estMinutes : mathEstMinutes(difficulty),
+    active: opts.active !== false, source: opts.source || 'auto',
+    createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+  };
+}
+// Keep the marketplace stocked: top up to MATH_TARGET active cards with fresh generated ones.
+function ensureMathCatalog() {
+  const S = db.get(); S.mathCatalog = S.mathCatalog || [];
+  let changed = false;
+  for (let n = S.mathCatalog.filter((c) => c.active).length; n < MATH_TARGET; n++) {
+    S.mathCatalog.unshift(makeMathCard(mathMod.generate(), { source: 'auto' }));
+    changed = true;
+  }
+  if (S.mathCatalog.length > 500) S.mathCatalog.length = 500;
+  if (changed) db.save();
+  return S.mathCatalog;
+}
+// Public card shape for the marketplace — NEVER includes canonical / verifyMethod.
+function mathCardPublic(c) {
+  return {
+    id: c.id, kind: 'math', exclusive: true,
+    title: c.title, category: c.category, tier: 'executive', requiredPlan: 'Exclusive Plan',
+    difficulty: c.difficulty, description: c.question, question: c.question,
+    instructions: c.instructions, reward: c.reward, estMinutes: c.estMinutes,
+    icon: '➗', locked: false, workers: taskWorkers(c.id), skills: [c.category],
+  };
+}
+// Cards an Exclusive member can still attempt (active, not already submitted / approved).
+function mathCardsFor(user) {
+  ensureMathCatalog();
+  const S = db.get();
+  const done = new Set((S.mathTasks || []).filter((x) => x.userId === user.id && x.catalogId && x.reviewStatus !== 'rejected').map((x) => x.catalogId));
+  return S.mathCatalog.filter((c) => c.active && !done.has(c.id)).map(mathCardPublic);
 }
 
 // Independently solve a maths question with an AI model (Anthropic Messages API). Fully
@@ -4200,71 +4278,274 @@ async function runAiEval(t) {
   t.aiEvaluatedAt = new Date().toISOString();
 }
 
-// Generate a new maths task for an Exclusive-plan member (canonical stored, not returned).
-app.get('/api/math/task', requireAuth, (req, res) => {
-  if (!isExclusive(req.user)) return res.status(403).json({ error: 'The mathematics task lab is available on the Exclusive Plan.', code: 'exclusive_only' });
-  const g = mathMod.generate();
-  const t = {
-    id: 'MX' + rid(7), userId: req.user.id,
-    category: g.category, difficulty: g.difficulty, question: g.question, instructions: g.instructions,
-    canonical: g.canonical, verifyMethod: g.verifyMethod,   // A. Canonical Answer — server-only
-    aiAnswer: null, aiStatus: 'NEEDS_REVIEW', aiReasoning: null, aiConfidence: null, aiAmbiguities: null, aiRaw: null, aiEvaluatedAt: null,
-    clientAnswer: null, clientStatus: null, verification: null,
-    status: 'generated', createdAt: new Date().toISOString(), submittedAt: null,
-  };
-  const S = db.get(); S.mathTasks = S.mathTasks || []; S.mathTasks.unshift(t);
-  if (S.mathTasks.length > 5000) S.mathTasks.length = 5000;
-  db.save();
-  res.json({ task: publicMath(t) });   // sanitized — no canonical answer
-});
+// Compute AI-use SIGNALS (indicators only — never proof, never auto-decide) and the
+// separate working-vs-answer verification. Also sets t.workingStatus and t.solveMs.
+function computeMathSignals(t, elapsedMs) {
+  const sig = [];
+  const add = (key, label, level) => sig.push({ key, label, level });
+  const nearv = (a, b) => Math.abs(a - b) <= 1e-3 || (Math.abs(b) > 1 && Math.abs(a - b) / Math.abs(b) <= 1e-3);
 
-// Client submits their answer — auto-graded against the canonical answer (server-side).
+  // Timing (client-reported elapsed time; treated only as a soft signal).
+  if (Number.isFinite(elapsedMs) && elapsedMs >= 0) {
+    t.solveMs = Math.round(elapsedMs);
+    const fast = t.difficulty === 'Advanced' ? 12000 : 8000;
+    if (elapsedMs < fast) add('fast_submission', `Submitted unusually quickly (~${Math.max(1, Math.round(elapsedMs / 1000))}s)`, 'medium');
+  }
+
+  // AI-style formatting in the answer / working.
+  const styleScore = mathMod.aiStyleScore((t.working || '') + '\n' + (t.clientAnswer || ''));
+  if (styleScore >= 3) add('ai_style_formatting', `Response contains AI-style formatting (${styleScore} markers)`, 'medium');
+  else if (styleScore === 2) add('ai_style_formatting', 'Some AI-style phrasing', 'low');
+
+  // Separate verification of the working vs the final answer and the canonical answer.
+  if (t.working) {
+    const wf = mathMod.workingFinalValue(t.working);
+    const ansNums = mathMod.extractNumbers(t.clientAnswer || '');
+    const canonNums = mathMod.extractNumbers(t.canonical || '');
+    if (wf != null && ansNums.length && !nearv(wf, ansNums[ansNums.length - 1])) {
+      t.workingStatus = 'INCONSISTENT';
+      add('working_conflicts_answer', 'Client answer conflicts with their demonstrated working', 'high');
+    } else if (wf != null && canonNums.length) {
+      const workingCorrect = nearv(wf, canonNums[0]);
+      t.workingStatus = workingCorrect ? 'CONSISTENT' : 'INCORRECT_WORKING';
+      if (!workingCorrect && t.clientStatus === 'CORRECT') add('incorrect_working_correct_answer', "Working contains an incorrect step but the final answer is correct", 'high');
+    } else { t.workingStatus = 'UNVERIFIABLE'; }
+  } else {
+    t.workingStatus = 'NOT_PROVIDED';
+    add('no_working', 'No working shown', 'low');
+  }
+
+  // Similarity to the AI solution (only meaningful once the AI has run).
+  if (t.aiAnswer) {
+    const norm = (s) => String(s || '').toLowerCase().replace(/\s+/g, '');
+    if (t.clientAnswer && norm(t.clientAnswer) === norm(t.aiAnswer)) add('matches_ai_answer', 'Answer is character-identical to the AI answer', 'low');
+    if (t.working && t.aiReasoning && mathMod.tokenOverlap(t.working, t.aiReasoning) >= 0.55) add('matches_ai_working', 'Working substantially matches the AI-generated solution', 'high');
+  }
+  t.signals = sig;
+}
+
+// Client opens an Exclusive maths card from the marketplace, then submits their answer.
+// `:id` is the CATALOG card id. Auto-graded against the canonical answer (server-side);
+// the reward is credited only when an admin approves the submission (review workflow).
 app.post('/api/math/task/:id/submit', requireAuth, rateLimit('math', 40, 60 * 1000), async (req, res) => {
-  const t = (db.get().mathTasks || []).find((x) => x.id === req.params.id && x.userId === req.user.id);
-  if (!t) return res.status(404).json({ error: 'Task not found.' });
-  if (t.status === 'submitted') return res.status(409).json({ error: 'You have already submitted this task.', result: t.clientStatus });
+  if (!isExclusive(req.user)) return res.status(403).json({ error: 'Exclusive Plan mathematics tasks are available on the Exclusive Plan.', code: 'exclusive_only' });
+  if (req.user.isAgent) return res.status(403).json({ error: AGENT_TASK_MSG, code: 'agent' });
+  if (req.user.held) return res.status(403).json({ error: 'Your account is on hold. Task submissions are paused until an admin restores your account.' });
+  const S = db.get();
+  const card = (S.mathCatalog || []).find((c) => c.id === req.params.id);
+  if (!card || !card.active) return res.status(404).json({ error: 'Task not found.' });
+  if ((S.mathTasks || []).some((x) => x.userId === req.user.id && x.catalogId === card.id && x.reviewStatus !== 'rejected')) {
+    return res.status(409).json({ error: 'You have already submitted this task.' });
+  }
   const answer = String(req.body.answer == null ? '' : req.body.answer).trim();
   if (!answer) return res.status(400).json({ error: 'Please enter your answer.' });
+  const working = String(req.body.working == null ? '' : req.body.working).trim().slice(0, 4000);
 
-  t.clientAnswer = answer;                                   // C. Client Submission — separate field
-  t.clientStatus = mathMod.grade(t.canonical, answer, t.verifyMethod); // CORRECT | INCORRECT
-  t.status = 'submitted';
-  t.submittedAt = new Date().toISOString();
+  const t = {
+    id: 'MX' + rid(7), catalogId: card.id, userId: req.user.id,
+    username: req.user.username || req.user.name || 'User',
+    category: card.category, difficulty: card.difficulty, question: card.question, instructions: card.instructions,
+    canonical: card.canonical, verifyMethod: card.verifyMethod,   // A. Canonical — server-only
+    reward: card.reward, working,
+    aiAnswer: null, aiStatus: 'NEEDS_REVIEW', aiReasoning: null, aiConfidence: null, aiAmbiguities: null, aiRaw: null, aiEvaluatedAt: null,
+    clientAnswer: answer,                                         // C. Client Submission — separate field
+    clientStatus: mathMod.grade(card.canonical, answer, card.verifyMethod), // CORRECT | INCORRECT
+    verification: null,
+    reviewStatus: 'pending', reviewNote: '', reviewedAt: null, reviewedBy: null, // D. Admin review status
+    status: 'submitted', createdAt: new Date().toISOString(), submittedAt: new Date().toISOString(),
+  };
   t.verification = t.clientStatus === 'CORRECT' ? 'PASSED' : 'FAILED';
+  const elapsedMs = Number(req.body.elapsedMs);
+  computeMathSignals(t, elapsedMs);                    // working verification + suspicion signals
+  S.mathTasks = S.mathTasks || []; S.mathTasks.unshift(t);
+  if (S.mathTasks.length > 5000) S.mathTasks.length = 5000;
+  audit('math_submitted', { userId: req.user.id, catalogId: card.id, submissionId: t.id, reward: card.reward, result: t.clientStatus });
   db.save();
 
-  // Independently solve with the AI (best-effort) so the admin gets AI-vs-canonical too.
-  if (process.env.ANTHROPIC_API_KEY) { try { await runAiEval(t); db.save(); } catch (_) {} }
+  // Independently solve with the AI (best-effort) so the admin gets AI-vs-canonical too,
+  // then recompute the signals now that the AI answer/reasoning are available.
+  if (process.env.ANTHROPIC_API_KEY) { try { await runAiEval(t); computeMathSignals(t, t.solveMs); db.save(); } catch (_) {} }
 
-  // Return ONLY the client's own result — never the canonical answer.
-  res.json({ ok: true, result: t.clientStatus, verification: t.verification });
+  // Never reveal the canonical answer. It goes to the review workflow; reward pays on approval.
+  res.status(201).json({ ok: true, message: 'Submitted for review. Your reward is credited once an admin approves it.' });
 });
 
-// ---- Admin: Exclusive Task Verification (full three-answer visibility) ----
+// =============================================================================
+//  ADMIN — Exclusive maths: catalog management + submission verification/review.
+// =============================================================================
+// Full visibility of the catalog (with canonical answers) and every submission
+// (Question → Canonical → AI → Client → Verification → Admin review).
 app.get('/api/admin/math', requireAdminSession, (req, res) => {
-  const all = (db.get().mathTasks || []).map((t) => {
+  ensureMathCatalog();
+  const S = db.get();
+  const catalog = (S.mathCatalog || []).slice().sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)));
+  const submissions = (S.mathTasks || []).filter((t) => t.catalogId).map((t) => {
     const u = userById(t.userId);
-    return {
-      id: t.id, category: t.category, difficulty: t.difficulty, question: t.question,
-      canonical: t.canonical, aiAnswer: t.aiAnswer, clientAnswer: t.clientAnswer,
-      aiStatus: t.aiStatus, clientStatus: t.clientStatus, verification: t.verification,
-      aiReasoning: t.aiReasoning, aiConfidence: t.aiConfidence, aiAmbiguities: t.aiAmbiguities,
-      aiRaw: t.aiRaw, aiError: t.aiError || null, aiEvaluatedAt: t.aiEvaluatedAt || null,
-      status: t.status, createdAt: t.createdAt, submittedAt: t.submittedAt,
-      user: u ? { username: u.username, email: u.email } : null,
-    };
+    return { ...t, user: u ? { username: u.username, email: u.email } : { username: t.username || 'User', email: null } };
   }).sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)));
-  res.json({ tasks: all, aiConfigured: !!process.env.ANTHROPIC_API_KEY });
+  res.json({
+    catalog, submissions, aiConfigured: !!process.env.ANTHROPIC_API_KEY,
+    rewardRange: mathRewardRange(),
+    categories: mathMod.CATEGORIES, difficulties: ['Intermediate', 'Advanced'], methods: ['numeric', 'set', 'expression'],
+  });
 });
 
-// Admin runs / re-runs the AI evaluation for a task on demand.
+// Admin: generate a task variation (unsaved DRAFT) for preview — includes the canonical.
+app.post('/api/admin/math/generate', requireAdminSession, (req, res) => {
+  const cat = String((req.body && req.body.category) || '').trim() || undefined;
+  const g = mathMod.generate(cat);
+  res.json({ draft: {
+    category: g.category, difficulty: g.difficulty, title: mathTitleFor(g.category),
+    question: g.question, instructions: g.instructions || DEFAULT_MATH_INSTR,
+    canonical: g.canonical, verifyMethod: g.verifyMethod || 'numeric',
+    reward: mathReward(), estMinutes: mathEstMinutes(g.difficulty),
+  } });
+});
+
+// Admin: create a maths task card.
+app.post('/api/admin/math/catalog', requireAdminSession, (req, res) => {
+  const b = req.body || {};
+  const category = String(b.category || '').trim();
+  const difficulty = ['Intermediate', 'Advanced'].includes(String(b.difficulty)) ? String(b.difficulty) : 'Intermediate';
+  const question = String(b.question || '').trim();
+  const canonical = String(b.canonical || '').trim();
+  const verifyMethod = ['numeric', 'set', 'expression'].includes(String(b.verifyMethod)) ? String(b.verifyMethod) : 'numeric';
+  const title = String(b.title || '').trim() || mathTitleFor(category);
+  const instructions = String(b.instructions || '').trim() || DEFAULT_MATH_INSTR;
+  const reward = validMathReward(b.reward);
+  if (!category) return res.status(400).json({ error: 'Choose a mathematics category.' });
+  if (!question) return res.status(400).json({ error: 'Enter the question.' });
+  if (!canonical) return res.status(400).json({ error: 'Enter the canonical answer.' });
+  if (reward == null) return res.status(400).json({ error: `Reward must be between $${MATH_HARD_MIN} and $${MATH_HARD_MAX}.` });
+  const S = db.get(); S.mathCatalog = S.mathCatalog || [];
+  const card = {
+    id: 'MC' + rid(6), category, difficulty, title, question, instructions, canonical, verifyMethod,
+    reward, estMinutes: Number.isFinite(+b.estMinutes) && +b.estMinutes > 0 ? Math.round(+b.estMinutes) : mathEstMinutes(difficulty),
+    active: b.active !== false, source: 'admin', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+  };
+  S.mathCatalog.unshift(card);
+  audit('math_card_create', { admin: actorName(req), cardId: card.id, category, reward });
+  db.save();
+  res.status(201).json({ ok: true, card });
+});
+
+// Admin: edit a maths task card (partial update).
+app.post('/api/admin/math/catalog/:id', requireAdminSession, (req, res) => {
+  const card = (db.get().mathCatalog || []).find((c) => c.id === req.params.id);
+  if (!card) return res.status(404).json({ error: 'Task card not found.' });
+  const b = req.body || {};
+  if (b.category != null && String(b.category).trim()) card.category = String(b.category).trim();
+  if (b.difficulty != null && ['Intermediate', 'Advanced'].includes(String(b.difficulty))) card.difficulty = String(b.difficulty);
+  if (b.title != null) card.title = String(b.title).trim() || mathTitleFor(card.category);
+  if (b.question != null && String(b.question).trim()) card.question = String(b.question).trim();
+  if (b.instructions != null) card.instructions = String(b.instructions).trim() || DEFAULT_MATH_INSTR;
+  if (b.canonical != null && String(b.canonical).trim()) card.canonical = String(b.canonical).trim();
+  if (b.verifyMethod != null && ['numeric', 'set', 'expression'].includes(String(b.verifyMethod))) card.verifyMethod = String(b.verifyMethod);
+  if (b.reward != null) { const r = validMathReward(b.reward); if (r == null) return res.status(400).json({ error: `Reward must be between $${MATH_HARD_MIN} and $${MATH_HARD_MAX}.` }); card.reward = r; }
+  if (b.estMinutes != null && Number.isFinite(+b.estMinutes) && +b.estMinutes > 0) card.estMinutes = Math.round(+b.estMinutes);
+  if (b.active != null) card.active = !!b.active;
+  card.updatedAt = new Date().toISOString();
+  audit('math_card_edit', { admin: actorName(req), cardId: card.id });
+  db.save();
+  res.json({ ok: true, card });
+});
+
+// Admin: activate / deactivate a card.
+app.post('/api/admin/math/catalog/:id/active', requireAdminSession, (req, res) => {
+  const card = (db.get().mathCatalog || []).find((c) => c.id === req.params.id);
+  if (!card) return res.status(404).json({ error: 'Task card not found.' });
+  card.active = !!(req.body && req.body.active);
+  card.updatedAt = new Date().toISOString();
+  audit('math_card_active', { admin: actorName(req), cardId: card.id, active: card.active });
+  db.save();
+  res.json({ ok: true, card });
+});
+
+// Admin: delete a card.
+app.delete('/api/admin/math/catalog/:id', requireAdminSession, (req, res) => {
+  const S = db.get(); S.mathCatalog = S.mathCatalog || [];
+  const i = S.mathCatalog.findIndex((c) => c.id === req.params.id);
+  if (i < 0) return res.status(404).json({ error: 'Task card not found.' });
+  const [removed] = S.mathCatalog.splice(i, 1);
+  audit('math_card_delete', { admin: actorName(req), cardId: removed.id });
+  db.save();
+  res.json({ ok: true });
+});
+
+// Admin: configure the auto-generation reward range (clamped to $14–$23).
+app.post('/api/admin/math/config', requireAdminSession, (req, res) => {
+  const b = req.body || {};
+  const min = Math.round(Number(b.min)), max = Math.round(Number(b.max));
+  if (!Number.isFinite(min) || !Number.isFinite(max)) return res.status(400).json({ error: 'Enter numeric minimum and maximum rewards.' });
+  const S = db.get(); S.settings = S.settings || {};
+  const cMin = Math.max(MATH_HARD_MIN, Math.min(MATH_HARD_MAX, min));
+  const cMax = Math.max(cMin, Math.min(MATH_HARD_MAX, max));
+  S.settings.mathReward = { min: cMin, max: cMax };
+  audit('math_config', { admin: actorName(req), min: cMin, max: cMax });
+  db.save();
+  res.json({ ok: true, rewardRange: { min: cMin, max: cMax } });
+});
+
+// Admin: approve / reject a maths submission. Approval credits the reward (like tasks).
+app.post('/api/admin/math/submissions/:id/decision', requireAdminSession, (req, res) => {
+  const t = (db.get().mathTasks || []).find((x) => x.id === req.params.id);
+  if (!t) return res.status(404).json({ error: 'Submission not found.' });
+  const decision = String(req.body.decision || '');
+  if (!['approved', 'rejected'].includes(decision)) return res.status(400).json({ error: 'Invalid decision.' });
+  const note = String(req.body.note || '').trim();
+  const owner = userById(t.userId);
+  if (owner) ensureUserShape(owner);
+  const was = t.reviewStatus;
+  if (decision === 'approved' && was !== 'approved' && owner) {
+    owner.usd = round2((owner.usd || 0) + (t.reward || 0));      // credit on approval
+    gamify.award(owner, 'task', `math:${t.id}`, { earnedUSD: round2(t.reward || 0), event: { text: `Exclusive maths task approved (+$${round2(t.reward || 0).toFixed(2)})`, icon: '➗' } });
+  }
+  if (decision !== 'approved' && was === 'approved' && owner) {
+    owner.usd = round2(Math.max(0, (owner.usd || 0) - (t.reward || 0))); // reverse a prior approval
+  }
+  t.reviewStatus = decision; t.reviewedAt = new Date().toISOString(); t.reviewedBy = actorName(req); t.reviewNote = note;
+  audit('math_' + decision, { admin: actorName(req), userId: t.userId, submissionId: t.id, catalogId: t.catalogId, amount: decision === 'approved' ? round2(t.reward || 0) : 0 });
+  db.save();
+  res.json({ ok: true, submission: t });
+});
+
+// Admin runs / re-runs the AI evaluation for a submission on demand.
 app.post('/api/admin/math/:id/evaluate', requireAdminSession, async (req, res) => {
   const t = (db.get().mathTasks || []).find((x) => x.id === req.params.id);
-  if (!t) return res.status(404).json({ error: 'Task not found.' });
+  if (!t) return res.status(404).json({ error: 'Submission not found.' });
   if (!process.env.ANTHROPIC_API_KEY) return res.status(503).json({ error: 'AI is not configured. Set ANTHROPIC_API_KEY to enable AI evaluation.' });
   await runAiEval(t);
+  computeMathSignals(t, t.solveMs);   // refresh signals with the AI answer/reasoning
   db.save();
-  res.json({ ok: true, aiAnswer: t.aiAnswer, aiStatus: t.aiStatus, aiReasoning: t.aiReasoning, aiConfidence: t.aiConfidence, aiAmbiguities: t.aiAmbiguities });
+  res.json({ ok: true, aiAnswer: t.aiAnswer, aiStatus: t.aiStatus, aiReasoning: t.aiReasoning, aiConfidence: t.aiConfidence, aiAmbiguities: t.aiAmbiguities, signals: t.signals });
+});
+
+// Admin MANUAL AI review for a maths submission — an internal record kept SEPARATELY from
+// the payment approve/reject decision and from the original submission (never modifies
+// canonical / clientAnswer / working / aiAnswer). No client notification. Audited.
+const MATH_REVIEW_STATUSES = ['AI detected — manual review', 'Suspicious', 'No AI evidence', 'Human solution verified', 'Needs further review'];
+app.post('/api/admin/math/submissions/:id/ai-review', requireAdminSession, (req, res) => {
+  const actor = actorName(req);
+  const t = (db.get().mathTasks || []).find((x) => x.id === req.params.id);
+  if (!t) return res.status(404).json({ error: 'Submission not found.' });
+  const status = String(req.body.status || '').trim();
+  if (!MATH_REVIEW_STATUSES.includes(status)) return res.status(400).json({ error: 'Choose a valid manual review status.' });
+  const notes = String(req.body.notes || '').trim().slice(0, 4000);
+  const rawEv = Array.isArray(req.body.evidence) ? req.body.evidence : [];
+  const evidence = rawEv.slice(0, 50).map((e) => ({
+    id: rid(6), text: String((e && e.text) || '').slice(0, 4000), reason: String((e && e.reason) || '').slice(0, 120),
+    reviewer: actor, at: new Date().toISOString(), status,
+  })).filter((e) => e.text);
+  t.aiReview = {
+    status,                         // manual_review_status (separate from reviewStatus / canonical / AI)
+    flaggedBy: 'administrator',     // distinguishes a manual flag from any automatic result
+    evidence, notes,                // evidence_entries + reviewer_notes
+    reviewedBy: actor, reviewedAt: new Date().toISOString(),
+    clientNotified: false,          // internal record — the client is never notified
+  };
+  audit('math_manual_review', { admin: actor, submissionId: t.id, catalogId: t.catalogId, userId: t.userId, status, evidenceCount: evidence.length, clientNotified: false });
+  db.save();
+  res.json({ ok: true, aiReview: t.aiReview });
 });
 
 // =============================================================================

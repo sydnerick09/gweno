@@ -959,6 +959,9 @@ async function pageTasks() {
         ? `<div class="panel premium-active"><h3 style="margin:0">🎁 Your free task is ready</h3><p class="p-sub" style="margin:4px 0 0">Complete the free task below to earn <b>${usd(data.free.reward || 0.40)}</b>. After it's approved, subscribe to a plan to unlock the full marketplace.</p></div>`
         : '';
   const cats = data.categories || [];      // [{ name, icon }]
+  const hasExclusive = all.some((t) => t.tier === 'executive');   // show an Exclusive tab only when eligible
+  const tierTabs = [['all', 'All'], ['basic', 'Basic'], ['premium', 'Premium'], ['premiumpro', 'Premium Pro']];
+  if (hasExclusive) tierTabs.push(['executive', 'Exclusive']);
   const q = (TASK_STATE.search || '').toLowerCase();
   const filtered = all.filter((t) =>
     (TASK_STATE.tier === 'all' || t.tier === TASK_STATE.tier) &&
@@ -1004,7 +1007,7 @@ async function pageTasks() {
     ${banner}
 
     <div class="tabs" style="margin-top:4px">
-      ${[['all', 'All'], ['basic', 'Basic'], ['premium', 'Premium'], ['premiumpro', 'Premium Pro']].map(([k, l]) => `<button class="tab ${TASK_STATE.tier === k ? 'active' : ''}" data-tier="${k}">${l}</button>`).join('')}
+      ${tierTabs.map(([k, l]) => `<button class="tab ${TASK_STATE.tier === k ? 'active' : ''}" data-tier="${k}">${l}</button>`).join('')}
       <input id="fSearch" value="${esc(TASK_STATE.search)}" placeholder="Search title, category or skill…" class="tab-search">
     </div>
 
@@ -1015,7 +1018,7 @@ async function pageTasks() {
 
     <div class="task-cards">
       ${filtered.length ? filtered.map((t) => `
-        <div class="task-card ${t.locked ? 'locked' : ''}">
+        <div class="task-card ${t.locked ? 'locked' : ''} ${t.exclusive ? 'exclusive' : ''}">
           <div class="tc-top">
             <span class="tc-cat"><span class="tc-ico">${t.icon || '📌'}</span> ${esc(t.category)}</span>
             <span class="tier-badge ${t.tier}">${esc(t.requiredPlan || t.tier)}</span>
@@ -1031,12 +1034,14 @@ async function pageTasks() {
           <div class="tc-bottom">
             <span class="tc-reward">${usd(t.reward)}</span>
             ${meIsAgent()
-              ? `<button class="btn btn-ghost auto open-task" data-id="${t.id}">View only</button>`
+              ? `<button class="btn btn-ghost auto ${t.exclusive ? 'open-math' : 'open-task'}" data-id="${t.id}">View only</button>`
               : t.locked
                 ? `<button class="btn btn-ghost auto sub-lock" data-plan="${t.tier}"><span class="bico">${ICON.lock}</span> Upgrade</button>`
-                : `<button class="btn btn-primary auto open-task" data-id="${t.id}">Start</button>`}
+                : t.exclusive
+                  ? `<button class="btn btn-primary auto open-math" data-id="${t.id}">Open Task</button>`
+                  : `<button class="btn btn-primary auto open-task" data-id="${t.id}">Start</button>`}
           </div>
-          <div style="margin-top:8px"><span class="st ${t.locked ? 'pending' : 'approved'}">${t.locked ? `Locked — needs ${esc(t.requiredPlan || t.tier)}` : 'Available now'}</span></div>
+          <div style="margin-top:8px"><span class="st ${t.locked ? 'pending' : 'approved'}">${t.locked ? `Locked — needs ${esc(t.requiredPlan || t.tier)}` : (t.exclusive ? 'Exclusive Plan · available' : 'Available now')}</span></div>
         </div>`).join('') : `<p class="p-sub">No tasks match your filters. <button class="btn btn-ghost auto" id="clearFilters">Clear filters</button></p>`}
     </div>`;
 
@@ -1052,6 +1057,7 @@ async function pageTasks() {
   const fs = document.getElementById('fSearch');
   if (fs) fs.addEventListener('input', (e) => { TASK_STATE.search = e.target.value; clearTimeout(fs._t); fs._t = setTimeout(pageTasks, 250); });
   view().querySelectorAll('.open-task').forEach((b) => b.addEventListener('click', () => openTask(all.find((t) => t.id === b.dataset.id))));
+  view().querySelectorAll('.open-math').forEach((b) => b.addEventListener('click', () => openMathTask(all.find((t) => t.id === b.dataset.id))));
   view().querySelectorAll('.sub-lock').forEach((b) => b.addEventListener('click', () => openSubscribe(data, b.dataset.plan)));
 }
 
@@ -1125,82 +1131,100 @@ function openSubscribe(data, preselectId) {
   });
 }
 
-// Executive Plan — accessed from the hamburger menu (not shown on the home screen).
+// Executive / Exclusive Plan — accessed from the hamburger menu (not shown on the home
+// screen). This is an INFORMATION page about the plan only. The actual Exclusive maths
+// tasks live in the Task Marketplace (#/tasks) as task cards, not here.
 async function pageExecutive() {
   loading();
   const { data } = await apiGet('/api/subscription');
   const exec = (data.plans || []).find((p) => p.id === 'executive');
   const cur = data.plan;
   const isExec = cur && cur.id === 'executive';
-  if (!exec) { view().innerHTML = `<div class="panel">The Executive Plan is unavailable right now. Please check back soon.</div>`; return; }
+  if (!exec) { view().innerHTML = `<div class="panel">The Exclusive Plan is unavailable right now. Please check back soon.</div>`; return; }
   view().innerHTML = `
-    <p class="page-sub">Our highest tier — unlocks exclusive, top-paying tasks.</p>
+    <p class="page-sub">Our highest tier — unlocks exclusive, top-paying mathematics tasks.</p>
     <div class="panel level-hero">
-      <div class="lh-level">${ICON.star} <span>Executive Plan</span></div>
+      <div class="lh-level">${ICON.star} <span>Exclusive Plan</span></div>
       <div class="lh-sub">${kes(exec.priceKES)} / month · tasks paying ${usd(exec.minUSD)}–${usd(exec.maxUSD)} each</div>
     </div>
+
     <div class="panel">
-      <h3>What you get</h3>
-      <div class="check"><span class="box">✓</span><span>Access to exclusive <b>Executive tasks paying ${usd(exec.minUSD)}–${usd(exec.maxUSD)}</b> each</span></div>
-      <div class="check"><span class="box">✓</span><span><b>No per-cycle task limit</b> — work within the normal daily rules</span></div>
-      <div class="check"><span class="box">✓</span><span>Priority Executive status shown on your profile</span></div>
-      <div class="check"><span class="box">✓</span><span>Buy it directly here — no need to progress through the lower plans first</span></div>
-      <div style="margin-top:16px">
-        ${isExec
-          ? `<p class="pill-note">✅ Your Executive Plan is active${data.expires ? ' until ' + fmtDate(data.expires) : ''}.</p>`
-          : `<button class="btn btn-primary auto" id="execSub">Subscribe for ${kes(exec.priceKES)}</button>`}
-      </div>
+      <h3>About the plan</h3>
+      <p class="p-sub" style="margin:0">The Exclusive Plan is Gweno's premium tier for members who want the highest-paying work. It unlocks a stream of AI-verifiable <b>mathematics tasks</b> — algebra, geometry, trigonometry, probability, statistics, calculus and more — each rewarding <b>${usd(exec.minUSD)}–${usd(exec.maxUSD)}</b>.</p>
     </div>
-    ${isExec ? `
-    <div class="panel" id="mathLab">
-      <h3>Mathematics task lab</h3>
-      <p class="p-sub">Solve independently generated mathematics problems — arithmetic, algebra, calculus and more. Your answer is checked instantly.</p>
-      <div id="mathArea"><button class="btn btn-primary auto" id="mathGet">Get a question</button></div>
-    </div>` : ''}`;
+
+    <div class="panel">
+      <h3>Eligibility</h3>
+      <div class="check"><span class="box">✓</span><span>Open to any member — buy it directly, no need to progress through the lower plans first.</span></div>
+      <div class="check"><span class="box">✓</span><span>Active for one month from purchase; renew to keep your Exclusive access.</span></div>
+      <div class="check"><span class="box">✓</span><span>Your Exclusive status is shown on your profile.</span></div>
+    </div>
+
+    <div class="panel">
+      <h3>Benefits</h3>
+      <div class="check"><span class="box">✓</span><span>Exclusive mathematics tasks paying <b>${usd(exec.minUSD)}–${usd(exec.maxUSD)}</b> each.</span></div>
+      <div class="check"><span class="box">✓</span><span>A wide mix of categories — never just one type of question.</span></div>
+      <div class="check"><span class="box">✓</span><span><b>No per-cycle task limit</b> — work within the normal daily rules.</span></div>
+      <div class="check"><span class="box">✓</span><span>Independent AI + canonical verification on every submission.</span></div>
+    </div>
+
+    <div class="panel">
+      <h3>Rules</h3>
+      <div class="check"><span class="box">•</span><span>Each task must be solved and submitted with your <b>final answer</b> (an optional working field is available).</span></div>
+      <div class="check"><span class="box">•</span><span>Every submission enters admin review — your reward is credited once it is <b>approved</b>.</span></div>
+      <div class="check"><span class="box">•</span><span>Answers are checked against a protected canonical answer; submit your own genuine work.</span></div>
+      <div class="check"><span class="box">•</span><span>Each task can be completed once per member.</span></div>
+    </div>
+
+    <div class="panel">
+      <h3>Pricing</h3>
+      <p class="p-sub" style="margin:0 0 12px"><b>${kes(exec.priceKES)}</b> per month · tasks paying <b>${usd(exec.minUSD)}–${usd(exec.maxUSD)}</b> each.</p>
+      ${isExec
+        ? `<p class="pill-note">✅ Your Exclusive Plan is active${data.expires ? ' until ' + fmtDate(data.expires) : ''}.</p>
+           <p class="p-sub" style="margin:10px 0 0">Your Exclusive mathematics tasks are waiting in the <a href="#/tasks">Task Marketplace</a>.</p>
+           <div style="margin-top:12px"><a class="btn btn-primary auto" href="#/tasks">Go to Task Marketplace</a></div>`
+        : `<button class="btn btn-primary auto" id="execSub">Subscribe for ${kes(exec.priceKES)}</button>`}
+    </div>`;
   const b = document.getElementById('execSub');
   if (b) b.addEventListener('click', () => openSubscribe({ plans: [exec], plan: cur }, 'executive'));
-  const mg = document.getElementById('mathGet');
-  if (mg) mg.addEventListener('click', loadMathTask);
 }
 
-async function loadMathTask() {
-  const area = document.getElementById('mathArea');
-  if (area) area.innerHTML = `<div class="sk sk-line" style="width:60%;height:16px"></div><div class="sk sk-row" style="margin-top:10px"></div>`;
-  const { ok, data } = await apiGet('/api/math/task');
-  if (!ok || !data.task) { if (area) area.innerHTML = `<p class="p-sub">${esc((data && data.error) || 'Could not load a question.')}</p><button class="btn btn-ghost auto" id="mathGet2">Try again</button>`; const r = document.getElementById('mathGet2'); if (r) r.addEventListener('click', loadMathTask); return; }
-  renderMathTask(data.task);
-}
-
-function renderMathTask(t) {
-  const area = document.getElementById('mathArea');
-  if (!area) return;
-  area.innerHTML = `
-    <div class="math-card">
-      <div class="math-meta"><span class="tier-badge">${esc(t.category)}</span> <span class="p-sub">${esc(t.difficulty)}</span></div>
+// Open an Exclusive maths task (from a marketplace card) in the normal solving interface.
+// The card carries the public question only — the canonical answer never reaches the client.
+function openMathTask(t) {
+  if (!t) return;
+  const openedAt = Date.now();   // for the "submitted unusually quickly" signal (advisory only)
+  const bg = openModal(`
+    <button class="close">×</button>
+    <div class="tc-top" style="margin-bottom:6px"><span class="tc-cat"><span class="tc-ico">➗</span> ${esc(t.category)}</span><span class="tier-badge executive">Exclusive Plan</span></div>
+    <h3 style="margin:0">${esc(t.title)}</h3>
+    <div class="tc-facts" style="margin-top:10px">
+      <span class="fact tc-reward" style="font-size:15px">${usd(t.reward)}</span>
+      <span class="fact diff-${(t.difficulty || '').toLowerCase()}">${esc(t.difficulty || 'Intermediate')}</span>
+      <span class="fact">⏱ ~${t.estMinutes} min</span>
+    </div>
+    <div class="math-card" style="margin-top:12px">
       <p class="math-q">${esc(t.question)}</p>
       <p class="p-sub">${esc(t.instructions || 'Enter your final answer.')}</p>
-      <div class="field"><input id="mathAns" placeholder="Your answer (e.g. x = 5, or a number)" autocomplete="off"></div>
-      <div style="display:flex;gap:8px;flex-wrap:wrap">
-        <button class="btn btn-primary auto" id="mathSubmit">Submit answer</button>
-        <button class="btn btn-ghost auto" id="mathSkip">New question</button>
-      </div>
+      <div class="field"><label>Your answer <span class="p-sub">(required)</span></label><input id="mathAns" placeholder="e.g. x = 5, or a number" autocomplete="off"></div>
+      <div class="field"><label>Working / explanation <span class="p-sub">(optional)</span></label><textarea id="mathWork" placeholder="Show your working here (optional)"></textarea></div>
+      <button class="btn btn-primary" id="mathSubmit">Submit for review</button>
       <div id="mathResult" style="margin-top:12px"></div>
-    </div>`;
-  const input = document.getElementById('mathAns');
-  const submit = document.getElementById('mathSubmit');
+    </div>`);
+  const submit = bg.querySelector('#mathSubmit');
   const doSubmit = async () => {
-    const answer = input.value.trim();
+    const answer = (bg.querySelector('#mathAns').value || '').trim();
     if (!answer) return toast('Enter your answer first', 'error');
-    submit.disabled = true; submit.textContent = 'Checking…';
-    const { ok, data } = await api('/api/math/task/' + t.id + '/submit', { answer });
-    if (!ok) { submit.disabled = false; submit.textContent = 'Submit answer'; return toast(data.error || 'Could not submit', 'error'); }
-    const pass = data.result === 'CORRECT';
-    document.getElementById('mathResult').innerHTML = `<span class="st ${pass ? 'approved' : 'rejected'}">${pass ? '✓ Correct' : '✗ Incorrect'}</span>`;
-    input.disabled = true; submit.style.display = 'none';
+    const working = (bg.querySelector('#mathWork').value || '').trim();
+    submit.disabled = true; submit.textContent = 'Submitting…';
+    const { ok, data } = await api('/api/math/task/' + t.id + '/submit', { answer, working, elapsedMs: Date.now() - openedAt });
+    if (!ok) { submit.disabled = false; submit.textContent = 'Submit for review'; return toast(data.error || 'Could not submit', 'error'); }
+    bg.querySelector('#mathResult').innerHTML = `<span class="st pending">🕓 ${esc(data.message || 'Submitted for review.')}</span>`;
+    bg.querySelector('#mathAns').disabled = true; bg.querySelector('#mathWork').disabled = true; submit.style.display = 'none';
+    toast(data.message || 'Submitted for review.');
+    setTimeout(() => { bg.remove(); pageTasks(); }, 1400);
   };
   submit.addEventListener('click', doSubmit);
-  input.addEventListener('keydown', (e) => { if (e.key === 'Enter') doSubmit(); });
-  document.getElementById('mathSkip').addEventListener('click', loadMathTask);
 }
 
 // Per-type proof field + a short hint describing exactly what's expected.

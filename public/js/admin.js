@@ -559,53 +559,223 @@ function openQuizReject(id) {
   });
 }
 
-// ---- Exclusive Plan: AI-vs-canonical maths task verification ----
+// ---- Exclusive Plan: maths task cards (catalog) + submission verification/review ----
 const AI_STATUS_CLS = { MATCH: 'approved', EQUIVALENT: 'approved', DIFFERENT: 'rejected', NEEDS_REVIEW: 'pending' };
-let MATH_CACHE = [];
+const REVIEW_CLS = { approved: 'approved', rejected: 'rejected', pending: 'pending' };
+let MATH_DATA = { catalog: [], submissions: [] };
+let MATH_META = { aiConfigured: false, rewardRange: { min: 14, max: 23 }, categories: [], difficulties: ['Intermediate', 'Advanced'], methods: ['numeric', 'set', 'expression'] };
+
 async function tMath() {
   loading();
   const { data } = await apiGet('/api/admin/math');
-  MATH_CACHE = data.tasks || [];
-  const aiOn = !!data.aiConfigured;
-  const render = () => {
-    const p = paginate('math', MATH_CACHE);
-    content().innerHTML = `
-    <p class="page-sub">Exclusive-plan mathematics verification. Full visibility: <b>Question → Canonical → AI → Client → Verification</b>. Canonical answers are computed and stored server-side only.${aiOn ? '' : ' <b>AI evaluation is not configured</b> (set ANTHROPIC_API_KEY to enable independent AI solving).'}</p>
-    <div class="panel" style="overflow-x:auto"><table class="table">
-      <thead><tr><th>Task</th><th>Category</th><th>Canonical</th><th>AI answer</th><th>Client answer</th><th>AI status</th><th>Client</th><th>Verification</th><th></th></tr></thead>
-      <tbody>${MATH_CACHE.length ? p.rows.map((t) => `
-        <tr>
-          <td style="max-width:240px;word-break:break-word">${esc(t.question)}<br><span class="p-sub">${esc(t.user ? t.user.username : '')} · ${esc(t.difficulty)}</span></td>
-          <td class="p-sub">${esc(t.category)}</td>
-          <td><b>${esc(t.canonical || '—')}</b></td>
-          <td>${t.aiAnswer ? esc(t.aiAnswer) : '<span class="p-sub">—</span>'}</td>
-          <td>${t.clientAnswer ? esc(t.clientAnswer) : '<span class="p-sub">not submitted</span>'}</td>
-          <td>${t.aiStatus ? `<span class="st ${AI_STATUS_CLS[t.aiStatus] || 'pending'}">${esc(t.aiStatus)}</span>` : '—'}</td>
-          <td>${t.clientStatus ? `<span class="st ${t.clientStatus === 'CORRECT' ? 'approved' : 'rejected'}">${esc(t.clientStatus)}</span>` : '—'}</td>
-          <td>${t.verification ? `<span class="st ${t.verification === 'PASSED' ? 'approved' : 'rejected'}">${esc(t.verification)}</span>` : '—'}</td>
-          <td><button class="btn btn-ghost auto mexpand" data-id="${esc(t.id)}">AI response</button></td>
-        </tr>`).join('') : `<tr><td colspan="9" class="p-sub">No mathematics tasks yet.</td></tr>`}</tbody>
-    </table>${pagerBar('math', p)}</div>`;
-    content().querySelectorAll('.mexpand').forEach((b) => b.addEventListener('click', () => openMathDetail(MATH_CACHE.find((x) => x.id === b.dataset.id), aiOn)));
-    wirePager('math', p, render);
+  MATH_DATA = { catalog: data.catalog || [], submissions: data.submissions || [] };
+  MATH_META = {
+    aiConfigured: !!data.aiConfigured,
+    rewardRange: data.rewardRange || { min: 14, max: 23 },
+    categories: data.categories || [], difficulties: data.difficulties || ['Intermediate', 'Advanced'], methods: data.methods || ['numeric', 'set', 'expression'],
   };
-  render();
+  renderMath();
 }
 
-function openMathDetail(t, aiOn) {
-  if (!t) return;
+function renderMath() {
+  const aiOn = MATH_META.aiConfigured;
+  const rr = MATH_META.rewardRange;
+  const cat = MATH_DATA.catalog, subs = MATH_DATA.submissions;
+  const activeCount = cat.filter((c) => c.active).length;
+  const p = paginate('math', subs);
+  content().innerHTML = `
+    <p class="page-sub">Exclusive Plan mathematics. Manage the <b>task cards</b> members see in the marketplace, and review each <b>submission</b> (Question → Canonical → AI → Client → Verification → Admin review). Canonical answers are stored server-side only.${aiOn ? '' : ' <b>AI evaluation is not configured</b> (set ANTHROPIC_API_KEY).'}</p>
+
+    <div class="panel">
+      <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;margin-bottom:8px">
+        <h3 style="margin:0">Task cards <span class="p-sub">(${activeCount} active / ${cat.length} total)</span></h3>
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
+          <button class="btn btn-primary auto" id="mAdd">➕ Create task</button>
+          <button class="btn btn-ghost auto" id="mGen">✨ Generate variation</button>
+        </div>
+      </div>
+      <div style="display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap;margin-bottom:12px">
+        <div class="field" style="margin:0"><label>Auto reward min ($)</label><input id="mRmin" type="number" min="14" max="23" value="${rr.min}" style="width:120px"></div>
+        <div class="field" style="margin:0"><label>Auto reward max ($)</label><input id="mRmax" type="number" min="14" max="23" value="${rr.max}" style="width:120px"></div>
+        <button class="btn btn-ghost auto" id="mRsave">Save range</button>
+        <span class="p-sub">Rewards are always $14–$23.</span>
+      </div>
+      <div style="overflow-x:auto"><table class="table">
+        <thead><tr><th>Title / question</th><th>Category</th><th>Difficulty</th><th>Reward</th><th>Canonical</th><th>Status</th><th>Source</th><th></th></tr></thead>
+        <tbody>${cat.length ? cat.map((c) => `
+          <tr>
+            <td style="max-width:240px;word-break:break-word"><b>${esc(c.title)}</b><br><span class="p-sub">${esc(c.question)}</span></td>
+            <td class="p-sub">${esc(c.category)}</td>
+            <td class="p-sub">${esc(c.difficulty)}</td>
+            <td><b>${usd(c.reward)}</b></td>
+            <td><b>${esc(c.canonical)}</b></td>
+            <td><span class="st ${c.active ? 'approved' : 'pending'}">${c.active ? 'Active' : 'Inactive'}</span></td>
+            <td class="p-sub">${esc(c.source || 'auto')}</td>
+            <td style="white-space:nowrap">
+              <button class="btn btn-ghost auto mEdit" data-id="${esc(c.id)}">Edit</button>
+              <button class="btn btn-ghost auto mToggle" data-id="${esc(c.id)}" data-active="${c.active ? '0' : '1'}">${c.active ? 'Deactivate' : 'Activate'}</button>
+              <button class="btn btn-ghost auto mDel" data-id="${esc(c.id)}">Delete</button>
+            </td>
+          </tr>`).join('') : `<tr><td colspan="8" class="p-sub">No task cards yet. Click “Create task” or “Generate variation”.</td></tr>`}</tbody>
+      </table></div>
+    </div>
+
+    <div class="panel" style="overflow-x:auto">
+      <h3 style="margin:0 0 8px">Submissions <span class="p-sub">(${subs.length})</span></h3>
+      <table class="table">
+        <thead><tr><th>Task</th><th>User</th><th>Canonical</th><th>AI</th><th>Client</th><th>Reward</th><th>Verification</th><th>Review</th><th></th></tr></thead>
+        <tbody>${subs.length ? p.rows.map((t) => `
+          <tr>
+            <td style="max-width:220px;word-break:break-word">${esc(t.question)}<br><span class="p-sub">${esc(t.category)} · ${esc(t.difficulty)}</span></td>
+            <td class="p-sub">${esc(t.user ? t.user.username : (t.username || ''))}</td>
+            <td><b>${esc(t.canonical || '—')}</b></td>
+            <td>${t.aiStatus ? `<span class="st ${AI_STATUS_CLS[t.aiStatus] || 'pending'}">${esc(t.aiStatus)}</span>` : '—'}</td>
+            <td>${t.clientAnswer ? esc(t.clientAnswer) : '<span class="p-sub">—</span>'}</td>
+            <td>${usd(t.reward)}</td>
+            <td>${t.verification ? `<span class="st ${t.verification === 'PASSED' ? 'approved' : 'rejected'}">${esc(t.verification)}</span>` : '—'}</td>
+            <td><span class="st ${REVIEW_CLS[t.reviewStatus] || 'pending'}">${esc((t.reviewStatus || 'pending').toUpperCase())}</span></td>
+            <td><button class="btn btn-ghost auto mReview" data-id="${esc(t.id)}">Review</button></td>
+          </tr>`).join('') : `<tr><td colspan="9" class="p-sub">No submissions yet.</td></tr>`}</tbody>
+      </table>${pagerBar('math', p)}
+    </div>`;
+
+  content().querySelector('#mAdd').addEventListener('click', () => openMathCardEditor(null, false));
+  content().querySelector('#mGen').addEventListener('click', () => openMathCardEditor(null, true));
+  content().querySelector('#mRsave').addEventListener('click', async () => {
+    const min = +content().querySelector('#mRmin').value, max = +content().querySelector('#mRmax').value;
+    const { ok, data } = await api('/api/admin/math/config', { min, max });
+    if (!ok) return toast(data.error || 'Failed', 'error');
+    MATH_META.rewardRange = data.rewardRange; toast('Reward range saved'); renderMath();
+  });
+  content().querySelectorAll('.mEdit').forEach((b) => b.addEventListener('click', () => openMathCardEditor(MATH_DATA.catalog.find((c) => c.id === b.dataset.id), false)));
+  content().querySelectorAll('.mToggle').forEach((b) => b.addEventListener('click', async () => {
+    const { ok, data } = await api('/api/admin/math/catalog/' + b.dataset.id + '/active', { active: b.dataset.active === '1' });
+    if (!ok) return toast(data.error || 'Failed', 'error');
+    toast('Updated'); tMath();
+  }));
+  content().querySelectorAll('.mDel').forEach((b) => b.addEventListener('click', async () => {
+    if (!confirm('Delete this task card? This cannot be undone.')) return;
+    const r = await fetch('/api/admin/math/catalog/' + b.dataset.id, { method: 'DELETE' });
+    if (!r.ok) { let d = {}; try { d = await r.json(); } catch (_) {} return toast(d.error || 'Failed', 'error'); }
+    toast('Deleted'); tMath();
+  }));
+  content().querySelectorAll('.mReview').forEach((b) => b.addEventListener('click', () => openMathDetail(MATH_DATA.submissions.find((x) => x.id === b.dataset.id))));
+  wirePager('math', p, renderMath);
+}
+
+// Create / edit a maths task card. `autoGen` immediately generates a draft to start from.
+function openMathCardEditor(card, autoGen) {
+  const isEdit = !!card;
+  const cats = MATH_META.categories.length ? MATH_META.categories : ['Arithmetic'];
+  const diffs = MATH_META.difficulties, methods = MATH_META.methods, rr = MATH_META.rewardRange;
+  const c = card || { category: cats[0], difficulty: 'Intermediate', verifyMethod: 'numeric', reward: rr.min, title: '', question: '', instructions: '', canonical: '', active: true, estMinutes: '' };
+  const opt = (arr, sel) => arr.map((x) => `<option ${x === sel ? 'selected' : ''}>${esc(x)}</option>`).join('');
   const bg = adminModal(`
     <button class="close">×</button>
-    <h3>Task verification</h3>
+    <h3>${isEdit ? 'Edit' : 'Create'} mathematics task</h3>
+    <div style="display:flex;gap:10px;flex-wrap:wrap">
+      <div class="field" style="flex:1;min-width:160px"><label>Category</label><select id="fCat">${opt(cats, c.category)}</select></div>
+      <div class="field" style="flex:1;min-width:160px"><label>Difficulty</label><select id="fDiff">${opt(diffs, c.difficulty)}</select></div>
+    </div>
+    <div class="field"><label>Title</label><input id="fTitle" value="${esc(c.title || '')}" placeholder="e.g. Solve the quadratic equation"></div>
+    <div class="field"><label>Question</label><textarea id="fQ" placeholder="e.g. Solve: 2x² − 7x + 3 = 0">${esc(c.question || '')}</textarea></div>
+    <div class="field"><label>Instructions <span class="p-sub">(optional)</span></label><textarea id="fInstr" placeholder="Enter your final answer…">${esc(c.instructions || '')}</textarea></div>
+    <div class="field"><label>Canonical answer <span class="p-sub">(kept server-side only)</span></label><input id="fCanon" value="${esc(c.canonical || '')}" placeholder="e.g. x = 0.5 or x = 3"></div>
+    <div style="display:flex;gap:10px;flex-wrap:wrap">
+      <div class="field" style="flex:1;min-width:150px"><label>Verify method</label><select id="fMethod">${opt(methods, c.verifyMethod)}</select></div>
+      <div class="field" style="width:140px"><label>Reward ($14–$23)</label><input id="fReward" type="number" min="14" max="23" value="${c.reward || rr.min}"></div>
+      <div class="field" style="width:130px"><label>Est. minutes</label><input id="fEst" type="number" min="1" value="${c.estMinutes || ''}" placeholder="auto"></div>
+    </div>
+    ${isEdit ? `<label style="display:flex;gap:8px;align-items:center;margin:2px 0 6px"><input type="checkbox" id="fActive" ${c.active ? 'checked' : ''}> Active (visible in the marketplace)</label>` : ''}
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px">
+      <button class="btn btn-primary" id="fSave">${isEdit ? 'Save changes' : 'Create task'}</button>
+      <button class="btn btn-ghost auto" id="fGen">✨ Generate variation</button>
+      <button class="btn btn-ghost auto" id="fPreview">👁 Preview card</button>
+    </div>
+    <div id="fPrev" style="margin-top:12px"></div>`, 'modal-wide');
+  const val = (id) => bg.querySelector('#' + id).value;
+  const setSel = (id, v) => { const s = bg.querySelector('#' + id); if (![...s.options].some((o) => o.value === v || o.text === v)) { const o = document.createElement('option'); o.text = v; s.add(o); } s.value = v; };
+  const fill = (d) => {
+    setSel('fCat', d.category); setSel('fDiff', d.difficulty); setSel('fMethod', d.verifyMethod || 'numeric');
+    bg.querySelector('#fTitle').value = d.title || '';
+    bg.querySelector('#fQ').value = d.question || '';
+    bg.querySelector('#fInstr').value = d.instructions || '';
+    bg.querySelector('#fCanon').value = d.canonical || '';
+    if (d.reward != null) bg.querySelector('#fReward').value = d.reward;
+    if (d.estMinutes != null) bg.querySelector('#fEst').value = d.estMinutes;
+  };
+  const renderPrev = () => {
+    bg.querySelector('#fPrev').innerHTML = `
+      <p class="review-label">Marketplace preview</p>
+      <div class="task-card exclusive" style="max-width:340px">
+        <div class="tc-top"><span class="tc-cat"><span class="tc-ico">➗</span> ${esc(val('fCat'))}</span><span class="tier-badge executive">Exclusive Plan</span></div>
+        <h4>${esc(val('fTitle') || 'Untitled task')}</h4>
+        <p class="tc-desc">${esc(val('fQ'))}</p>
+        <div class="tc-facts"><span class="fact">${esc(val('fDiff'))}</span><span class="fact">⏱ ~${esc(val('fEst') || '—')} min</span></div>
+        <div class="tc-bottom"><span class="tc-reward">${usd(val('fReward'))}</span><button class="btn btn-primary" disabled>Open Task</button></div>
+      </div>`;
+  };
+  bg.querySelector('#fGen').addEventListener('click', async () => {
+    const { ok, data } = await api('/api/admin/math/generate', { category: val('fCat') });
+    if (!ok) return toast(data.error || 'Failed', 'error');
+    fill(data.draft); renderPrev(); toast('Generated a variation — review, then save.');
+  });
+  bg.querySelector('#fPreview').addEventListener('click', renderPrev);
+  bg.querySelector('#fSave').addEventListener('click', async () => {
+    const body = {
+      category: val('fCat'), difficulty: val('fDiff'), title: val('fTitle'), question: val('fQ'),
+      instructions: val('fInstr'), canonical: val('fCanon'), verifyMethod: val('fMethod'), reward: +val('fReward'),
+    };
+    if (val('fEst')) body.estMinutes = +val('fEst');
+    if (isEdit && bg.querySelector('#fActive')) body.active = bg.querySelector('#fActive').checked;
+    const url = isEdit ? '/api/admin/math/catalog/' + card.id : '/api/admin/math/catalog';
+    const { ok, data } = await api(url, body);
+    if (!ok) return toast(data.error || 'Could not save', 'error');
+    toast(isEdit ? 'Task updated' : 'Task created'); bg.remove(); tMath();
+  });
+  if (autoGen) bg.querySelector('#fGen').click();
+}
+
+// Review a single maths submission: canonical vs AI vs client, then approve (pays) / reject.
+function openMathDetail(t) {
+  if (!t) return;
+  const aiOn = MATH_META.aiConfigured;
+  // Suspicion signals — indicators only (never proof, never auto-decide).
+  const SIG_CLS = { high: 'rejected', medium: 'correction', low: 'pending' };
+  const signalsHtml = (t.signals && t.signals.length)
+    ? `<div class="panel" style="margin-top:12px"><p class="review-label" style="margin-top:0">⚠ AI-use signals — indicators only, NOT proof of AI use</p>${t.signals.map((s) => `<div style="margin:5px 0"><span class="st ${SIG_CLS[s.level] || 'pending'}">${esc(s.level)}</span> ${esc(s.label)}</div>`).join('')}<p class="p-sub" style="margin-top:8px">${t.solveMs ? `Solve time ~${Math.round(t.solveMs / 1000)}s · ` : ''}Working verification: <b>${esc(t.workingStatus || 'n/a')}</b></p></div>`
+    : `<div class="panel" style="margin-top:12px"><p class="p-sub" style="margin:0">No AI-use signals flagged.${t.workingStatus ? ` Working verification: <b>${esc(t.workingStatus)}</b>.` : ''}</p></div>`;
+  // Manual AI review — separate internal record (statuses distinct from the approve/reject decision).
+  const MR_STATUSES = ['AI detected — manual review', 'Suspicious', 'No AI evidence', 'Human solution verified', 'Needs further review'];
+  const MR_REASONS = ['AI-like phrasing', 'Repeated AI patterns', 'Inconsistent writing style', 'Generic/generated response', 'Suspicious formatting', 'Matches AI solution', 'Other'];
+  const ar = t.aiReview || null;
+  let mrEv = ar && Array.isArray(ar.evidence) ? ar.evidence.map((e) => ({ text: e.text, reason: e.reason })) : [];
+  const manualHtml = `
+    <div class="panel ai-manual" style="margin-top:12px">
+      <p class="review-label" style="margin-top:0">🔍 Manual AI review <span class="p-sub" style="font-weight:400">— internal record · never sent to the client</span></p>
+      ${ar ? `<p class="p-sub">Current: <b>${esc(ar.status)}</b> (by ${esc(ar.reviewedBy || 'admin')})</p>` : ''}
+      <div class="field"><label>Manual decision</label><select id="mrStatus" style="${inputStyle};width:100%">${MR_STATUSES.map((s) => `<option ${ar && ar.status === s ? 'selected' : ''}>${esc(s)}</option>`).join('')}</select></div>
+      <p class="review-label">Evidence (optional) — the passages that caused concern</p>
+      <div id="mrEvList"></div>
+      <div class="field"><label>Evidence / selected text</label><textarea id="mrEvText" rows="2" style="${inputStyle};width:100%" placeholder="Paste the specific portion…"></textarea></div>
+      <div class="field"><label>Reason</label><select id="mrReason" style="${inputStyle};width:100%">${MR_REASONS.map((r) => `<option>${esc(r)}</option>`).join('')}</select></div>
+      <button class="btn btn-ghost auto" type="button" id="mrAdd">+ Add evidence</button>
+      <div class="field" style="margin-top:10px"><label>Reviewer notes (optional)</label><textarea id="mrNotes" rows="2" style="${inputStyle};width:100%">${ar ? esc(ar.notes || '') : ''}</textarea></div>
+      <button class="btn btn-primary auto" id="mrSave">Save AI review</button>
+    </div>`;
+  const bg = adminModal(`
+    <button class="close">×</button>
+    <h3>Submission review</h3>
     <div class="review-grid">
       <div class="review-col">
-        <h4>📋 Task</h4>
+        <h4>📋 Task & client</h4>
         <p class="review-title">${esc(t.question)}</p>
-        <p class="p-sub">${esc(t.category)} · ${esc(t.difficulty)} · ${esc(t.user ? t.user.username : '')}</p>
+        <p class="p-sub">${esc(t.category)} · ${esc(t.difficulty)} · ${esc(t.user ? t.user.username : (t.username || ''))} · reward ${usd(t.reward)}</p>
         <p class="review-label">Canonical answer (server)</p><div class="review-proof"><b>${esc(t.canonical || '—')}</b></div>
-        <p class="review-label">Client answer</p><div class="review-proof">${esc(t.clientAnswer || '— not submitted —')}</div>
-        <p class="review-label">Result</p>
-        <div>${t.clientStatus ? `<span class="st ${t.clientStatus === 'CORRECT' ? 'approved' : 'rejected'}">${esc(t.clientStatus)}</span>` : '<span class="p-sub">pending</span>'}
+        <p class="review-label">Client answer</p><div class="review-proof">${esc(t.clientAnswer || '—')}</div>
+        ${t.working ? `<p class="review-label">Client working ${t.workingStatus ? `· <span class="p-sub">${esc(t.workingStatus)}</span>` : ''}</p><div class="review-proof" style="white-space:pre-wrap">${esc(t.working)}</div>` : ''}
+        <p class="review-label">Auto-grade</p>
+        <div>${t.clientStatus ? `<span class="st ${t.clientStatus === 'CORRECT' ? 'approved' : 'rejected'}">${esc(t.clientStatus)}</span>` : '<span class="p-sub">—</span>'}
           ${t.verification ? ` <span class="st ${t.verification === 'PASSED' ? 'approved' : 'rejected'}">${esc(t.verification)}</span>` : ''}</div>
       </div>
       <div class="review-col">
@@ -615,8 +785,18 @@ function openMathDetail(t, aiOn) {
         ${t.aiConfidence != null ? `<p class="review-label">Confidence</p><div>${Math.round(t.aiConfidence * 100)}%</div>` : ''}
         ${t.aiAmbiguities ? `<p class="review-label">Detected ambiguities</p><div class="review-proof">${esc(t.aiAmbiguities)}</div>` : ''}
         ${t.aiReasoning ? `<p class="review-label">Reasoning</p><div class="review-proof">${esc(t.aiReasoning)}</div>` : ''}
-        ${t.aiRaw ? `<p class="review-label">Full AI response</p><div class="review-proof" style="max-height:180px;overflow:auto">${esc(t.aiRaw)}</div>` : ''}
-        <div style="margin-top:12px"><button class="btn btn-primary auto" id="mRunAi"${aiOn ? '' : ' disabled title="Set ANTHROPIC_API_KEY"'}>${t.aiAnswer ? 'Re-run AI' : 'Run AI'}</button></div>
+        ${t.aiRaw ? `<p class="review-label">Full AI response</p><div class="review-proof" style="max-height:160px;overflow:auto">${esc(t.aiRaw)}</div>` : ''}
+        <div style="margin-top:12px"><button class="btn btn-ghost auto" id="mRunAi"${aiOn ? '' : ' disabled title="Set ANTHROPIC_API_KEY"'}>${t.aiAnswer ? 'Re-run AI' : 'Run AI'}</button></div>
+      </div>
+    </div>
+    ${signalsHtml}
+    ${manualHtml}
+    <div class="panel" style="margin-top:12px">
+      <p class="review-label">Admin review — current: <span class="st ${REVIEW_CLS[t.reviewStatus] || 'pending'}">${esc((t.reviewStatus || 'pending').toUpperCase())}</span>${t.reviewNote ? ` · <span class="p-sub">${esc(t.reviewNote)}</span>` : ''}</p>
+      <div class="field"><label>Note <span class="p-sub">(optional)</span></label><input id="mNote" value="${esc(t.reviewNote || '')}" placeholder="Reason / note"></div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <button class="btn btn-primary" id="mApprove">✓ Approve & pay ${usd(t.reward)}</button>
+        <button class="btn btn-ghost auto" id="mReject">✗ Reject</button>
       </div>
     </div>`, 'modal-wide');
   const run = bg.querySelector('#mRunAi');
@@ -624,7 +804,38 @@ function openMathDetail(t, aiOn) {
     run.disabled = true; run.textContent = 'Solving…';
     const { ok, data } = await api('/api/admin/math/' + t.id + '/evaluate', {});
     if (!ok) { run.disabled = false; run.textContent = 'Run AI'; return toast(data.error || 'Failed', 'error'); }
-    toast('AI: ' + (data.aiStatus || 'done'), 'ok');
+    toast('AI: ' + (data.aiStatus || 'done')); bg.remove(); tMath();
+  });
+  const decide = async (decision) => {
+    const note = bg.querySelector('#mNote').value.trim();
+    const { ok, data } = await api('/api/admin/math/submissions/' + t.id + '/decision', { decision, note });
+    if (!ok) return toast(data.error || 'Failed', 'error');
+    toast(decision === 'approved' ? 'Approved & credited' : 'Rejected'); bg.remove(); tMath();
+  };
+  bg.querySelector('#mApprove').addEventListener('click', () => decide('approved'));
+  bg.querySelector('#mReject').addEventListener('click', () => decide('rejected'));
+
+  // ---- Manual AI review wiring (separate from the approve/reject decision) ----
+  const mrList = bg.querySelector('#mrEvList');
+  const renderEv = () => {
+    mrList.innerHTML = mrEv.length
+      ? mrEv.map((ev, i) => `<div class="ev-item"><div><b>${esc(ev.reason || '')}</b><br><span class="p-sub">${esc(ev.text)}</span></div><button class="btn btn-ghost auto ev-rm" data-i="${i}" type="button">Remove</button></div>`).join('')
+      : '<p class="p-sub">No evidence added.</p>';
+    mrList.querySelectorAll('.ev-rm').forEach((b) => b.addEventListener('click', () => { mrEv.splice(Number(b.dataset.i), 1); renderEv(); }));
+  };
+  renderEv();
+  bg.querySelector('#mrAdd').addEventListener('click', () => {
+    const text = bg.querySelector('#mrEvText').value.trim();
+    if (!text) return toast('Paste the evidence text first', 'error');
+    mrEv.push({ text, reason: bg.querySelector('#mrReason').value });
+    bg.querySelector('#mrEvText').value = ''; renderEv();
+  });
+  bg.querySelector('#mrSave').addEventListener('click', async (e) => {
+    const btn = e.currentTarget; btn.disabled = true;
+    const body = { status: bg.querySelector('#mrStatus').value, notes: bg.querySelector('#mrNotes').value.trim(), evidence: mrEv };
+    const { ok, data } = await api('/api/admin/math/submissions/' + t.id + '/ai-review', body);
+    if (!ok) { btn.disabled = false; return toast(data.error || 'Failed', 'error'); }
+    toast('AI review saved — internal, client not notified', 'ok');
     bg.remove(); tMath();
   });
 }

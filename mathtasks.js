@@ -222,4 +222,28 @@ function aiStatus(canonical, aiAnswer, method) {
   return 'DIFFERENT';
 }
 
-module.exports = { CATEGORIES, generate, grade, aiStatus, extractNumbers };
+// ---- Anti-copy signal helpers (indicators only — never proof of AI use) ----
+// Count AI-style writing markers in a client's answer/working.
+function aiStyleScore(text) {
+  const s = String(text || '').toLowerCase();
+  if (!s) return 0;
+  const markers = [/\bstep\s*\d/, /\btherefore\b/, /\bthus\b/, /\bhence\b/, /\bwe (?:have|get|obtain|can)\b/,
+    /\bfirst,/, /\bnext,/, /\bfinally,/, /\bin conclusion\b/, /\blet'?s\b/, /\\frac/, /\bsubstitut/, /\bsimplif/, /\brearrang/];
+  return markers.reduce((n, re) => (re.test(s) ? n + 1 : n), 0);
+}
+// The final numeric value the client's shown working arrives at (last number of the last line).
+function workingFinalValue(working) {
+  const lines = String(working || '').split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+  for (let i = lines.length - 1; i >= 0; i--) { const nums = extractNumbers(lines[i]); if (nums.length) return nums[nums.length - 1]; }
+  return null;
+}
+// Jaccard word-overlap between two texts (0..1) — used to spot working copied from the AI solution.
+function tokenOverlap(a, b) {
+  const toks = (s) => new Set(String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').split(' ').filter((w) => w.length > 2));
+  const A = toks(a), B = toks(b);
+  if (!A.size || !B.size) return 0;
+  let inter = 0; A.forEach((w) => { if (B.has(w)) inter += 1; });
+  return inter / (A.size + B.size - inter);
+}
+
+module.exports = { CATEGORIES, generate, grade, aiStatus, extractNumbers, aiStyleScore, workingFinalValue, tokenOverlap };
