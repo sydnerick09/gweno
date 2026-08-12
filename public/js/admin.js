@@ -951,6 +951,8 @@ let USERS_CACHE = [];
 const USERS_STATE = { q: '', status: 'all', plan: 'all', referrals: 'all', page: 1, per: 20 };
 const USER_PLAN_OPTS = [['all', 'All plans'], ['none', 'Free'], ['basic', 'Basic'], ['premium', 'Premium'], ['premiumpro', 'Premium Pro'], ['executive', 'Executive']];
 const inputStyle = 'padding:9px 12px;border:1px solid var(--line);border-radius:10px;background:var(--bg-2);color:var(--text)';
+// Magnifier icon shown beside admin search boxes.
+const SEARCH_ICON = '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="var(--muted)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex:0 0 auto"><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/></svg>';
 
 async function tUsers() {
   loading();
@@ -1640,14 +1642,14 @@ function openInitiateWithdraw(u) {
   });
 }
 
+let DEPOSITS_SEARCH = '';
 async function tDeposits() {
   loading();
   const { data } = await apiGet('/api/admin/deposits');
   const deps = data.deposits || [];
+  DEPOSITS_SEARCH = '';
   const sc = (s) => (/success/i.test(s) ? 'approved' : (s === 'failed' ? 'rejected' : 'pending'));
-  const render = () => {
-    const p = paginate('deposits', deps);
-    content().innerHTML = `
+  content().innerHTML = `
     <p class="page-sub">Wallet top-ups and <b>subscription payments</b>. If a subscription shows <b>pending</b> but the client was charged (the M-Pesa/Paystack callback didn't arrive), confirm the receipt and click <b>Activate</b> to grant the plan.</p>
 
     ${ROLE === 'finance' ? '' : `<div class="panel">
@@ -1661,9 +1663,36 @@ async function tDeposits() {
       <pre id="mpOut" style="white-space:pre-wrap;background:var(--bg-2);border:1px solid var(--line);border-radius:10px;padding:12px;font-size:13px;margin:0;display:none"></pre>
     </div>`}
 
-    <div class="panel" style="overflow-x:auto"><table class="table">
+    <div class="panel" style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:12px">
+      ${SEARCH_ICON}
+      <input id="depSearch" placeholder="Search user, method, plan, reference, amount or status…" style="flex:1;min-width:200px;${inputStyle}">
+      <span class="p-sub" id="depCount"></span>
+    </div>
+    <div id="depTable"></div>`;
+
+  if (ROLE !== 'finance') {
+    const out = document.getElementById('mpOut');
+    const show = (obj, isErr) => { out.style.display = 'block'; out.style.color = isErr ? 'var(--danger)' : 'var(--text)'; out.textContent = typeof obj === 'string' ? obj : JSON.stringify(obj, null, 2); };
+    document.getElementById('mpDiag').addEventListener('click', async () => {
+      show('Checking…');
+      const { ok, data: d } = await apiGet('/api/admin/mpesa/diagnose');
+      show(d, !ok || (d.oauth && !d.oauth.ok));
+    });
+    document.getElementById('mpTest').addEventListener('click', async () => {
+      show('Sending test STK…');
+      const { ok, data: d } = await api('/api/admin/mpesa/test-stk', { phone: document.getElementById('mpPhone').value });
+      show(ok ? d : (d.error || 'Failed'), !ok);
+    });
+  }
+
+  const renderTable = () => {
+    const q = DEPOSITS_SEARCH.trim().toLowerCase();
+    const filtered = !q ? deps : deps.filter((d) => [d.user && d.user.username, d.user && d.user.email, d.method, d.planName, d.plan, d.reference, d.phone, d.details, d.status, d.purpose, String(d.amount)].some((v) => String(v || '').toLowerCase().includes(q)));
+    const cnt = document.getElementById('depCount'); if (cnt) cnt.textContent = `${filtered.length} shown`;
+    const p = paginate('deposits', filtered);
+    document.getElementById('depTable').innerHTML = `<div class="panel" style="overflow-x:auto"><table class="table">
       <thead><tr><th>Date</th><th>User</th><th class="num">Amount</th><th>Type</th><th>Details</th><th>Status</th><th>Ref</th><th>Action</th></tr></thead>
-      <tbody>${deps.length ? p.rows.map((d) => {
+      <tbody>${filtered.length ? p.rows.map((d) => {
         const isSub = d.purpose === 'subscription';
         const typeCell = isSub ? `<b>Subscription</b><br><span class="p-sub">${esc(d.planName || d.plan || '')} · ${esc(d.method || 'M-Pesa')}</span>` : esc(d.method || 'M-Pesa');
         const detailCell = isSub ? esc(d.phone || d.method || '—') : esc(d.phone || d.details || '—');
@@ -1671,53 +1700,53 @@ async function tDeposits() {
           ? `<button class="btn btn-primary auto dact" data-id="${esc(d.id)}" data-plan="${esc(d.planName || d.plan || 'plan')}" data-user="${esc(d.user ? d.user.username : '')}">Activate ${esc(d.planName || 'plan')}</button>`
           : (isSub && d.status === 'success' ? `<span class="p-sub">activated${d.activatedBy ? ' by ' + esc(d.activatedBy) : ''}</span>` : '');
         return `<tr><td class="p-sub">${new Date(d.createdAt).toLocaleString()}</td><td>${esc(d.user ? d.user.username : '—')}</td><td class="num">${d.currency === 'USD' ? usd(d.amount) : kes(d.amount)}</td><td>${typeCell}</td><td class="p-sub">${detailCell}</td><td><span class="st ${sc(d.status)}">${esc(d.status)}${d.demo ? ' (demo)' : ''}</span></td><td class="p-sub">${esc(d.reference || '')}</td><td>${action}</td></tr>`;
-      }).join('') : `<tr><td colspan="8" class="p-sub">No deposits yet.</td></tr>`}</tbody>
+      }).join('') : `<tr><td colspan="8" class="p-sub">${q ? 'No deposits match your search.' : 'No deposits yet.'}</td></tr>`}</tbody>
     </table>${pagerBar('deposits', p)}</div>`;
-
-    if (ROLE !== 'finance') {
-      const out = document.getElementById('mpOut');
-      const show = (obj, isErr) => { out.style.display = 'block'; out.style.color = isErr ? 'var(--danger)' : 'var(--text)'; out.textContent = typeof obj === 'string' ? obj : JSON.stringify(obj, null, 2); };
-      document.getElementById('mpDiag').addEventListener('click', async () => {
-        show('Checking…');
-        const { ok, data: d } = await apiGet('/api/admin/mpesa/diagnose');
-        show(d, !ok || (d.oauth && !d.oauth.ok));
-      });
-      document.getElementById('mpTest').addEventListener('click', async () => {
-        show('Sending test STK…');
-        const { ok, data: d } = await api('/api/admin/mpesa/test-stk', { phone: document.getElementById('mpPhone').value });
-        show(ok ? d : (d.error || 'Failed'), !ok);
-      });
-    }
-    content().querySelectorAll('.dact').forEach((b) => b.addEventListener('click', async () => {
+    document.getElementById('depTable').querySelectorAll('.dact').forEach((b) => b.addEventListener('click', async () => {
       if (!confirm(`Activate ${b.dataset.plan} for ${b.dataset.user || 'this client'}?\n\nOnly do this after confirming the client's payment (e.g. the M-Pesa receipt). This grants the plan immediately.`)) return;
       b.disabled = true;
       const { ok, data: d } = await api('/api/admin/deposits/' + b.dataset.id + '/activate', {});
       if (ok) { toast(d.message || 'Plan activated'); tDeposits(); }
       else { b.disabled = false; toast(d.error || 'Failed', 'error'); }
     }));
-    wirePager('deposits', p, render);
+    wirePager('deposits', p, renderTable);
   };
-  render();
+  const s = document.getElementById('depSearch');
+  s.addEventListener('input', () => { DEPOSITS_SEARCH = s.value; renderTable(); });
+  renderTable();
 }
 
+let WD_SEARCH = '';
 async function tWithdrawals() {
   loading();
   const { data } = await apiGet('/api/admin/redemptions');
   const rs = data.redemptions || [];
+  WD_SEARCH = '';
   const sc = (s) => (/paid/i.test(s) ? 'approved' : (s === 'Failed' ? 'rejected' : 'pending'));
-  const render = () => {
-    const p = paginate('withdrawals', rs);
-    content().innerHTML = `
+  content().innerHTML = `
     <p class="page-sub">Member &amp; admin-initiated withdrawals (M-Pesa, PayPal &amp; bank) — <b>all paid manually</b>. Send the money to the destination shown, then click <b>Mark paid</b>. Marking a payout <b>Failed</b> refunds the user's balance.</p>
-    <div class="panel" style="overflow-x:auto"><table class="table">
+    <div class="panel" style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:12px">
+      ${SEARCH_ICON}
+      <input id="wdSearch" placeholder="Search user, method, destination, amount or status…" style="flex:1;min-width:200px;${inputStyle}">
+      <span class="p-sub" id="wdCount"></span>
+    </div>
+    <div id="wdTable"></div>`;
+  const renderTable = () => {
+    const q = WD_SEARCH.trim().toLowerCase();
+    const filtered = !q ? rs : rs.filter((r) => [r.user && r.user.username, r.user && r.user.email, r.method, r.destination, r.status, r.reason, r.initiatedBy, String(r.amount)].some((v) => String(v || '').toLowerCase().includes(q)));
+    const cnt = document.getElementById('wdCount'); if (cnt) cnt.textContent = `${filtered.length} shown`;
+    const p = paginate('withdrawals', filtered);
+    document.getElementById('wdTable').innerHTML = `<div class="panel" style="overflow-x:auto"><table class="table">
       <thead><tr><th>Date</th><th>User</th><th class="num">Amount</th><th>To</th><th>Initiated by</th><th>Status</th><th>Action</th></tr></thead>
-      <tbody>${rs.length ? p.rows.map((r) => `<tr><td class="p-sub">${new Date(r.createdAt).toLocaleString()}</td><td>${esc(r.user ? r.user.username : '—')}</td><td class="num">${r.currency === 'KES' ? kes(r.amount) : usd(r.amount)}</td><td class="p-sub"><b>${esc(r.method || '')}</b><br>${esc(r.destination || '—')}</td><td class="p-sub">${r.initiatedBy ? `<b>Admin</b> (${esc(r.initiatedBy)})${r.adminNote ? `<br><span class="p-sub">${esc(r.adminNote)}</span>` : ''}` : 'Client'}</td><td><span class="st ${sc(r.status)}">${esc(r.status)}</span>${r.status === 'Failed' && r.reason ? `<br><span class="p-sub">${esc(r.reason)}</span>` : ''}</td><td>${!/paid/i.test(r.status) ? `<button class="btn btn-primary auto mk" data-id="${r.id}" data-s="Paid">Approve (paid)</button> ` : ''}${r.status !== 'Failed' ? `<button class="btn btn-ghost auto mkfail" data-id="${r.id}">Reject</button>` : ''}</td></tr>`).join('') : `<tr><td colspan="7" class="p-sub">No withdrawals yet.</td></tr>`}</tbody>
+      <tbody>${filtered.length ? p.rows.map((r) => `<tr><td class="p-sub">${new Date(r.createdAt).toLocaleString()}</td><td>${esc(r.user ? r.user.username : '—')}</td><td class="num">${r.currency === 'KES' ? kes(r.amount) : usd(r.amount)}</td><td class="p-sub"><b>${esc(r.method || '')}</b><br>${esc(r.destination || '—')}</td><td class="p-sub">${r.initiatedBy ? `<b>Admin</b> (${esc(r.initiatedBy)})${r.adminNote ? `<br><span class="p-sub">${esc(r.adminNote)}</span>` : ''}` : 'Client'}</td><td><span class="st ${sc(r.status)}">${esc(r.status)}</span>${r.status === 'Failed' && r.reason ? `<br><span class="p-sub">${esc(r.reason)}</span>` : ''}</td><td>${!/paid/i.test(r.status) ? `<button class="btn btn-primary auto mk" data-id="${r.id}" data-s="Paid">Approve (paid)</button> ` : ''}${r.status !== 'Failed' ? `<button class="btn btn-ghost auto mkfail" data-id="${r.id}">Reject</button>` : ''}</td></tr>`).join('') : `<tr><td colspan="7" class="p-sub">${q ? 'No withdrawals match your search.' : 'No withdrawals yet.'}</td></tr>`}</tbody>
     </table>${pagerBar('withdrawals', p)}</div>`;
-    content().querySelectorAll('.mk').forEach((b) => b.addEventListener('click', () => openWithdrawPaid(rs.find((r) => r.id === b.dataset.id))));
-    content().querySelectorAll('.mkfail').forEach((b) => b.addEventListener('click', () => openWithdrawReject(b.dataset.id)));
-    wirePager('withdrawals', p, render);
+    document.getElementById('wdTable').querySelectorAll('.mk').forEach((b) => b.addEventListener('click', () => openWithdrawPaid(rs.find((r) => r.id === b.dataset.id))));
+    document.getElementById('wdTable').querySelectorAll('.mkfail').forEach((b) => b.addEventListener('click', () => openWithdrawReject(b.dataset.id)));
+    wirePager('withdrawals', p, renderTable);
   };
-  render();
+  const s = document.getElementById('wdSearch');
+  s.addEventListener('input', () => { WD_SEARCH = s.value; renderTable(); });
+  renderTable();
 }
 
 // Approve & mark paid, with automatic 20% fee / net calculation the admin can override.
