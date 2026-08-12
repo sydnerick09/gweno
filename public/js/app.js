@@ -1207,7 +1207,7 @@ function openMathTask(t) {
       <p class="math-q">${esc(t.question)}</p>
       <p class="p-sub">${esc(t.instructions || 'Enter your final answer.')}</p>
       <div class="field"><label>Your answer <span class="p-sub">(required)</span></label><input id="mathAns" placeholder="e.g. x = 5, or a number" autocomplete="off"></div>
-      <div class="field"><label>Working / explanation <span class="p-sub">(optional)</span></label><textarea id="mathWork" placeholder="Show your working here (optional)"></textarea></div>
+      <div class="field"><label>Working / explanation <span class="p-sub">(required)</span></label><textarea id="mathWork" placeholder="Show your full working, step by step"></textarea></div>
       <button class="btn btn-primary" id="mathSubmit">Submit for review</button>
       <div id="mathResult" style="margin-top:12px"></div>
     </div>`);
@@ -1216,6 +1216,7 @@ function openMathTask(t) {
     const answer = (bg.querySelector('#mathAns').value || '').trim();
     if (!answer) return toast('Enter your answer first', 'error');
     const working = (bg.querySelector('#mathWork').value || '').trim();
+    if (working.length < 3) return toast('Please show your working — it is required', 'error');
     submit.disabled = true; submit.textContent = 'Submitting…';
     const { ok, data } = await api('/api/math/task/' + t.id + '/submit', { answer, working, elapsedMs: Date.now() - openedAt });
     if (!ok) { submit.disabled = false; submit.textContent = 'Submit for review'; return toast(data.error || 'Could not submit', 'error'); }

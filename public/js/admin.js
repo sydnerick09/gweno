@@ -760,7 +760,8 @@ function openMathDetail(t) {
       <div class="field"><label>Evidence / selected text</label><textarea id="mrEvText" rows="2" style="${inputStyle};width:100%" placeholder="Paste the specific portion…"></textarea></div>
       <div class="field"><label>Reason</label><select id="mrReason" style="${inputStyle};width:100%">${MR_REASONS.map((r) => `<option>${esc(r)}</option>`).join('')}</select></div>
       <button class="btn btn-ghost auto" type="button" id="mrAdd">+ Add evidence</button>
-      <div class="field" style="margin-top:10px"><label>Reviewer notes (optional)</label><textarea id="mrNotes" rows="2" style="${inputStyle};width:100%">${ar ? esc(ar.notes || '') : ''}</textarea></div>
+      <div class="field" style="margin-top:10px"><label>Reviewer notes (optional — internal, never sent to client)</label><textarea id="mrNotes" rows="2" style="${inputStyle};width:100%">${ar ? esc(ar.notes || '') : ''}</textarea></div>
+      <label class="review-ack" style="margin:4px 0 10px"><input type="checkbox" id="mrNotify" checked> Notify the client of this decision (email + in-app). Only the decision is sent — never the evidence or notes.</label>
       <button class="btn btn-primary auto" id="mrSave">Save AI review</button>
     </div>`;
   const bg = adminModal(`
@@ -771,7 +772,8 @@ function openMathDetail(t) {
         <h4>📋 Task & client</h4>
         <p class="review-title">${esc(t.question)}</p>
         <p class="p-sub">${esc(t.category)} · ${esc(t.difficulty)} · ${esc(t.user ? t.user.username : (t.username || ''))} · reward ${usd(t.reward)}</p>
-        <p class="review-label">Canonical answer (server)</p><div class="review-proof"><b>${esc(t.canonical || '—')}</b></div>
+        <p class="review-label">Canonical answer (real — server)</p><div class="review-proof"><b>${esc(t.canonical || '—')}</b></div>
+        <p class="review-label">Text-injection answer (AI canary)</p><div class="review-proof">${t.injectionAnswer ? `<b>${esc(t.injectionAnswer)}</b> <span class="p-sub">— if this code appears in the client's answer/working, the question was pasted into an AI</span>` : '<span class="p-sub">—</span>'}</div>
         <p class="review-label">Client answer</p><div class="review-proof">${esc(t.clientAnswer || '—')}</div>
         ${t.working ? `<p class="review-label">Client working ${t.workingStatus ? `· <span class="p-sub">${esc(t.workingStatus)}</span>` : ''}</p><div class="review-proof" style="white-space:pre-wrap">${esc(t.working)}</div>` : ''}
         <p class="review-label">Auto-grade</p>
@@ -832,10 +834,12 @@ function openMathDetail(t) {
   });
   bg.querySelector('#mrSave').addEventListener('click', async (e) => {
     const btn = e.currentTarget; btn.disabled = true;
-    const body = { status: bg.querySelector('#mrStatus').value, notes: bg.querySelector('#mrNotes').value.trim(), evidence: mrEv };
+    const notify = bg.querySelector('#mrNotify').checked;
+    const body = { status: bg.querySelector('#mrStatus').value, notes: bg.querySelector('#mrNotes').value.trim(), evidence: mrEv, notify };
     const { ok, data } = await api('/api/admin/math/submissions/' + t.id + '/ai-review', body);
     if (!ok) { btn.disabled = false; return toast(data.error || 'Failed', 'error'); }
-    toast('AI review saved — internal, client not notified', 'ok');
+    const em = data.email;
+    toast(notify ? `AI review saved · client notified${em && em.status ? ' (email ' + em.status + ')' : ''}` : 'AI review saved (client not notified)', 'ok');
     bg.remove(); tMath();
   });
 }
